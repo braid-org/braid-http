@@ -1,12 +1,12 @@
 {
   "name": "braid-http",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "An implementation of Braid-HTTP for Node.js and Browsers",
   "scripts": {
     "test": "node test/server.js"
   },
   "author": "Braid Working Group",
-  "repository": "braid-org/braidjs",
+  "repository": "braid-org/braid-http",
   "homepage": "https://braid.org",
   "files": [
     "braid-http-client.js",
