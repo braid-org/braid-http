@@ -1,0 +1,187 @@
+<script type=coffee>
+# ##########################
+# UI written in coffeescript
+# 
+
+fontFamily = 'avenext, avenir, sans'
+
+dom.BODY = ->
+  window.send = ->
+    # Reset the input box
+    new_message = state['new-message']
+    state['new-message'] = ''
+
+    # Save the post
+    post_id = Math.random().toString(36).substr(2)
+    state['/post/' + post_id] = {body: new_message}
+
+    # Add it to the blog
+    blog = state['/blog']
+    blog.push({link: '/post/' + post_id})
+
+  DIV
+    fontFamily: fontFamily
+    fontSize: 14
+
+    H1 "it's a blog!"
+    for post in state['/blog']
+      POST(url: post.link)
+    DIV
+      padding: 5
+      AUTOSIZEBOX
+        id: 'new-message'
+        fontFamily: fontFamily
+        width: 'calc(100% - 50px)'
+        padding: 5
+        backgroundColor: '#eee'
+        value: state['new-message']
+        onChange: (e) ->
+          state['new-message'] = e.target.value
+        onKeyDown: (e) ->
+          if (e.keyCode == 13 and not (e.ctrlKey or e.shiftKey))
+            e.preventDefault()
+            e.stopPropagation()
+            send()
+      BUTTON
+        position: 'relative'
+        bottom: 9
+        height: 27
+        width: 48
+        onClick: send
+        'Send'
+
+# Auto-focus the message input box
+dom.BODY.refresh = ->
+  document.getElementById('new-message')?.focus()
+
+
+dom.POST = (url) ->
+  post = state[url]
+  DIV
+    backgroundColor: '#eee'
+    padding: 5
+    margin: 5
+    DIV p for p in post.body.split('\n')
+  
+
+## An auto-resizing <textarea>
+dom.AUTOSIZEBOX = ->
+  props = bus.clone(@props)
+  props.ref = 'textbox'
+  props.rows = 1
+  delete props['data-widget']
+  delete props['data-key']
+  TEXTAREA(props)
+
+dom.AUTOSIZEBOX.up = ->
+  target = @refs.textbox.getDOMNode()
+  resizebox(target)
+
+dom.AUTOSIZEBOX.refresh = ->
+  target = @refs.textbox.getDOMNode()
+  resizebox(target)
+
+resizebox = (target) ->
+  while (target.rows > 1 && target.scrollHeight < target.offsetHeight)
+    target.rows--
+  while (target.scrollHeight > target.offsetHeight && target.rows < 10000)
+    target.rows++
+
+</script>
+<script>
+var peerid = Math.random().toString(36).substr(3)
+
+// Connect the Braid Blog as a state backend to Statebus
+var curr_version = {}
+
+window.statebus_ready = [() => {
+    // This is how we fetch the /blog state
+    bus('/*').getter = (key, old, t) => {
+        function subscribe () {
+            // console.log('Subscribing to', {key, url},
+            //             'exists?', bus.gets_out[key].length)
+            // if (!bus.gets_out[key]) return
+            braid_fetch(key, {subscribe: true, peer: peerid}).then(
+                response => response.subscribe(
+                    update => {
+                        console.log('We got an update!', update)
+                        console.assert(
+                            !curr_version[key] || (parseInt(curr_version[key][0]) + 1
+                                                   === parseInt(response.version[0])),
+                            'Bad versions:' + JSON.stringify(
+                                {curr_version, res_ver:response.version}
+                            )
+                        )
+
+                        curr_version[key] = response.version
+                        if (update.patches)
+                            t.return(apply_patches(update.patches, old))
+                        else
+                            t.return({key: key, val: bus.escape_to_nelson(JSON.parse(update.body))})
+                    },
+                    e => setTimeout(subscribe, 1000)
+                )
+            ).catch(e => setTimeout(subscribe, 1000))
+        }
+        subscribe()
+    }
+
+    // This is how we save the /blog state
+    bus('/*').setter = (obj, t) => {
+        curr_version++
+        if (obj.key === '/blog')
+            var patches = [{
+                unit: 'json',
+                range: '[-0:-0]',
+                content: JSON.stringify(
+                  bus.unescape_from_nelson(bus.unescape_from_bus(obj.val[obj.val.length-1]))
+                )
+            }]
+        else
+            var body = JSON.stringify(obj.val)
+
+        braid_fetch(obj.key, {
+            method: 'PUT',
+            peer: peerid,
+            headers: {'Content-Type': 'application/json'},
+            patches,
+            body
+        }).then(res => {
+            if (res.status === 200)
+                console.debug('braid_put complete')
+            else
+                console.debug('braid_put failed with', res.status)
+        }).catch(err => console.error('braid_put error', err))
+        t.done()
+    }
+}]
+
+// This is how we apply a braid patch to our blog state
+function apply_patches (patches, object) {
+    for (patch of patches)
+        // There are only two types of patches we could receive
+        if (patch.range === '')
+            // The entire blog in one patch
+            return {val: bus.escape_to_nelson(JSON.parse(patch.content))}
+        else
+            // A single new message, appended to the end
+            object.val.push(bus.escape_to_nelson(JSON.parse(patch.content)))
+    return object
+}
+</script>
+
+<!-- Include React v12 -->
+<script src="https://stateb.us/code/statebus/extras/react.min.js"></script>
+
+<!-- Include Statebus and Braid-HTTP -->
+<script src="https://cdn.jsdelivr.net/npm/statebus@7.0.28/extras/coffee.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/statebus@7.0.28/statebus.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/statebus@7.0.28/client-library.js"></script>
+<script src="braid-http-client.js"></script>
+
+<!-- Configure statebus -->
+<script>
+  bus.libs.react12.coffreact()
+  window.state = bus.state
+  //bus.libs.http_out('/*', '/')
+</script>

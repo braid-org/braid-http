@@ -1,0 +1,33 @@
+{
+  "name": "braid-http",
+  "version": "0.3.21",
+  "description": "An implementation of Braid-HTTP for Node.js and Browsers",
+  "scripts": {
+    "test": "node test/server.js"
+  },
+  "author": "Braid Working Group",
+  "repository": "braid-org/braidjs",
+  "homepage": "https://braid.org",
+  "files": [
+    "braid-http-client.js",
+    "braid-http-server.js",
+    "index.js",
+    "index.mjs"
+  ],
+  "main": "./index.js",
+  "exports": {
+    "require": "./index.js",
+    "import": "./index.mjs"
+  },
+  "browser": {
+    "node-web-streams": false,
+    "node-fetch": false,
+    "abort-controller": false
+  },
+  "dependencies": {
+    "abort-controller": "^3.0.0",
+    "node-fetch": "^2.6.1",
+    "parse-headers": "^2.0.3",
+    "web-streams-node": "^0.4.0"
+  }
+}
