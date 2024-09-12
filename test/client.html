@@ -480,4 +480,17 @@ runTest(
     "Version: \"test\"\r\nParents: \"oldie\"\r\nContent-Length: 16\r\n\r\n{\"this\":\"stuff\"}\r\n\r\n"
 )
 
+runTest(
+    "parents-function test 1",
+    async () => {
+        let has_parents = null
+        let x = { parents: null }
+        let res = await (await fetch("/check_parents", { parents: () => x.parents, onFetch: (url, params) => {
+            has_parents = JSON.stringify(params.headers.has('parents'))
+        } })).json()
+        return JSON.stringify({has_parents, res})
+    },
+    '{"has_parents":"false","res":{}}'
+)
+
 </script>

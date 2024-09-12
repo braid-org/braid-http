@@ -234,8 +234,10 @@ async function braid_fetch (url, params = {}) {
 
                 // If parents is a function,
                 // call it now to get the latest parents
-                if (typeof params.parents === 'function')
-                    params.headers.set('parents', params.parents().map(JSON.stringify).join(', '))
+                if (typeof params.parents === 'function') {
+                    let parents = params.parents()
+                    if (parents) params.headers.set('parents', parents.map(JSON.stringify).join(', '))
+                }
 
                 // undocumented feature used by braid-chrome
                 // to see the fetch args as they are right before it is actually called,
