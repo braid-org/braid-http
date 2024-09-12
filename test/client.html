@@ -1,141 +1,450 @@
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 10px;
+    }
+    .test {
+        margin-bottom: 3px;
+        padding: 3px;
+    }
+    .running {
+        background-color: #fffde7;
+    }
+    .passed {
+        background-color: #e8f5e9;
+    }
+    .failed {
+        background-color: #ffebee;
+    }
+</style>
 <script src="/braid-http-client.js"></script>
+<div id="testContainer"></div>
 <script type=module>
+
 var fetch = braid_fetch
+let test_update = {
+    version: ['test'],
+    parents: ['oldie'],
+    body: JSON.stringify({this: 'stuff'})
+}
+let delay = 0
 
-// Setup the tests
-window.test_results = ''
-function result (message) {
-    console.log(message)
-    test_results += message + '\n'
+function createTestDiv(testName) {
+    const div = document.createElement("div")
+    div.className = "test running"
+    div.innerHTML = `<span style="font-weight:bold">${testName}: </span><span class="result">Running...</span>`
+    testContainer.appendChild(div)
+    return div
+}
 
-    // We test server restarts manually.
-    // If the main tests are complete:
-    if (document.getElementById('passfail')) {
-        // Then let's add our reconnection results
-        if (!document.getElementById('reconnections'))
-            document.writeln('<h2 id=reconnections>Reconnection Results</h2><pre>')
-
-        document.writeln(message)
+function updateTestResult(div, passed, message, got, expected) {
+    div.className = `test ${passed ? "passed" : "failed"}`
+    
+    if (passed) {
+        div.querySelector(".result").textContent = message
+        div.querySelector(".result").style.fontSize = message.length > 400 ? 'xx-small' : message.length > 100 ? 'small' : ''
+    } else {
+        div.querySelector(".result").innerHTML = `${message}<br><strong>Got:</strong> ${got}<br><strong>Expected:</strong> ${expected}`
     }
 }
 
+async function runTest(testName, testFunction, expectedResult) {
 
-// Reading data from the server
-function read_test1 () {
-    fetch('/json', {subscribe: true}).then(
-        res => res.subscribe(
-            update => result('Read 1 ' + JSON.stringify(update) + '!'),
-            (e) => {
-                result('Read 1 connection died')
-                console.log('Try again 1', e)
-                setTimeout(read_test1, 1000)
-            }
-        )).catch(e => {
-            result('Read 1 connection died')
-            console.log('Try again 1', e)
-            setTimeout(read_test1, 1000)
-        })
-}
+    // if (testName != "Binary test 2") return
 
-
-async function read_test2 () {
+    delay += 100
+    await new Promise(done => setTimeout(done, delay))
+    const div = createTestDiv(testName)
     try {
-        (await fetch('/json', {subscribe: true})).subscribe(
-            update => result('Read 2 ' + JSON.stringify(update) + '!'),
-            (e) => {
-                result('Read 2 connection died')
-                console.log('Try again 2', e)
-                setTimeout(read_test2, 1000)
-            }
-        )
-    } catch (e) {
-        result('Read 2 connection died')
-        console.log('Try again 2', e)
-        setTimeout(read_test2, 1000)
-    }
-}
-
-async function read_test3 () {
-    try {
-        for await (var update of (await fetch('/json', {subscribe: true})).subscription) 
-        result('Read 3 ' + JSON.stringify(update) + '!')
-    } catch (e) {
-        result('Read 3 connection died')
-        console.log('Try again 3', e)
-        setTimeout(read_test3, 1000)
-    }
-}
-
-setTimeout(read_test1, 0)
-setTimeout(read_test2, 10)
-setTimeout(read_test3, 20)
-
-
-// Writing data to the server
-function write_test1 () {
-    fetch('/json', {
-        version: ['test1'],
-        patches: {unit: 'json', range: '[0]', content: '"test1"'},
-        method: 'PUT'
-    }).then(async res => {
-        result('Write test 1 returned ' + res.status)
-    })
-}
-function write_test2 () {
-    fetch('/json', {
-        version: ['test2'],
-        patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
-        method: 'PUT'
-    }).then(async res => {
-        result('Write test 2 returned ' + res.status)
-    })
-}
-
-function write_test3 () {
-    fetch('/json', {
-        version: ['test3'],
-        patches: [
-            {unit: 'jsonpath', range: '[0]', content: '"test3"'},
-            {unit: 'jsonpath', range: '[1]', content: '"test3"'},
-            {unit: 'jsonpath', range: '[2]', content: '"test3"'}
-        ],
-        method: 'PUT'
-    }).then(async res => {
-        result('Write test 3 returned ' + res.status)
-    })
-}
-
-function write_test4 () {
-    fetch('/json', {
-        version: ['test4'],
-        patches: [],
-        method: 'PUT'
-    }).then(async res => {
-        result('Write test 4 returned '+ res.status)
-    })
-}
-
-setTimeout(write_test1, 100)
-setTimeout(write_test2, 110)
-setTimeout(write_test3, 120)
-setTimeout(write_test4, 130)
-
-
-// Evaluate all the tests
-function evaluate_tests () {
-    fetch('/test-responses.txt').then(res => res.text()).then(text => {
-        window.known_results = text
-        document.writeln('<body></body>')
-        if (known_results === test_results) {
-            document.body.style.backgroundColor = '#efe'
-            document.writeln('<h1 id=passfail>Passed!</h1>')
+        let x = await testFunction()
+        if (x == expectedResult) {
+            updateTestResult(div, true, x)
         } else {
-            document.body.style.backgroundColor = '#fee'
-            document.writeln('<h1 id=passfail>Failed! :(</h1>')
+            updateTestResult(div, false, "Mismatch:", x, expectedResult)
         }
-        document.writeln("<h2>Your Server's Responses</h2><pre>" + test_results + '</pre>')
-        document.writeln("<h2>Known Server Responses</h2><pre>" + known_results + '</pre>')
-    })
+    } catch (error) {
+        updateTestResult(div, false, "Error:", error.message || error, expectedResult)
+    }
 }
-setTimeout(evaluate_tests, 300)
+
+runTest(
+    "Read test 1",
+    async () => {
+        let updates = []
+        await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true}).then(
+                res => res.subscribe(
+                    update => {
+                        updates.push(JSON.stringify(update))
+                        if (updates.length === 5) resolve()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+)
+
+runTest(
+    "Read test 2",
+    async () => {
+        let updates = []
+        await new Promise(async (resolve, reject) => {
+            try {
+                (await fetch('/json', {subscribe: true})).subscribe(
+                    update => {
+                        updates.push(JSON.stringify(update))
+                        if (updates.length === 5) resolve()
+                    },
+                    reject
+                )
+            } catch (e) {
+                reject(e)
+            }
+        })
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+)
+
+runTest(
+    "Read test 3",
+    async () => {
+        let updates = []
+        for await (var update of (await fetch('/json', {subscribe: true})).subscription) {
+            updates.push(JSON.stringify(update))
+
+            // work here
+            console.log(`UPdATE: `, update)
+
+            if (updates.length === 5) break
+        }
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+)
+
+runTest(
+    "Read test 4",
+    async () => {
+        let updates = []
+        for await (var update of (await fetch('/json', {subscribe: true, giveup: true})).subscription) {
+            updates.push(JSON.stringify(update))
+
+            // work here
+            console.log(`UPdATE: `, update)
+
+            if (updates.length === 5) break
+        }
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+)
+
+runTest(
+    "Write test 1",
+    async () => {
+        let res = await fetch('/json', {
+            version: ['test1'],
+            patches: {unit: 'json', range: '[0]', content: '"test1"'},
+            method: 'PUT'
+        })
+        return `Write test 1 returned ${res.status}`
+    },
+    "Write test 1 returned 200"
+)
+
+runTest(
+    "Write test 2",
+    async () => {
+        let res = await fetch('/json', {
+            version: ['test2'],
+            patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
+            method: 'PUT'
+        })
+        return `Write test 2 returned ${res.status}`
+    },
+    "Write test 2 returned 200"
+)
+
+runTest(
+    "Write test 3",
+    async () => {
+        let res = await fetch('/json', {
+            version: ['test3'],
+            patches: [
+                {unit: 'jsonpath', range: '[0]', content: '"test3"'},
+                {unit: 'jsonpath', range: '[1]', content: '"test3"'},
+                {unit: 'jsonpath', range: '[2]', content: '"test3"'}
+            ],
+            method: 'PUT'
+        })
+        return `Write test 3 returned ${res.status}`
+    },
+    "Write test 3 returned 200"
+)
+
+runTest(
+    "Write test 4",
+    async () => {
+        let res = await fetch('/json', {
+            version: ['test4'],
+            patches: [],
+            method: 'PUT'
+        })
+        return `Write test 4 returned ${res.status}`
+    },
+    "Write test 4 returned 200"
+)
+
+runTest(
+    "Retry test 1",
+    async () => {
+        try {
+            await fetch("/400", { retry: true })
+            throw new Error("Should have thrown an error")
+        } catch (e) {
+            return e.message
+        }
+    },
+    "giving up because of http status: 400"
+)
+
+runTest(
+    "Retry test 2",
+    async () => {
+        try {
+            await fetch("/401", { retry: true })
+            throw new Error("Should have thrown an error")
+        } catch (e) {
+            return e.message
+        }
+    },
+    "giving up because of http status: 401 (access denied)"
+)
+
+runTest(
+    "Retry test 3",
+    async () => {
+        let a = new AbortController()
+        a.abort()
+        try {
+            await fetch("/keep_open", { retry: true, signal: a.signal })
+            throw new Error("Should have been aborted")
+        } catch (e) {
+            return e.message
+        }
+    },
+    "abort"
+)
+
+runTest(
+    "Retry test 4",
+    async () => {
+        let a = new AbortController()
+        setTimeout(() => a.abort(), 30)
+        try {
+            await fetch("/keep_open", { retry: true, signal: a.signal })
+            throw new Error("Should have been aborted")
+        } catch (e) {
+            return e.name
+        }
+    },
+    "AbortError"
+)
+
+runTest(
+    "Retry test 5",
+    async () => {
+        let good = false
+        let a = new AbortController()
+        try {
+            let res = await fetch("/json", {
+                signal: a.signal,
+                retry: true,
+                subscribe: true,
+            })
+            await new Promise((done, fail) => {
+                setTimeout(() => a.abort(), 30)
+                setTimeout(() => fail(new Error("abort failed 1")), 60)
+                res.subscribe((update) => {
+                    if (JSON.stringify(update) === JSON.stringify(test_update)) good = true
+                }, fail)
+            })
+        } catch (e) {
+            return e.name === "AbortError" && good ? "passed" : "failed"
+        }
+    },
+    "passed"
+)
+
+runTest(
+    "Retry test 6",
+    async () => {
+        let x = { parents: ["test-0", "test-1"] }
+        let y = await (await fetch("/check_parents", x)).json()
+        return y.parents
+    },
+    '"test-0", "test-1"'
+)
+
+runTest(
+    "Retry test 7",
+    async () => {
+        let x = { parents: ["test-0", "test-1"] }
+        let y = await (await fetch("/check_parents", { parents: () => x.parents })).json()
+        return y.parents
+    },
+    '"test-0", "test-1"'
+)
+
+runTest(
+    "Retry test 8",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise(async (done, fail) => {
+            try {
+                var res = await braid_fetch("/json", {
+                    retry: true,
+                    signal: a.signal,
+                    subscribe: true,
+                })
+            } catch (e) {
+                fail(e)
+            }
+            res.subscribe(done, fail)
+        })
+        a.abort()
+        return JSON.stringify(x)
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Retry test 9",
+    async () => {
+        let x = await (await fetch("/retry", { retry: true })).json()
+        return JSON.stringify(x)
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Retry test 10",
+    async () => {
+        try {
+            await new Promise((done, fail) => {
+                fetch("/", { retry: { onRes: done } })
+                setTimeout(() => fail(new Error("onRes was NOT called")), 100)
+            })
+            return "onRes was called"
+        } catch (e) {
+            return e.message
+        }
+    },
+    "onRes was called"
+)
+
+runTest(
+    "Retry test 11",
+    async () => {
+        let onRes_count = 0
+        let update_count = 0
+        try {
+            await new Promise(async (done, fail) => {
+                let a = new AbortController()
+                let res = await fetch("/json", {
+                    retry: { onRes: () => onRes_count++ },
+                    subscribe: true,
+                    headers: { giveup: true },
+                    signal: a.signal,
+                })
+                res.subscribe(
+                    (update) => {
+                        if (JSON.stringify(update) === JSON.stringify(test_update)) update_count++
+                        if (update_count > 1) done()
+                    },
+                    (e) => fail(new Error("fetch error: " + e))
+                )
+                setTimeout(() => {
+                    a.abort()
+                    fail(new Error("timed out: " + JSON.stringify({ onRes_count, update_count })))
+                }, 20)
+            })
+            return `onRes_count=${onRes_count}, update_count=${update_count}`
+        } catch (e) {
+            return e.message
+        }
+    },
+    "onRes_count=2, update_count=2"
+)
+
+runTest(
+    "Retry test 12",
+    async () => {
+        let updates = []
+        let a = new AbortController()
+        for await (var update of (await fetch('/json', {retry: true, signal: a.signal, subscribe: true, headers: {giveup: true}})).subscription) {
+            updates.push(JSON.stringify(update))
+
+            // work here
+            console.log(`UPdATE: `, update)
+
+            if (updates.length === 3) break
+        }
+        a.abort()
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}'
+)
+
+runTest(
+    "Binary test 1",
+    async () => {
+        let x = await fetch('/binary')
+        x = await x.arrayBuffer()
+        x = new Uint8Array(x)
+        x = [...x]
+        return x.join(', ')
+    },
+    new Array(256).fill(0).map((x, i) => i).join(', ')
+)
+
+runTest(
+    "Binary test 2",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise(async (done, fail) => {
+            let x = await fetch('/binary', {subscribe: true, signal: a.signal})
+            x.subscribe(done, fail)
+        })
+        a.abort()
+        x = x.body
+        x = [...x]
+        return x.join(', ')
+    },
+    new Array(256).fill(0).map((x, i) => i).join(', ')
+)
+
 </script>

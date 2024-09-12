@@ -291,18 +291,22 @@ function send_update(res, data, url, peer) {
             res.setHeader(key, val)
     }
     function write_body (body) {
-        if (res.isSubscription)
-            res.write('\r\n' + body)
-        else
-            res.write(body)
+        if (res.isSubscription) res.write('\r\n')
+        res.write(body)
     }
 
     // console.log('sending version', {url, peer, version, parents, patches, body,
     //                                 subscription: res.isSubscription})
 
-    // Validate that the body and patches are strings
+    // Validate that the body and patches are strings,
+    // or in the case of body, it could be binary
     if (body !== undefined)
-        assert(typeof body === 'string')
+        assert(typeof body === 'string' ||
+            body instanceof ArrayBuffer ||
+            body instanceof Uint8Array ||
+            body instanceof Blob ||
+            body instanceof Buffer
+        )
     else {
         // Only one of patch or patches can be set
         assert(!(patch && patches))
@@ -362,9 +366,14 @@ function send_update(res, data, url, peer) {
     }
 
     // Write the patches or body
-    if (typeof body === 'string') {
-        set_header('Content-Length', (new TextEncoder().encode(body)).length)
-        write_body(body)
+    if (body_exists) {
+        let x = typeof body === 'string' ? new TextEncoder().encode(body) : body
+        set_header('Content-Length',
+            x instanceof ArrayBuffer ? x.byteLength :
+            x instanceof Uint8Array ? x.length :
+            x instanceof Blob ? x.size :
+            x instanceof Buffer ? x.length : null)
+        write_body(x)
     } else
         res.write(generate_patches(res, patches))
 

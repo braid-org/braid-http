@@ -1,5 +1,13 @@
 var braidify = require('../braid-http-server.js')
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
+
+let test_update = {
+    version: ['test'],
+    parents: ['oldie'],
+    body: JSON.stringify({this: 'stuff'})
+}
+let retries_left = 4
+
 require('http').createServer(
     (req, res) => {
 
@@ -20,11 +28,9 @@ require('http').createServer(
                 res.startSubscription()
 
             // Send the current version
-            res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                body: JSON.stringify({this: 'stuff'})
-            })
+            res.sendUpdate(test_update)
+
+            if (req.headers.giveup) return res.end()
 
             if (req.subscribe) {
                 // Send a patch
@@ -77,6 +83,46 @@ require('http').createServer(
             sendfile('../braid-http-client.js', req, res)
         else if (req.url === '/test-responses.txt')
             sendfile('test-responses.txt', req, res)
+
+        // New routes for tests
+        if (req.url === "/400") {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: 400 }))
+        } else if (req.url === "/401") {
+            res.writeHead(401, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: 401 }))
+        } else if (req.url === "/keep_open") {
+        } else if (req.url === "/check_parents") {
+            res.writeHead(200, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ parents: req.headers.parents }))
+        } else if (req.url === "/retry") {
+            if (retries_left > 0) {
+                retries_left--
+                res.writeHead(408, { "Content-Type": "application/json" })
+                res.end(JSON.stringify({ error: 408 }))
+            } else {
+                res.writeHead(200, { "Content-Type": "application/json" })
+                res.end(JSON.stringify(test_update))
+            }
+        } else if (req.url === '/binary') {
+            const buffer = Buffer.alloc(256);
+            for (let i = 0; i < 256; i++) buffer[i] = i;
+
+            if (req.subscribe) {
+                res.startSubscription()
+                res.sendUpdate({
+                    version: ['test'],
+                    parents: ['oldie'],
+                    body: buffer
+                })
+            } else {
+                res.writeHead(200, { 
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": buffer.length
+                });
+                res.end(buffer);
+            }
+        }
     }
 
 ).listen(9000, () => console.log("Listening on http://localhost:9000..."))

@@ -154,8 +154,8 @@ async function braid_fetch (url, params = {}) {
         console.assert(Array.isArray(params.version),
                        'fetch(): `version` must be an array')
     if (params.parents)
-        console.assert(Array.isArray(params.parents),
-                       'fetch(): `parents` must be an array')
+        console.assert(Array.isArray(params.parents) || (typeof params.parents === 'function'),
+                       'fetch(): `parents` must be an array or function')
 
     // // Always set the peer
     // params.headers.set('peer', peer)
@@ -163,7 +163,7 @@ async function braid_fetch (url, params = {}) {
     // We provide some shortcuts for Braid params
     if (params.version)
         params.headers.set('version', params.version.map(JSON.stringify).join(', '))
-    if (params.parents)
+    if (Array.isArray(params.parents))
         params.headers.set('parents', params.parents.map(JSON.stringify).join(', '))
     if (params.subscribe)
         params.headers.set('subscribe', 'true')
@@ -210,115 +210,171 @@ async function braid_fetch (url, params = {}) {
     // `controller` to abort the fetch itself.
 
     var original_signal = params.signal
-    var underlying_aborter = new AbortController()
-    params.signal = underlying_aborter.signal
+    var underlying_aborter = null
     if (original_signal)
         original_signal.addEventListener(
             'abort',
             () => underlying_aborter.abort()
         )
 
-    // Now we run the original fetch....
-    var res = await normal_fetch(url, params)
+    var waitTime = 10
+    var res = null
+    var subscription_cb = null
+    var subscription_error = null
 
-    // And customize the response with a couple methods for getting
-    // the braid subscription data:
-    res.subscribe    = start_subscription
-    res.subscription = {[Symbol.asyncIterator]: iterator}
+    return await new Promise((done, fail) => {
+        connect()
+        async function connect() {
+            try {
+                if (original_signal?.aborted) return fail(new Error('abort'))
 
+                // We need a fresh underlying abort controller each time we connect
+                underlying_aborter = new AbortController()
+                params.signal = underlying_aborter.signal
 
-    // Now we define the subscription function we just used:
-    function start_subscription (cb, error) {
-        if (!res.ok)
-            throw new Error('Request returned not ok status:', res.status)
+                // If parents is a function,
+                // call it now to get the latest parents
+                if (typeof params.parents === 'function')
+                    params.headers.set('parents', params.parents().map(JSON.stringify).join(', '))
 
-        if (res.bodyUsed)
-            // TODO: check if this needs a return
-            throw new Error('This response\'s body has already been read', res)
+                // Now we run the original fetch....
+                res = await normal_fetch(url, params)
 
-        // Parse the streamed response
-        handle_fetch_stream(
-            res.body,
+                // And customize the response with a couple methods for getting
+                // the braid subscription data:
+                res.subscribe    = start_subscription
+                res.subscription = {[Symbol.asyncIterator]: iterator}
 
-            // Each time something happens, we'll either get a new
-            // version back, or an error.
-            (result, err) => {
-                if (!err)
-                    // Yay!  We got a new version!  Tell the callback!
-                    cb(result)
-                else {
-                    // This error handling code runs if the connection
-                    // closes, or if there is unparseable stuff in the
-                    // streamed response.
+                // Now we define the subscription function we just used:
+                function start_subscription (cb, error) {
+                    subscription_cb = cb
+                    subscription_error = error
 
-                    // In any case, we want to be sure to abort the
-                    // underlying fetch.
-                    underlying_aborter.abort()
+                    if (!res.ok)
+                        throw new Error('Request returned not ok status:', res.status)
 
-                    // Then send the error upstream.
-                    if (error)
-                        error(err)
-                    else
-                        throw 'Unhandled network error in subscription'
-                }
-            }
-        )
-    }
+                    if (res.bodyUsed)
+                        // TODO: check if this needs a return
+                        throw new Error('This response\'s body has already been read', res)
 
+                    // Parse the streamed response
+                    handle_fetch_stream(
+                        res.body,
 
-    // And the iterator for use with "for async (...)"
-    function iterator () {
-        // We'll keep this state while our iterator runs
-        var initialized = false,
-            inbox = [],
-            resolve = null,
-            reject = null
+                        // Each time something happens, we'll either get a new
+                        // version back, or an error.
+                        (result, err) => {
+                            if (!err)
+                                // Yay!  We got a new version!  Tell the callback!
+                                cb(result)
+                            else {
+                                // This error handling code runs if the connection
+                                // closes, or if there is unparseable stuff in the
+                                // streamed response.
 
-        return {
-            async next() {
-                // If we've already received a version, return it
-                if (inbox.length > 0)
-                    return {done: false, value: inbox.shift()}
+                                // In any case, we want to be sure to abort the
+                                // underlying fetch.
+                                underlying_aborter.abort()
 
-                // Otherwise, let's set up a promise to resolve when we get the next item
-                var promise = new Promise((_resolve, _reject) => {
-                    resolve = _resolve
-                    reject  = _reject
-                })
-
-                // Start the subscription, if we haven't already
-                if (!initialized) {
-                    initialized = true
-
-                    // The subscription will call whichever resolve and
-                    // reject functions the current promise is waiting for
-                    start_subscription(x => resolve(x),
-                                       x => reject(x) )
+                                on_error(err)
+                            }
+                        },
+                        !isTextContentType(res.headers.get('content-type'))
+                    )
                 }
 
-                // Now wait for the subscription to resolve or reject the promise.
-                var result = await promise
+                // And the iterator for use with "for async (...)"
+                function iterator () {
+                    // We'll keep this state while our iterator runs
+                    var initialized = false,
+                        inbox = [],
+                        resolve = null,
+                        reject = null,
+                        last_error = null
 
-                // Anything we get from here out we should add to the inbox
-                resolve = (new_version) => inbox.push(new_version)
-                reject  = (err) => {throw err}
+                    return {
+                        async next() {
+                            // If we got an error, throw it
+                            if (last_error) throw last_error
 
-                return { done: false, value: result }
-            }
+                            // If we've already received a version, return it
+                            if (inbox.length > 0)
+                                return {done: false, value: inbox.shift()}
+
+                            // Otherwise, let's set up a promise to resolve when we get the next item
+                            var promise = new Promise((_resolve, _reject) => {
+                                resolve = _resolve
+                                reject  = _reject
+                            })
+
+                            // Start the subscription, if we haven't already
+                            if (!initialized) {
+                                initialized = true
+
+                                // The subscription will call whichever resolve and
+                                // reject functions the current promise is waiting for
+                                start_subscription(x => {
+                                    inbox.push(x)
+                                    resolve()
+                                }, x => reject(x) )
+                            }
+
+                            // Now wait for the subscription to resolve or reject the promise.
+                            await promise
+
+                            // From here on out, we'll redirect the reject,
+                            // since that promise is already done
+                            reject = (err) => {last_error = err}
+
+                            return {done: false, value: inbox.shift()}
+                        }
+                    }
+                }
+
+                if (params.retry) {
+                    let give_up = res.status >= 400 && res.status < 600
+                    switch (res.status) {
+                        case 408: // Request Timeout
+                        case 425: // Too Early
+                        case 429: // Too Many Requests
+
+                        case 502: // Bad Gateway
+                        case 504: // Gateway Timeout
+                            give_up = false;
+                    }
+                    if (give_up) return fail(new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`))
+                    if (!res.ok) throw new Error(`status not ok: ${res.status}`)
+                }
+
+                if (subscription_cb) start_subscription(subscription_cb, subscription_error)
+
+                done(res)
+
+                params?.retry?.onRes?.(res)
+                waitTime = 10
+            } catch (e) { on_error(e) }
         }
-    }
+        function on_error(e) {
+            if (!params.retry || (e.name === "AbortError")) {
+                subscription_error?.(e)
+                return fail(e)
+            }
 
-    return res
+            console.log(`retrying in ${waitTime}ms: ${url} after error: ${e}`)
+            setTimeout(connect, waitTime)
+            waitTime = Math.min(waitTime * 2, 3000)
+        }
+    })
 }
 
 // Parse a stream of versions from the incoming bytes
-async function handle_fetch_stream (stream, cb) {
+async function handle_fetch_stream (stream, cb, binary) {
     if (is_nodejs)
         stream = to_whatwg_stream(stream)
 
     // Set up a reader
     var reader = stream.getReader(),
-        parser = subscription_parser(cb)
+        parser = subscription_parser(cb, binary)
     
     while (true) {
         var versions = []
@@ -350,7 +406,7 @@ async function handle_fetch_stream (stream, cb) {
 // Braid-HTTP Subscription Parser
 // ****************************
 
-var subscription_parser = (cb) => ({
+var subscription_parser = (cb, binary) => ({
     // A parser keeps some parse state
     state: {input: []},
 
@@ -370,6 +426,9 @@ var subscription_parser = (cb) => ({
             // Try to parse an update
             try {
                 this.state = parse_update (this.state)
+
+                // Parse UTF-8 if it isn't binary
+                if (!binary && this.state.body) this.state.body = (new TextDecoder('utf-8')).decode(this.state.body)
             } catch (e) {
                 this.cb(null, e)
                 return
@@ -541,8 +600,7 @@ function parse_body (state) {
         }
 
         // Otherwise, this is a snapshot body
-        else
-            state.body = (new TextDecoder('utf-8')).decode(new Uint8Array(state.input.slice(0, content_length)))
+        else state.body = new Uint8Array(state.input.slice(0, content_length))
 
         state.input = state.input.slice(content_length)
         return state
@@ -712,6 +770,29 @@ function extractHeader(input) {
         remaining_bytes: remainingBytes,
         header_string: headerString
     };
+}
+
+function isTextContentType(contentType) {
+    if (!contentType) return false
+
+    contentType = contentType.toLowerCase().trim()
+
+    // Check if it starts with "text/"
+    if (contentType.startsWith("text/")) return true
+
+    // Initialize the Map if it doesn't exist yet
+    if (!isTextContentType.textApplicationTypes) {
+        isTextContentType.textApplicationTypes = new Map([
+            ["application/json", true],
+            ["application/xml", true],
+            ["application/javascript", true],
+            ["application/ecmascript", true],
+            ["application/x-www-form-urlencoded", true],
+        ])
+    }
+
+    // Use the cached map of text-based application types
+    return isTextContentType.textApplicationTypes.has(contentType)
 }
 
 // ****************************
