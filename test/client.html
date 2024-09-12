@@ -447,4 +447,37 @@ runTest(
     new Array(256).fill(0).map((x, i) => i).join(', ')
 )
 
+runTest(
+    "onFetch test 1",
+    async () => {
+        let x = await new Promise(async (done, fail) => {
+            await fetch('/json', {
+                parents: () => ['test'],
+                onFetch: (...args) => done(args)
+            })
+        })
+        x[1].headers = Object.fromEntries([...x[1].headers])
+        return JSON.stringify(x)
+    },
+    '["/json",{"headers":{"parents":"\\"test\\""},"cache":"no-cache","signal":{}}]'
+)
+
+runTest(
+    "onBytes test 1",
+    async () => {
+        return await new Promise(async (done, fail) => {
+            let s = ''
+            let x = await fetch('/json', {
+                subscribe: true,
+                headers: {giveup: true},
+                onBytes: (x) => {
+                    s += new TextDecoder('utf-8').decode(x)
+                }
+            })
+            x.subscribe(_ => done(s))
+        })
+    },
+    "Version: \"test\"\r\nParents: \"oldie\"\r\nContent-Length: 16\r\n\r\n{\"this\":\"stuff\"}\r\n\r\n"
+)
+
 </script>

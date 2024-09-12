@@ -237,6 +237,11 @@ async function braid_fetch (url, params = {}) {
                 if (typeof params.parents === 'function')
                     params.headers.set('parents', params.parents().map(JSON.stringify).join(', '))
 
+                // undocumented feature used by braid-chrome
+                // to see the fetch args as they are right before it is actually called,
+                // to display them for the user in the dev panel
+                params.onFetch?.(url, params)
+
                 // Now we run the original fetch....
                 res = await normal_fetch(url, params)
 
@@ -279,7 +284,8 @@ async function braid_fetch (url, params = {}) {
                                 on_error(err)
                             }
                         },
-                        !isTextContentType(res.headers.get('content-type'))
+                        !isTextContentType(res.headers.get('content-type')),
+                        params.onBytes
                     )
                 }
 
@@ -368,7 +374,7 @@ async function braid_fetch (url, params = {}) {
 }
 
 // Parse a stream of versions from the incoming bytes
-async function handle_fetch_stream (stream, cb, binary) {
+async function handle_fetch_stream (stream, cb, binary, on_bytes) {
     if (is_nodejs)
         stream = to_whatwg_stream(stream)
 
@@ -394,6 +400,8 @@ async function handle_fetch_stream (stream, cb, binary) {
             cb(null, 'Connection closed')
             return
         }
+
+        on_bytes?.(value)
 
         // Tell the parser to process some more stream
         parser.read(value)
