@@ -52,9 +52,12 @@ function updateTestResult(div, passed, message, got, expected) {
 
 async function runTest(testName, testFunction, expectedResult) {
 
-    // if (testName != "Binary test 2") return
+    // if (testName != "node: Read test 1" &&
+    //     testName != "node: Write test 1") return
+    // if (testName != "node: Write test 4") return
 
-    delay += 100
+    delay += 70
+
     await new Promise(done => setTimeout(done, delay))
     const div = createTestDiv(testName)
     try {
@@ -124,31 +127,6 @@ runTest(
         let updates = []
         for await (var update of (await fetch('/json', {subscribe: true})).subscription) {
             updates.push(JSON.stringify(update))
-
-            // work here
-            console.log(`UPdATE: `, update)
-
-            if (updates.length === 5) break
-        }
-        return updates.join('\n')
-    },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
-)
-
-runTest(
-    "Read test 4",
-    async () => {
-        let updates = []
-        for await (var update of (await fetch('/json', {subscribe: true, giveup: true})).subscription) {
-            updates.push(JSON.stringify(update))
-
-            // work here
-            console.log(`UPdATE: `, update)
-
             if (updates.length === 5) break
         }
         return updates.join('\n')
@@ -492,5 +470,203 @@ runTest(
     },
     '{"has_parents":"false","res":{}}'
 )
+
+runTest(
+    "node: Read test 1",
+    async () => {
+        const codeToEval = `
+            let updates = []
+            ;(new Promise((resolve, reject) => {
+                http.get(
+                    'http://localhost:' + port + '/json',
+                    {subscribe: true},
+                    (res) => {
+                        res.on('update', (update) => {
+                            updates.push(update)
+                            if (updates.length === 5) resolve()
+                        })
+                    }
+                )
+            })).then(() => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(updates));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        
+        return result.map(JSON.stringify).join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+);
+
+runTest(
+    "node: Write test 1",
+    async () => {
+        const codeToEval = `
+            let p = new Promise((resolve, reject) => {
+                http.get(
+                    'http://localhost:' + port + '/json',
+                    {
+                        version: ['test1'],
+                        patches: {unit: 'json', range: '[0]', content: '"test1"'},
+                        method: 'PUT'
+                    },
+                    (res) => {
+                        resolve('Write test 1 returned ' + res.statusCode)
+                    }
+                )            
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'Write test 1 returned 200'
+);
+
+runTest(
+    "node: Write test 2",
+    async () => {
+        const codeToEval = `
+            let p = new Promise((resolve, reject) => {
+                http.get(
+                    'http://localhost:' + port + '/json',
+                    {
+                        version: ['test2'],
+                        patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
+                        method: 'PUT'
+                    },
+                    (res) => {
+                        resolve('Write test 2 returned ' + res.statusCode)
+                    }
+                )            
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'Write test 2 returned 200'
+);
+
+runTest(
+    "node: Write test 3",
+    async () => {
+        const codeToEval = `
+            let p = new Promise((resolve, reject) => {
+                http.get(
+                    'http://localhost:' + port + '/json',
+                    {
+                        version: ['test3'],
+                        patches: [
+                            {unit: 'jsonpath', range: '[0]', content: '"test3"'},
+                            {unit: 'jsonpath', range: '[1]', content: '"test3"'},
+                            {unit: 'jsonpath', range: '[2]', content: '"test3"'}
+                        ],
+                        method: 'PUT'
+                    },
+                    (res) => {
+                        resolve('Write test 3 returned ' + res.statusCode)
+                    }
+                )            
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'Write test 3 returned 200'
+);
+
+runTest(
+    "node: Write test 4",
+    async () => {
+        const codeToEval = `
+            let p = new Promise((resolve, reject) => {
+                http.get(
+                    'http://localhost:' + port + '/json',
+                    {
+                        version: ['test4'],
+                        patches: [],
+                        method: 'PUT'
+                    },
+                    (res) => {
+                        resolve('Write test 4 returned ' + res.statusCode)
+                    }
+                )            
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'Write test 4 returned 200'
+);
 
 </script>

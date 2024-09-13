@@ -63,62 +63,59 @@ fetch('https://braid.org/chat', {subscribe: true}).then(
 )
 ```
 
-If you want automatic reconnections, add two error handlers like this:
+If you want automatic reconnections, this library add a `{retry: true}` option to `fetch()`.
 
 ```javascript
-function connect() {
-    fetch('https://braid.org/chat', {subscribe: true}).then(
-        res => res.subscribe(
-            (update) => {
-                console.log('We got a new update!', update)
-                // Do something with the update
-            },
-            e => setTimeout(connect, 1000)
-        )
-    ).catch(e => setTimeout(connect, 1000))
-}
-connect()
+fetch('https://braid.org/chat', {subscribe: true, retry: true}).then(
+    res => res.subscribe(
+        (update) => {
+            console.log('We got a new update!', update)
+            // Do something with the update
+        }
+    )
+)
+```
+
+For use in conjunction with `{retry: true}`, it's possible to make the `parents` param equal to a function, which will be called to get the current parents each time the fetch establishes a new connection.
+
+```javascript
+fetch('https://braid.org/chat', {subscribe: true, retry: true, parents: () => {
+        return current_parents
+    }}).then(
+    res => res.subscribe(
+        (update) => {
+            console.log('We got a new update!', update)
+            // Do something with the update
+        }
+    )
+)
 ```
 
 ### Example Subscription with Async/Await
 
 ```javascript
-async function connect () {
-    try {
-        (await fetch('/chat', {subscribe: true})).subscribe(
-            (update) => {
-                // We got a new update!
-            },
-            () => setTimeout(connect, 1000)
-        )
-    } catch (e) {
-        setTimeout(connect, 1000)
-    }
-}
+(await fetch('/chat', {subscribe: true, retry: true})).subscribe(
+    (update) => {
+        // We got a new update!
+    })
 ```
 
 ### Example Subscription with `for await`
 
 ```javascript
-async function connect () {
-    try {
-        var subscription_iterator = fetch('/chat', {subscribe: true}).subscription
-        for await (var update of subscription_iterator) {
-            // Updates might come in the form of patches:
-            if (update.patches)
-                chat = apply_patches(update.patches, chat)
+var subscription_iterator = (await fetch('/chat',
+    {subscribe: true, retry: true})).subscription
+for await (var update of subscription_iterator) {
+    // Updates might come in the form of patches:
+    if (update.patches)
+        chat = apply_patches(update.patches, chat)
 
-            // Or complete snapshots:
-            else
-                // Beware the server doesn't send these yet.
-                chat = JSON.parse(update.body)
+    // Or complete snapshots:
+    else
+        // Beware the server doesn't send these yet.
+        chat = JSON.parse(update.body)
 
-            render_stuff()
-        }
-    } catch (e) {
-        console.log('Reconnecting...')
-        setTimeout(connect, 4000)
-    }
+    render_stuff()
 }
 ```
 

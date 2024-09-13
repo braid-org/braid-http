@@ -1,6 +1,8 @@
 var braidify = require('../braid-http-server.js')
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
+var http = require('../braid-http-client.js').http(require('http'))
 
+let port = 9000
 let test_update = {
     version: ['test'],
     parents: ['oldie'],
@@ -10,6 +12,12 @@ let retries_left = 4
 
 require('http').createServer(
     (req, res) => {
+        // Only allow connections from localhost
+        if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::1') {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden: Only localhost connections are allowed');
+            return;
+        }
 
         // Braidifies our server
         braidify(req, res)
@@ -17,6 +25,23 @@ require('http').createServer(
         console.log('Request:', req.url, req.method,
                     req.subscribe ? ('Subscribe: ' + req.subscribe)
                     : 'no subscription')
+
+        // New eval endpoint
+        if (req.url.startsWith('/eval') && req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => {
+                body += chunk.toString();
+            });
+            req.on('end', () => {
+                try {
+                    eval(body);
+                } catch (error) {
+                    res.writeHead(500, { 'Content-Type': 'text/plain' });
+                    res.end(`Error: ${error.message}`);
+                }
+            });
+            return;
+        }
 
         // We'll serve Braid at the /json route!
         if (req.url === '/json' && req.method === 'GET') {
@@ -125,4 +150,4 @@ require('http').createServer(
         }
     }
 
-).listen(9000, () => console.log("Listening on http://localhost:9000..."))
+).listen(port, () => console.log(`Listening on http://localhost:${port}...`))
