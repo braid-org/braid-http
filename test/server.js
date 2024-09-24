@@ -9,6 +9,7 @@ let test_update = {
     body: JSON.stringify({this: 'stuff'})
 }
 let retries_left = 4
+let giveup_completely_set = {}
 
 require('http').createServer(
     (req, res) => {
@@ -48,6 +49,11 @@ require('http').createServer(
             res.setHeader('content-type', 'application/json')
             // res.setHeader('accept-subscribe', 'true')
 
+            if (giveup_completely_set[req.headers.giveup_completely]) {
+                res.statusCode = 500
+                return res.end()
+            }
+
             // If the client requested a subscription, let's honor it!
             if (req.subscribe)
                 res.startSubscription()
@@ -56,6 +62,10 @@ require('http').createServer(
             res.sendUpdate(test_update)
 
             if (req.headers.giveup) return res.end()
+            if (req.headers.giveup_completely) {
+                giveup_completely_set[req.headers.giveup_completely] = true
+                return res.end()
+            }
 
             if (req.subscribe) {
                 // Send a patch

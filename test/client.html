@@ -384,9 +384,6 @@ runTest(
         for await (var update of (await fetch('/json', {retry: true, signal: a.signal, subscribe: true, headers: {giveup: true}})).subscription) {
             updates.push(JSON.stringify(update))
 
-            // work here
-            console.log(`UPdATE: `, update)
-
             if (updates.length === 3) break
         }
         a.abort()
@@ -395,6 +392,39 @@ runTest(
     '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
     '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
     '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}'
+)
+
+runTest(
+    "Retry test 13",
+    async () => {
+        let giveup_completely = Math.random().toString(36).slice(2)
+        let updates = []
+        return await new Promise(async (done, fail) => {
+            let res = await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})
+            res.subscribe((update) => {
+                updates.push(JSON.stringify(update))
+            }, (e) => {
+                done('' + updates + ' -- ' + e)
+            })
+        })
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}"} -- Error: giving up because of http status: 500'
+)
+
+runTest(
+    "Retry test 14",
+    async () => {
+        let giveup_completely = Math.random().toString(36).slice(2)
+        let updates = []
+        try {
+            for await (var update of (await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})).subscription) {
+                updates.push(JSON.stringify(update))
+            }
+        } catch (e) {
+            return '' + updates + ' -- ' + e
+        }
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}"} -- Error: giving up because of http status: 500'
 )
 
 runTest(
