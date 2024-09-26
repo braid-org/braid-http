@@ -296,6 +296,16 @@ runTest(
 )
 
 runTest(
+    "Retry test 7.1 -- async parents",
+    async () => {
+        let x = { parents: ["test-0", "test-1"] }
+        let y = await (await fetch("/check_parents", { parents: async () => x.parents })).json()
+        return y.parents
+    },
+    '"test-0", "test-1"'
+)
+
+runTest(
     "Retry test 8",
     async () => {
         let a = new AbortController()
