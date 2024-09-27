@@ -54,7 +54,7 @@ async function runTest(testName, testFunction, expectedResult) {
 
     // if (testName != "node: Read test 1" &&
     //     testName != "node: Write test 1") return
-    // if (testName != "node: Write test 4") return
+    // if (testName != "Heartbeat test: restart the connection if haven't heard in 1.2xheartbeat") return
 
     delay += 70
 
@@ -71,6 +71,104 @@ async function runTest(testName, testFunction, expectedResult) {
         updateTestResult(div, false, "Error:", error.message || error, expectedResult)
     }
 }
+
+runTest(
+    "parse error test",
+    async () => {
+        let a = new AbortController()
+        let count = 0
+        return await new Promise(async (done, fail) => {
+            setTimeout(() => {
+                a.abort()
+                fail(new Error('too long'))
+            }, 100)
+            let res = await fetch("/parse_error", { retry: {
+                onRes: () => {
+                    console.log('got here??')
+                    count++
+                    if (count === 2) done('success')
+                }
+            }, subscribe: true, signal: a.signal })
+            res.subscribe((u) => {}, fail)
+        })
+    },
+    "success"
+)
+
+runTest(
+    "Heartbeat test: do we get one?",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            let st = Date.now()
+            fetch('/json', {subscribe: true, heartbeats: 0.5, signal: a.signal, onBytes: () => {
+                if (Date.now() - st > 500) resolve('got beat!')
+            }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
+        })
+        a.abort()
+        return x
+    },
+    'got beat!'
+)
+
+runTest(
+    "Heartbeat test: do we not get one, when we don't want?",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            setTimeout(() => resolve('did not get!'), 1000)
+            fetch('/json', {subscribe: true, signal: a.signal, onBytes: () => {
+                if (Date.now() - st > 500) resolve('got beat!')
+            }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
+        })
+        a.abort()
+        return x
+    },
+    'did not get!'
+)
+
+runTest(
+    "Heartbeat test: restart the connection if haven't heard in 1.2xheartbeat",
+    async () => {
+        let res_count = 0
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/noheartbeat', {heartbeats: 0.5, signal: a.signal, retry: {
+                onRes: () => {
+                    res_count++
+                    if (res_count > 1) {
+                        resolve('detected no heartbeat')
+                    }
+                }
+            }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
+        })
+        a.abort()
+        return x
+    },
+    'detected no heartbeat'
+)
+
+runTest(
+    "Heartbeat test: don't restart the connection if things are fine",
+    async () => {
+        let res_count = 0
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            setTimeout(() => resolve("didn't restart"), 1000);
+            fetch('/json', {heartbeats: 0.5, subscribe: true, signal: a.signal, retry: {
+                onRes: () => {
+                    res_count++
+                    if (res_count > 1) {
+                        resolve('did restart')
+                    }
+                }
+            }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
+        })
+        a.abort()
+        return x
+    },
+    "didn't restart"
+)
 
 runTest(
     "Read test 1",
@@ -232,7 +330,7 @@ runTest(
             return e.message
         }
     },
-    "abort"
+    "already aborted"
 )
 
 runTest(

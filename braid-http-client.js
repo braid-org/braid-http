@@ -169,6 +169,9 @@ async function braid_fetch (url, params = {}) {
         params.headers.set('subscribe', 'true')
     if (params.peer)
         params.headers.set('peer', params.peer)
+    
+    if (params.heartbeats)
+        params.headers.set('heartbeats', typeof params.heartbeats === 'number' ? `${params.heartbeats}s` : params.heartbeats)
 
     // Prevent browsers from going to disk cache
     params.cache = 'no-cache'
@@ -225,8 +228,23 @@ async function braid_fetch (url, params = {}) {
     return await new Promise((done, fail) => {
         connect()
         async function connect() {
+            let on_error = e => {
+                on_error = () => {}
+
+                if (!params.retry || (e.name === "AbortError")) {
+                    subscription_error?.(e)
+                    return fail(e)
+                }
+
+                underlying_aborter.abort()
+
+                console.log(`retrying in ${waitTime}ms: ${url} after error: ${e}`)
+                setTimeout(connect, waitTime)
+                waitTime = Math.min(waitTime * 2, 3000)
+            }
+
             try {
-                if (original_signal?.aborted) return fail(new Error('abort'))
+                if (original_signal?.aborted) throw new DOMException('already aborted', 'AbortError')
 
                 // We need a fresh underlying abort controller each time we connect
                 underlying_aborter = new AbortController()
@@ -257,6 +275,22 @@ async function braid_fetch (url, params = {}) {
                     subscription_cb = cb
                     subscription_error = error
 
+                    // heartbeat
+                    let on_heartbeat = () => {}
+                    if (res.headers.get('heartbeats')) {
+                        let heartbeats = parseFloat(res.headers.get('heartbeats'))
+                        if (isFinite(heartbeats)) {
+                            let timeout = null
+                            on_heartbeat = () => {
+                                clearTimeout(timeout)
+                                timeout = setTimeout(() => {
+                                    on_error(new Error(`heartbeat not seen in ${(1.2 * heartbeats).toFixed(2)}s`))
+                                }, 1.2 * heartbeats * 1000)
+                            }
+                            on_heartbeat()
+                        }
+                    }
+
                     if (!res.ok)
                         throw new Error('Request returned not ok status:', res.status)
 
@@ -274,20 +308,17 @@ async function braid_fetch (url, params = {}) {
                             if (!err)
                                 // Yay!  We got a new version!  Tell the callback!
                                 cb(result)
-                            else {
+                            else
                                 // This error handling code runs if the connection
                                 // closes, or if there is unparseable stuff in the
                                 // streamed response.
-
-                                // In any case, we want to be sure to abort the
-                                // underlying fetch.
-                                underlying_aborter.abort()
-
                                 on_error(err)
-                            }
                         },
                         !isTextContentType(res.headers.get('content-type')),
-                        params.onBytes
+                        (...args) => {
+                            on_heartbeat()
+                            params.onBytes?.(...args)
+                        }
                     )
                 }
 
@@ -365,16 +396,6 @@ async function braid_fetch (url, params = {}) {
                 params?.retry?.onRes?.(res)
                 waitTime = 10
             } catch (e) { on_error(e) }
-        }
-        function on_error(e) {
-            if (!params.retry || (e.name === "AbortError")) {
-                subscription_error?.(e)
-                return fail(e)
-            }
-
-            console.log(`retrying in ${waitTime}ms: ${url} after error: ${e}`)
-            setTimeout(connect, waitTime)
-            waitTime = Math.min(waitTime * 2, 3000)
         }
     })
 }

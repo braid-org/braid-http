@@ -14,7 +14,11 @@ let giveup_completely_set = {}
 require('http').createServer(
     (req, res) => {
         // Only allow connections from localhost
-        if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::1') {
+        if (req.socket.remoteAddress !== '127.0.0.1'
+            && req.socket.remoteAddress !== '::1'
+            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
+        ) {
+            console.log(`connection attempt from: ${req.socket.remoteAddress}`)
             res.writeHead(403, { 'Content-Type': 'text/plain' });
             res.end('Forbidden: Only localhost connections are allowed');
             return;
@@ -157,6 +161,22 @@ require('http').createServer(
                 });
                 res.end(buffer);
             }
+        } else if (req.url === '/noheartbeat') {
+            res.writeHead(209, {
+                'Content-Type': 'text/plain',
+                Connection: 'keep-alive',
+                Heartbeats: req.headers['heartbeats']
+            })
+            res.write('hi')
+            return
+        } else if (req.url === '/parse_error') {
+            res.startSubscription()
+
+            res.write(`hello: true\r\n`)
+            res.write(`hello\r\n`)
+            res.write('Content-Length: 2\r\n')
+            res.write('\r\n')
+            res.write('hi')
         }
     }
 

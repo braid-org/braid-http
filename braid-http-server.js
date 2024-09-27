@@ -270,6 +270,22 @@ function braidify (req, res, next) {
             res.on('close',   x => disconnected('close'))
             res.on('finish',  x => disconnected('finish'))
             req.on('abort',   x => disconnected('abort'))
+
+            // Heartbeats
+            if (req.headers['heartbeats']) {
+                let heartbeats = parseFloat(req.headers['heartbeats'])
+                if (isFinite(heartbeats)) {
+                    res.setHeader('heartbeats', req.headers['heartbeats'])
+                    let closed
+                    res.on('close', () => closed = true)
+                    loop()
+                    function loop() {
+                        if (res.writableEnded || closed) return
+                        res.write("\r\n")
+                        setTimeout(loop, 1000 * heartbeats)
+                    }
+                }
+            }
         }
 
     // Check the Useragent to work around Firefox bugs
