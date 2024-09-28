@@ -283,9 +283,10 @@ async function braid_fetch (url, params = {}) {
                             let timeout = null
                             on_heartbeat = () => {
                                 clearTimeout(timeout)
+                                let wait_seconds = 1.2 * heartbeats + 3
                                 timeout = setTimeout(() => {
-                                    on_error(new Error(`heartbeat not seen in ${(1.2 * heartbeats).toFixed(2)}s`))
-                                }, 1.2 * heartbeats * 1000)
+                                    on_error(new Error(`heartbeat not seen in ${wait_seconds.toFixed(2)}s`))
+                                }, wait_seconds * 1000)
                             }
                             on_heartbeat()
                         }
