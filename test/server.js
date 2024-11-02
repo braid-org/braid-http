@@ -1,6 +1,7 @@
 var braidify = require('../braid-http-server.js')
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
+var https = require('../braid-http-client.js').http(require('https'))
 
 let port = 9000
 let test_update = {
@@ -11,7 +12,11 @@ let test_update = {
 let retries_left = 4
 let giveup_completely_set = {}
 
-require('http').createServer(
+require('http2').createSecureServer({
+     key: require('fs').readFileSync('./test/localhost-privkey.pem'),
+     cert: require('fs').readFileSync('./test/localhost-cert.pem'),
+     allowHTTP1: true
+   },
     (req, res) => {
         // Only allow connections from localhost
         if (req.socket.remoteAddress !== '127.0.0.1'
@@ -50,7 +55,7 @@ require('http').createServer(
 
         // We'll serve Braid at the /json route!
         if (req.url === '/json' && req.method === 'GET') {
-            res.setHeader('content-type', 'application/json')
+            res.setHeader('content-type', req.headers.charset ? 'application/json; charset=utf-8' : 'application/json')
             // res.setHeader('accept-subscribe', 'true')
 
             if (giveup_completely_set[req.headers.giveup_completely]) {

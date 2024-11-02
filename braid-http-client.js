@@ -315,7 +315,6 @@ async function braid_fetch (url, params = {}) {
                                 // streamed response.
                                 on_error(err)
                         },
-                        !isTextContentType(res.headers.get('content-type')),
                         (...args) => {
                             on_heartbeat()
                             params.onBytes?.(...args)
@@ -402,13 +401,13 @@ async function braid_fetch (url, params = {}) {
 }
 
 // Parse a stream of versions from the incoming bytes
-async function handle_fetch_stream (stream, cb, binary, on_bytes) {
+async function handle_fetch_stream (stream, cb, on_bytes) {
     if (is_nodejs)
         stream = to_whatwg_stream(stream)
 
     // Set up a reader
     var reader = stream.getReader(),
-        parser = subscription_parser(cb, binary)
+        parser = subscription_parser(cb)
     
     while (true) {
         var versions = []
@@ -442,7 +441,7 @@ async function handle_fetch_stream (stream, cb, binary, on_bytes) {
 // Braid-HTTP Subscription Parser
 // ****************************
 
-var subscription_parser = (cb, binary) => ({
+var subscription_parser = (cb) => ({
     // A parser keeps some parse state
     state: {input: []},
 
@@ -462,9 +461,6 @@ var subscription_parser = (cb, binary) => ({
             // Try to parse an update
             try {
                 this.state = parse_update (this.state)
-
-                // Parse UTF-8 if it isn't binary
-                if (!binary && this.state.body) this.state.body = (new TextDecoder('utf-8')).decode(this.state.body)
             } catch (e) {
                 this.cb(null, e)
                 return
@@ -483,6 +479,13 @@ var subscription_parser = (cb, binary) => ({
                 }
                 for (var k in update)
                     if (update[k] === undefined) delete update[k]
+
+                Object.defineProperty(update, 'body_text', {
+                    get: function () {
+                        return new TextDecoder('utf-8').decode(this.body.buffer)
+                    }
+                })
+
                 this.cb(update)
 
                 // Reset the parser for the next version!
@@ -806,29 +809,6 @@ function extractHeader(input) {
         remaining_bytes: remainingBytes,
         header_string: headerString
     };
-}
-
-function isTextContentType(contentType) {
-    if (!contentType) return false
-
-    contentType = contentType.toLowerCase().trim()
-
-    // Check if it starts with "text/"
-    if (contentType.startsWith("text/")) return true
-
-    // Initialize the Map if it doesn't exist yet
-    if (!isTextContentType.textApplicationTypes) {
-        isTextContentType.textApplicationTypes = new Map([
-            ["application/json", true],
-            ["application/xml", true],
-            ["application/javascript", true],
-            ["application/ecmascript", true],
-            ["application/x-www-form-urlencoded", true],
-        ])
-    }
-
-    // Use the cached map of text-based application types
-    return isTextContentType.textApplicationTypes.has(contentType)
 }
 
 // ****************************

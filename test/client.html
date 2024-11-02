@@ -73,6 +73,30 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test that content-type can have `; charset=utf-8`",
+    async () => {
+        let updates = []
+        await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, headers: {charset: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        if (update.body != null) update.body = update.body_text
+                        updates.push(JSON.stringify(update))
+                        if (updates.length === 5) resolve()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        return updates.join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\""}'
+)
+
+runTest(
     "parse error test",
     async () => {
         let a = new AbortController()
@@ -116,6 +140,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
+            let st = Date.now()
             setTimeout(() => resolve('did not get!'), 1000)
             fetch('/json', {subscribe: true, signal: a.signal, onBytes: () => {
                 if (Date.now() - st > 500) resolve('got beat!')
@@ -178,6 +203,7 @@ runTest(
             fetch('/json', {subscribe: true}).then(
                 res => res.subscribe(
                     update => {
+                        if (update.body != null) update.body = update.body_text
                         updates.push(JSON.stringify(update))
                         if (updates.length === 5) resolve()
                     },
@@ -201,6 +227,7 @@ runTest(
             try {
                 (await fetch('/json', {subscribe: true})).subscribe(
                     update => {
+                        if (update.body != null) update.body = update.body_text
                         updates.push(JSON.stringify(update))
                         if (updates.length === 5) resolve()
                     },
@@ -224,6 +251,7 @@ runTest(
     async () => {
         let updates = []
         for await (var update of (await fetch('/json', {subscribe: true})).subscription) {
+            if (update.body != null) update.body = update.body_text
             updates.push(JSON.stringify(update))
             if (updates.length === 5) break
         }
@@ -363,6 +391,7 @@ runTest(
                 setTimeout(() => a.abort(), 30)
                 setTimeout(() => fail(new Error("abort failed 1")), 60)
                 res.subscribe((update) => {
+                    if (update.body != null) update.body = update.body_text
                     if (JSON.stringify(update) === JSON.stringify(test_update)) good = true
                 }, fail)
             })
@@ -420,6 +449,7 @@ runTest(
             res.subscribe(done, fail)
         })
         a.abort()
+        if (x.body != null) x.body = x.body_text
         return JSON.stringify(x)
     },
     JSON.stringify(test_update)
@@ -466,6 +496,7 @@ runTest(
                 })
                 res.subscribe(
                     (update) => {
+                        if (update.body != null) update.body = update.body_text
                         if (JSON.stringify(update) === JSON.stringify(test_update)) update_count++
                         if (update_count > 1) done()
                     },
@@ -490,6 +521,7 @@ runTest(
         let updates = []
         let a = new AbortController()
         for await (var update of (await fetch('/json', {retry: true, signal: a.signal, subscribe: true, headers: {giveup: true}})).subscription) {
+            if (update.body != null) update.body = update.body_text
             updates.push(JSON.stringify(update))
 
             if (updates.length === 3) break
@@ -510,6 +542,7 @@ runTest(
         return await new Promise(async (done, fail) => {
             let res = await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})
             res.subscribe((update) => {
+                if (update.body != null) update.body = update.body_text
                 updates.push(JSON.stringify(update))
             }, (e) => {
                 done('' + updates + ' -- ' + e)
@@ -526,6 +559,7 @@ runTest(
         let updates = []
         try {
             for await (var update of (await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})).subscription) {
+                if (update.body != null) update.body = update.body_text
                 updates.push(JSON.stringify(update))
             }
         } catch (e) {
@@ -615,11 +649,12 @@ runTest(
         const codeToEval = `
             let updates = []
             ;(new Promise((resolve, reject) => {
-                http.get(
-                    'http://localhost:' + port + '/json',
-                    {subscribe: true},
+                https.get(
+                    'https://localhost:' + port + '/json',
+                    {subscribe: true, rejectUnauthorized: false},
                     (res) => {
                         res.on('update', (update) => {
+                            if (update.body != null) update.body = update.body_text
                             updates.push(update)
                             if (updates.length === 5) resolve()
                         })
@@ -656,12 +691,13 @@ runTest(
     async () => {
         const codeToEval = `
             let p = new Promise((resolve, reject) => {
-                http.get(
-                    'http://localhost:' + port + '/json',
+                https.get(
+                    'https://localhost:' + port + '/json',
                     {
                         version: ['test1'],
                         patches: {unit: 'json', range: '[0]', content: '"test1"'},
-                        method: 'PUT'
+                        method: 'PUT',
+                        rejectUnauthorized: false
                     },
                     (res) => {
                         resolve('Write test 1 returned ' + res.statusCode)
@@ -694,12 +730,13 @@ runTest(
     async () => {
         const codeToEval = `
             let p = new Promise((resolve, reject) => {
-                http.get(
-                    'http://localhost:' + port + '/json',
+                https.get(
+                    'https://localhost:' + port + '/json',
                     {
                         version: ['test2'],
                         patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
-                        method: 'PUT'
+                        method: 'PUT',
+                        rejectUnauthorized: false
                     },
                     (res) => {
                         resolve('Write test 2 returned ' + res.statusCode)
@@ -732,8 +769,8 @@ runTest(
     async () => {
         const codeToEval = `
             let p = new Promise((resolve, reject) => {
-                http.get(
-                    'http://localhost:' + port + '/json',
+                https.get(
+                    'https://localhost:' + port + '/json',
                     {
                         version: ['test3'],
                         patches: [
@@ -741,7 +778,8 @@ runTest(
                             {unit: 'jsonpath', range: '[1]', content: '"test3"'},
                             {unit: 'jsonpath', range: '[2]', content: '"test3"'}
                         ],
-                        method: 'PUT'
+                        method: 'PUT',
+                        rejectUnauthorized: false
                     },
                     (res) => {
                         resolve('Write test 3 returned ' + res.statusCode)
@@ -774,12 +812,13 @@ runTest(
     async () => {
         const codeToEval = `
             let p = new Promise((resolve, reject) => {
-                http.get(
-                    'http://localhost:' + port + '/json',
+                https.get(
+                    'https://localhost:' + port + '/json',
                     {
                         version: ['test4'],
                         patches: [],
-                        method: 'PUT'
+                        method: 'PUT',
+                        rejectUnauthorized: false
                     },
                     (res) => {
                         resolve('Write test 4 returned ' + res.statusCode)
