@@ -482,7 +482,7 @@ var subscription_parser = (cb) => ({
 
                 Object.defineProperty(update, 'body_text', {
                     get: function () {
-                        return new TextDecoder('utf-8').decode(this.body.buffer)
+                        if (this.body != null) return new TextDecoder('utf-8').decode(this.body.buffer)
                     }
                 })
 

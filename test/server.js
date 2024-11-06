@@ -68,7 +68,7 @@ require('http2').createSecureServer({
                 res.startSubscription()
 
             // Send the current version
-            res.sendUpdate(test_update)
+            if (!req.headers.skip_first) res.sendUpdate(test_update)
 
             if (req.headers.giveup) return res.end()
             if (req.headers.giveup_completely) {
@@ -185,4 +185,7 @@ require('http2').createSecureServer({
         }
     }
 
-).listen(port, () => console.log(`Listening on http://localhost:${port}...`))
+).listen(port, (...args) => {
+    console.log(args)
+    console.log(`Listening on https://localhost:${port}...`)
+})

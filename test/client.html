@@ -73,6 +73,26 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test that we can use body_text when there is no body, without throwing an exception",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, headers: {skip_first: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        try {
+                            resolve(update.body_text)
+                        } catch (e) {
+                            reject(e)
+                        }
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    'undefined'
+)
+
+runTest(
     "test that content-type can have `; charset=utf-8`",
     async () => {
         let updates = []
