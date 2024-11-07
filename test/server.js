@@ -77,6 +77,84 @@ require('http2').createSecureServer({
             // Send the current version
             if (!req.headers.skip_first) res.sendUpdate(test_update)
 
+            // Send a binary body update
+            if (req.headers.send_binary_body_arraybuffer) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                body: new Uint8Array([0, 1, 2, 3]).buffer
+            })
+            if (req.headers.send_binary_body) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                body: new Uint8Array([0, 1, 2, 3])
+            })
+            if (req.headers.send_binary_body_blob) await res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                body: new Blob([new Uint8Array([0, 1, 2, 3])])
+            })
+            if (req.headers.send_binary_body_buffer) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                body: Buffer.from(new Uint8Array([0, 1, 2, 3]))
+            })
+
+            // Send a binary patch update
+            if (req.headers.send_binary_patch_arraybuffer) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patch: {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer}
+            })
+            if (req.headers.send_binary_patch) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patch: {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}
+            })
+            if (req.headers.send_binary_patch_blob) await res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patch: {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([0, 1, 2, 3])])}
+            })
+            if (req.headers.send_binary_patch_buffer) await res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patch: {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([0, 1, 2, 3]))}
+            })
+
+            // binary patches
+            if (req.headers.send_binary_patches_arraybuffer) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patches: [
+                    {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer},
+                    {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13]).buffer}
+                ]
+            })
+            if (req.headers.send_binary_patches) res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patches: [
+                    {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])},
+                    {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13])}
+                ]
+            })
+            if (req.headers.send_binary_patches_blob) await res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patches: [
+                    {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([0, 1, 2, 3])])},
+                    {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([10, 11, 12, 13])])}
+                ]
+            })
+            if (req.headers.send_binary_patches_buffer) await res.sendUpdate({
+                version: ['test'],
+                parents: ['oldie'],
+                patches: [
+                    {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([0, 1, 2, 3]))},
+                    {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([10, 11, 12, 13]))}
+                ]
+            })
+
             if (req.headers.giveup) return res.end()
             if (req.headers.giveup_completely) {
                 giveup_completely_set[req.headers.giveup_completely] = true

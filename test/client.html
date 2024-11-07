@@ -76,6 +76,230 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test server sending binary body (ArrayBuffer)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_arraybuffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.body)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary body (Uint8Array)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.body)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary body (Blob)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_blob: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.body)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary body (Buffer)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_buffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.body)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary patch (ArrayBuffer)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_arraybuffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary patch (Uint8Array)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary patch (Blob)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_blob: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary patch (Buffer)",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_buffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '0,1,2,3'
+)
+
+runTest(
+    "test server sending binary patches (ArrayBuffer)",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_arraybuffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        x = await x.arrayBuffer()
+        return '' + new Uint8Array(x)
+    },
+    '0,1,2,3,10,11,12,13'
+)
+
+runTest(
+    "test server sending binary patches (Uint8Array)",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        x = await x.arrayBuffer()
+        return '' + new Uint8Array(x)
+    },
+    '0,1,2,3,10,11,12,13'
+)
+
+runTest(
+    "test server sending binary patches (Blob)",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_blob: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        x = await x.arrayBuffer()
+        return '' + new Uint8Array(x)
+    },
+    '0,1,2,3,10,11,12,13'
+)
+
+runTest(
+    "test server sending binary patches (Buffer)",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_buffer: true, giveup: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+        x = await x.arrayBuffer()
+        return '' + new Uint8Array(x)
+    },
+    '0,1,2,3,10,11,12,13'
+)
+
+runTest(
     "test braid-http-client PUT single patch with binary",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -87,10 +311,43 @@ runTest(
 )
 
 runTest(
-    "test braid-http-client PUT multiple patches with binary",
+    "test braid-http-client PUT single patch with binary (ArrayBuffer)",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '0,1,2,3\n'
+)
+
+runTest(
+    "test braid-http-client PUT multiple patches with binary (ArrayBuffer)",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer}, {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13]).buffer}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '0,1,2,3\n10,11,12,13\n'
+)
+
+runTest(
+    "test braid-http-client PUT multiple patches with binary (Uint8Array)",
     async () => {
         return '' + await new Promise((resolve, reject) => {
             fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}, {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13])}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '0,1,2,3\n10,11,12,13\n'
+)
+
+runTest(
+    "test braid-http-client PUT multiple patches with binary (Blob)",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([0, 1, 2, 3])])}, {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([10, 11, 12, 13])])}]}).then(
                 async res => resolve(res.text())).catch(reject)
         })
     },
@@ -799,7 +1056,7 @@ runTest(
             x.subscribe(_ => done(s))
         })
     },
-    "Version: \"test\"\r\nParents: \"oldie\"\r\nContent-Length: 16\r\n\r\n{\"this\":\"stuff\"}\r\n\r\n"
+    "HTTP 104 Multiresponse\r\n\r\nHTTP 200 OK\r\nVersion: \"test\"\r\nParents: \"oldie\"\r\nContent-Length: 16\r\n\r\n{\"this\":\"stuff\"}\r\n\r\n"
 )
 
 runTest(

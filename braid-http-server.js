@@ -1,6 +1,6 @@
 var assert = require('assert')
 
-// Return a string of patches in pseudoheader format.
+// Writes patches in pseudoheader format.
 //
 //   The `patches` argument can be:
 //     - Array of patches
@@ -25,9 +25,7 @@ var assert = require('assert')
 //
 //       {"some": "json object"}
 //
-function generate_patches(res, patches) {
-    var result = ''
-
+function write_patches(res, patches) {
     // `patches` must be a patch object or an array of patch objects
     //  - Object:  {unit, range, content}
     //  - Array:  [{unit, range, content}, ...]
@@ -38,7 +36,7 @@ function generate_patches(res, patches) {
     if (Array.isArray(patches)) {
 
         // Add `Patches: N` header if array
-        result += `Patches: ${patches.length}\r\n\r\n`
+        res.write(`Patches: ${patches.length}\r\n\r\n`)
     } else
         // Else, we'll out put a single patch
         patches = [patches]
@@ -47,19 +45,21 @@ function generate_patches(res, patches) {
     patches.forEach((patch, i) => {
         assert(typeof patch.unit    === 'string')
         assert(typeof patch.range   === 'string')
-        assert(typeof patch.content === 'string')
+
+        if (typeof patch.content === 'string')
+            patch.content = new TextEncoder().encode(patch.content)
 
         if (i > 0)
-            result += '\r\n\r\n'
+            res.write('\r\n\r\n')
 
         let extra_headers = Object.fromEntries(Object.entries(patch).filter(([k, v]) => k != 'unit' && k != 'range' && k != 'content'))
 
-        result += `Content-Length: ${(new TextEncoder().encode(patch.content)).length}\r
+        res.write(`Content-Length: ${get_binary_length(patch.content)}\r
 Content-Range: ${patch.unit} ${patch.range}\r
 ${Object.entries(extra_headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}\r
-${patch.content}`
+`)
+        write_binary(res, patch.content)
     })
-    return result
 }
 
 
@@ -312,7 +312,7 @@ function braidify (req, res, next) {
     next && next()
 }
 
-function send_update(res, data, url, peer) {
+async function send_update(res, data, url, peer) {
     var {version, parents, patches, patch, body} = data
 
     function set_header (key, val) {
@@ -323,7 +323,7 @@ function send_update(res, data, url, peer) {
     }
     function write_body (body) {
         if (res.isSubscription) res.write('\r\n')
-        res.write(body)
+        write_binary(res, body)
     }
 
     // console.log('sending version', {url, peer, version, parents, patches, body,
@@ -331,14 +331,10 @@ function send_update(res, data, url, peer) {
 
     // Validate that the body and patches are strings,
     // or in the case of body, it could be binary
-    if (body !== undefined)
-        assert(typeof body === 'string' ||
-            body instanceof ArrayBuffer ||
-            body instanceof Uint8Array ||
-            body instanceof Blob ||
-            body instanceof Buffer
-        )
-    else {
+    if (body !== undefined) {
+        assert(typeof body === 'string' || get_binary_length(body) != null)
+        if (body instanceof Blob) body = await body.arrayBuffer()
+    } else {
         // Only one of patch or patches can be set
         assert(!(patch && patches))
         assert((patch || patches) !== undefined)
@@ -354,22 +350,30 @@ function send_update(res, data, url, peer) {
 
         // Now `patches` will be an array of patches or a single patch object.
         //
-        // This distinction is used in generate_patches() to determine whether
+        // This distinction is used in write_patches() to determine whether
         // to inline a single patch in the update body vs. writing out a
         // Patches: N block.
         assert(typeof patches === 'object')
-        if (Array.isArray(patches))
-            patches.forEach(p => {
-                assert('unit' in p)
-                assert('range' in p)
-                assert('content' in p)
-                assert(typeof p.content === 'string')
-            })
+        for (let p of Array.isArray(patches) ? patches : [patch]) {
+            assert('unit' in p)
+            assert('range' in p)
+            assert('content' in p)
+            assert(typeof p.content === 'string' || get_binary_length(p.content) != null)
+            if (p.content instanceof Blob) p.content = await p.content.arrayBuffer()
+        }
     }
 
     var body_exists = body || body === ''
     assert(body_exists || patches, 'Missing body or patches')
     assert(!(body_exists && patches), 'Cannot send both body and patches')
+
+    // Write the beginning of a new multiresponse response
+    if (!res.wrote_104_multiresponse) {
+        res.write(`HTTP 104 Multiresponse\r\n\r\n`)
+        res.wrote_104_multiresponse = true
+    }
+
+    res.write(`HTTP 200 OK\r\n`)
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(data)) {
@@ -399,14 +403,10 @@ function send_update(res, data, url, peer) {
     // Write the patches or body
     if (body_exists) {
         let x = typeof body === 'string' ? new TextEncoder().encode(body) : body
-        set_header('Content-Length',
-            x instanceof ArrayBuffer ? x.byteLength :
-            x instanceof Uint8Array ? x.length :
-            x instanceof Blob ? x.size :
-            x instanceof Buffer ? x.length : null)
+        set_header('Content-Length', get_binary_length(x))
         write_body(x)
     } else
-        res.write(generate_patches(res, patches))
+        write_patches(res, patches)
 
     // Add a newline to prepare for the next version
     // See also https://github.com/braid-org/braid-spec/issues/73
@@ -474,6 +474,18 @@ function extractHeader(input) {
         remaining_bytes: remainingBytes,
         header_string: headerString
     };
+}
+
+function get_binary_length(x) {
+    return  x instanceof ArrayBuffer ? x.byteLength :
+            x instanceof Uint8Array ? x.length :
+            x instanceof Blob ? x.size :
+            x instanceof Buffer ? x.length : undefined
+}
+
+function write_binary(res, body) {
+    if (body instanceof ArrayBuffer) body = new Uint8Array(body)
+    res.write(body)
 }
 
 module.exports = braidify

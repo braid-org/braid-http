@@ -193,7 +193,6 @@ async function braid_fetch (url, params = {}) {
             if (typeof patch.content === 'string')
                 patch.content = new TextEncoder().encode(patch.content)
 
-            params.headers.set('Content-Length', `${patch.content.length}`)
             params.body = patch.content
         }
 
@@ -208,7 +207,7 @@ async function braid_fetch (url, params = {}) {
                 if (typeof patch.content === 'string')
                     patch.content = te.encode(patch.content)
 
-                var length = `content-length: ${patch.content.length}`
+                var length = `content-length: ${get_binary_length(patch.content)}`
                 var range = `content-range: ${patch.unit} ${patch.range}`
                 bufs.push(te.encode(`${length}\r\n${range}\r\n\r\n`))
                 bufs.push(patch.content)
@@ -579,6 +578,15 @@ function parse_headers (input) {
     var h = extractHeader(input)
     if (!h) return {result: 'waiting'}
 
+    // Skip "HTTP 104 Multiresponse"
+    if (h.header_string.startsWith('HTTP 104')) {
+        h = extractHeader(h.remaining_bytes)
+        if (!h) return {result: 'waiting'}
+    }
+
+    // Skip "HTTP 200 OK"
+    h.header_string = h.header_string.replace(/^HTTP 200.*\r?\n/, '')
+
     var headers_source = h.header_string
     var headers_length = headers_source.length
     
@@ -837,6 +845,12 @@ function extractHeader(input) {
         remaining_bytes: remainingBytes,
         header_string: headerString
     };
+}
+
+function get_binary_length(x) {
+    return  x instanceof ArrayBuffer ? x.byteLength :
+            x instanceof Uint8Array ? x.length :
+            x instanceof Blob ? x.size : undefined
 }
 
 // ****************************
