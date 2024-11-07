@@ -66,10 +66,14 @@ ${patch.content}`
 // Deprecated method for legacy support
 function parse_patches (req, cb) {
     parse_update(req, update => {
-        if (typeof update.body === 'string')
+        if (update.body != null) {
             // Return body as an "everything" patch
-            cb([{unit: 'everything', range: '', content: update.body}])
-        else
+            let patch = {unit: 'everything', range: '', content: update.body}
+            Object.defineProperty(patch, 'content_text', {
+                get: () => new TextDecoder('utf-8').decode(patch.content)
+            })
+            cb([patch])
+        } else
             cb(update.patches)
     })
 }
@@ -80,16 +84,20 @@ function parse_update (req, cb) {
     var num_patches = req.headers.patches
 
     if (!num_patches && !req.headers['content-range']) {
-        var body = ''
-        req.on('data', chunk => {body += chunk.toString()})
+        var buffer = []
+        req.on('data', chunk => buffer.push(chunk))
         req.on('end', () => {
-            cb({ body, patches: undefined })
+            let body = new Uint8Array(Buffer.concat(buffer))
+            let update = { body, patches: undefined }
+            Object.defineProperty(update, 'body_text', {
+                get: () => new TextDecoder('utf-8').decode(update.body)
+            })
+            cb(update)
         })
     }
 
     // Parse a single patch, lacking Patches: N
     else if (num_patches === undefined && req.headers['content-range']) {
-
         // We only support range patches right now, so there must be a
         // Content-Range header.
         assert(req.headers['content-range'], 'No patches to parse: need `Patches: N` or `Content-Range:` header in ' + JSON.stringify(req.headers))
@@ -104,8 +112,11 @@ function parse_update (req, cb) {
         req.on('data', chunk => buffer.push(chunk))
         // Then return it
         req.on('end', () => {
-            patches = [{unit, range, content: Buffer.concat(buffer).toString('utf8')}]
-            cb({ patches, body: undefined })
+            let patch = {unit, range, content: new Uint8Array(Buffer.concat(buffer))}
+            Object.defineProperty(patch, 'content_text', {
+                get: () => new TextDecoder('utf-8').decode(patch.content)
+            })
+            cb({ patches: [patch], body: undefined })
         })
     }
 
@@ -136,7 +147,7 @@ function parse_update (req, cb) {
                 if (!('content-length' in headers)) {
                     // Print a nice error if it's missing
                     console.error('No content-length in', JSON.stringify(headers),
-                                  'from', {buffer})
+                                  'from', new TextDecoder().decode(new Uint8Array(buffer)), {buffer})
                     process.exit(1)
                 }
 
@@ -150,10 +161,14 @@ function parse_update (req, cb) {
 
                 // Content-range is of the form '<unit> <range>' e.g. 'json .index'
                 var [unit, range] = parse_content_range(headers['content-range'])
-                var patch_content = new TextDecoder('utf-8').decode(new Uint8Array(h.remaining_bytes.slice(0, body_length)))
+                var patch_content = new Uint8Array(h.remaining_bytes.slice(0, body_length))
 
                 // We've got our patch!
-                patches.push({unit, range, content: patch_content})
+                let patch = {unit, range, content: patch_content}
+                Object.defineProperty(patch, 'content_text', {
+                    get: () => new TextDecoder('utf-8').decode(patch.content)
+                })
+                patches.push(patch)
 
                 buffer = h.remaining_bytes.slice(body_length)
             }
@@ -215,7 +230,7 @@ function braidify (req, res, next) {
         (done, err) => parse_patches(
             req,
             (patches) => done(patches.map(
-                p => ({...p, content: JSON.parse(p.content)})
+                p => ({...p, content: JSON.parse(p.content_text)})
             ))
         )
     )

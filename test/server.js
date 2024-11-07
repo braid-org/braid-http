@@ -12,12 +12,19 @@ let test_update = {
 let retries_left = 4
 let giveup_completely_set = {}
 
+process.on("unhandledRejection", (x) =>
+    console.log(`unhandledRejection: ${x.stack}`)
+)
+process.on("uncaughtException", (x) =>
+    console.log(`uncaughtException: ${x.stack}`)
+)
+
 require('http2').createSecureServer({
      key: require('fs').readFileSync('./test/localhost-privkey.pem'),
      cert: require('fs').readFileSync('./test/localhost-cert.pem'),
      allowHTTP1: true
    },
-    (req, res) => {
+    async (req, res) => {
         // Only allow connections from localhost
         if (req.socket.remoteAddress !== '127.0.0.1'
             && req.socket.remoteAddress !== '::1'
@@ -113,11 +120,29 @@ require('http2').createSecureServer({
 
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
-            req.parseUpdate().then(update => {
-                console.log('We got PUT', req.version, 'update', update)
-                res.statusCode = 200
-                res.end()
-            })
+            if (req.headers.check_patch_content_text) {
+                let update = await req.parseUpdate()
+                for (let p of update.patches)
+                    res.write('' + p.content_text + '\n')
+            } else if (req.headers.check_patch_binary) {
+                let update = await req.parseUpdate()
+                for (let p of update.patches)
+                    res.write('' + p.content + '\n')
+            } else if (req.headers.check_everything_patch_content_text) {
+                let patches = await req.patches()
+                res.write(patches[0].content_text)
+            } else if (req.headers.check_everything_patch_binary) {
+                let patches = await req.patches()
+                res.write('' + patches[0].content)
+            } else if (req.headers.check_body_binary) {
+                let update = await req.parseUpdate()
+                res.write('' + update.body)
+            } else if (req.headers.check_body_text) {
+                let update = await req.parseUpdate()
+                res.write(update.body_text)
+            }
+            res.statusCode = 200
+            res.end()
         }
 
         // Static HTML routes here:

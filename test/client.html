@@ -1,24 +1,27 @@
-<style>
-    body {
-        font-family: Arial, sans-serif;
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 10px;
-    }
-    .test {
-        margin-bottom: 3px;
-        padding: 3px;
-    }
-    .running {
-        background-color: #fffde7;
-    }
-    .passed {
-        background-color: #e8f5e9;
-    }
-    .failed {
-        background-color: #ffebee;
-    }
-</style>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 10px;
+        }
+        .test {
+            margin-bottom: 3px;
+            padding: 3px;
+        }
+        .running {
+            background-color: #fffde7;
+        }
+        .passed {
+            background-color: #e8f5e9;
+        }
+        .failed {
+            background-color: #ffebee;
+        }
+    </style>
+</head>
 <script src="/braid-http-client.js"></script>
 <div id="testContainer"></div>
 <script type=module>
@@ -73,6 +76,152 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test braid-http-client PUT single patch with binary",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '0,1,2,3\n'
+)
+
+runTest(
+    "test braid-http-client PUT multiple patches with binary",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true}, patches: [{unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}, {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13])}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '0,1,2,3\n10,11,12,13\n'
+)
+
+runTest(
+    "test braid-http-client PUT single patch with text",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_content_text: true}, patches: [{unit: 'text', range: '[0:0]', content: '🌈👽🎵'}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '🌈👽🎵\n'
+)
+
+runTest(
+    "test braid-http-client PUT multiple patches with text",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_content_text: true}, patches: [{unit: 'text', range: '[0:0]', content: '🌈👽🎵'}, {unit: 'text', range: '[0:0]', content: 'Hello 🌍!'}]}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '🌈👽🎵\nHello 🌍!\n'
+)
+
+runTest(
+    "test that braid-http-client patches are binary",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content instanceof Uint8Array)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    'true'
+)
+
+runTest(
+    "test that braid-http-client patches have content_text",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        resolve(update.patches[0].content_text)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '1'
+)
+
+runTest(
+    "test that braid-http-server bodies are binary",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_body_binary: true}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '123,34,97,34,58,53,125'
+)
+
+runTest(
+    "test that braid-http-server bodies have body_text",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_body_text: true}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '{"a":5}'
+)
+
+runTest(
+    "test that braid-http-server patches are binary",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_binary: true, 'content-range': 'text [0:0]'}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '123,34,97,34,58,53,125\n'
+)
+
+runTest(
+    "test that braid-http-server patches have content_text",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_patch_content_text: true, 'content-range': 'text [0:0]'}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '{"a":5}\n'
+)
+
+runTest(
+    "test that braid-http-server \"everything\" patches are binary",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_everything_patch_binary: true}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '123,34,97,34,58,53,125'
+)
+
+runTest(
+    "test that braid-http-server \"everything\" patches have content_text",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {method: 'PUT', headers: {check_everything_patch_content_text: true}, body: '{"a":5}'}).then(
+                async res => resolve(res.text())).catch(reject)
+        })
+    },
+    '{"a":5}'
+)
+
+runTest(
     "test that we can use body_text when there is no body, without throwing an exception",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -101,6 +250,7 @@ runTest(
                 res => res.subscribe(
                     (update) => {
                         if (update.body != null) update.body = update.body_text
+                        if (update.patches) for (let p of update.patches) p.content = p.content_text
                         updates.push(JSON.stringify(update))
                         if (updates.length === 5) resolve()
                     },
@@ -128,7 +278,6 @@ runTest(
             }, 100)
             let res = await fetch("/parse_error", { retry: {
                 onRes: () => {
-                    console.log('got here??')
                     count++
                     if (count === 2) done('success')
                 }
@@ -224,6 +373,7 @@ runTest(
                 res => res.subscribe(
                     update => {
                         if (update.body != null) update.body = update.body_text
+                        if (update.patches) for (let p of update.patches) p.content = p.content_text
                         updates.push(JSON.stringify(update))
                         if (updates.length === 5) resolve()
                     },
@@ -248,6 +398,7 @@ runTest(
                 (await fetch('/json', {subscribe: true})).subscribe(
                     update => {
                         if (update.body != null) update.body = update.body_text
+                        if (update.patches) for (let p of update.patches) p.content = p.content_text
                         updates.push(JSON.stringify(update))
                         if (updates.length === 5) resolve()
                     },
@@ -272,6 +423,7 @@ runTest(
         let updates = []
         for await (var update of (await fetch('/json', {subscribe: true})).subscription) {
             if (update.body != null) update.body = update.body_text
+            if (update.patches) for (let p of update.patches) p.content = p.content_text
             updates.push(JSON.stringify(update))
             if (updates.length === 5) break
         }
@@ -675,6 +827,7 @@ runTest(
                     (res) => {
                         res.on('update', (update) => {
                             if (update.body != null) update.body = update.body_text
+                            if (update.patches) for (let p of update.patches) p.content = p.content_text
                             updates.push(update)
                             if (updates.length === 5) resolve()
                         })

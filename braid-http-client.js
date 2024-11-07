@@ -189,18 +189,32 @@ async function braid_fetch (url, params = {}) {
         if (params.patches.length === 1) {
             let patch = params.patches[0]
             params.headers.set('Content-Range', `${patch.unit} ${patch.range}`)
-            params.headers.set('Content-Length', `${(new TextEncoder().encode(patch.content)).length}`)
+
+            if (typeof patch.content === 'string')
+                patch.content = new TextEncoder().encode(patch.content)
+
+            params.headers.set('Content-Length', `${patch.content.length}`)
             params.body = patch.content
         }
 
         // Multiple patches get sent within a Patches: N block
         else {
             params.headers.set('Patches', params.patches.length)
-            params.body = (params.patches).map(patch => {
-                var length = `content-length: ${(new TextEncoder().encode(patch.content)).length}`
+            let bufs = []
+            let te = new TextEncoder()
+            for (let patch of params.patches) {
+                if (bufs.length) bufs.push(te.encode(`\r\n`))
+
+                if (typeof patch.content === 'string')
+                    patch.content = te.encode(patch.content)
+
+                var length = `content-length: ${patch.content.length}`
                 var range = `content-range: ${patch.unit} ${patch.range}`
-                return `${length}\r\n${range}\r\n\r\n${patch.content}\r\n`
-            }).join('\r\n')
+                bufs.push(te.encode(`${length}\r\n${range}\r\n\r\n`))
+                bufs.push(patch.content)
+                bufs.push(te.encode(`\r\n`))
+            }
+            params.body = new Blob(bufs)
         }
     }
 
@@ -306,10 +320,13 @@ async function braid_fetch (url, params = {}) {
                         // Each time something happens, we'll either get a new
                         // version back, or an error.
                         (result, err) => {
-                            if (!err)
+                            if (!err) {
+                                // check whether we aborted
+                                if (original_signal?.aborted) throw new DOMException('already aborted', 'AbortError')
+
                                 // Yay!  We got a new version!  Tell the callback!
                                 cb(result)
-                            else
+                            } else
                                 // This error handling code runs if the connection
                                 // closes, or if there is unparseable stuff in the
                                 // streamed response.
@@ -486,7 +503,18 @@ var subscription_parser = (cb) => ({
                     }
                 })
 
-                this.cb(update)
+                for (let p of update.patches ?? []) {
+                    Object.defineProperty(p, 'content_text', {
+                        get: () => new TextDecoder('utf-8').decode(p.content)
+                    })
+                }
+
+                try {
+                    this.cb(update)
+                } catch (e) {
+                    this.cb(null, e)
+                    return
+                }
 
                 // Reset the parser for the next version!
                 this.state = {input: this.state.input}
@@ -629,7 +657,7 @@ function parse_body (state) {
             state.patches = [{
                 unit: match.unit,
                 range: match.range,
-                content: (new TextDecoder('utf-8')).decode(new Uint8Array(state.input.slice(0, content_length))),
+                content: new Uint8Array(state.input.slice(0, content_length)),
 
                 // Question: Perhaps we should include headers here, like we do for
                 // the Patches: N headers below?
@@ -715,7 +743,7 @@ function parse_body (state) {
 
                 last_patch.unit = match.unit
                 last_patch.range = match.range
-                last_patch.content = (new TextDecoder('utf-8')).decode(new Uint8Array(state.input.slice(0, content_length)))
+                last_patch.content = new Uint8Array(state.input.slice(0, content_length))
                 last_patch.extra_headers = extra_headers(last_patch.headers)
                 delete last_patch.headers  // We only keep the extra headers ^^
 
