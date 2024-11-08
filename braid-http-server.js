@@ -137,11 +137,23 @@ function parse_update (req, cb) {
             for (let x of chunk) buffer.push(x)
 
             while (patches.length < num_patches) {
-                let h = extractHeader(buffer)
-                if (!h) return
+                // Find the start of the headers
+                let s = 0;
+                while (buffer[s] === 13 || buffer[s] === 10) s++
+                if (s === buffer.length) return {result: 'waiting'}
+
+                // Look for the double-newline at the end of the headers.
+                let e = s;
+                while (++e) {
+                    if (e > buffer.length) return {result: 'waiting'}
+                    if (buffer[e - 1] === 10 && (buffer[e - 2] === 10 || (buffer[e - 2] === 13 && buffer[e - 3] === 10))) break
+                }
+
+                // Extract the header string
+                let headers_source = new TextDecoder('utf-8').decode(new Uint8Array(buffer.slice(s, e)))
 
                 // Now let's parse those headers.
-                var headers = require('parse-headers')(h.header_string)
+                var headers = require('parse-headers')(headers_source)
 
                 // We require `content-length` to declare the length of the patch.
                 if (!('content-length' in headers)) {
@@ -154,14 +166,14 @@ function parse_update (req, cb) {
                 var body_length = parseInt(headers['content-length'])
 
                 // Give up if we don't have the full patch yet.
-                if (h.remaining_bytes.length < body_length)
+                if (buffer.length - e < body_length)
                     return
 
                 // XX Todo: support custom patch types beyond content-range.
 
                 // Content-range is of the form '<unit> <range>' e.g. 'json .index'
                 var [unit, range] = parse_content_range(headers['content-range'])
-                var patch_content = new Uint8Array(h.remaining_bytes.slice(0, body_length))
+                var patch_content = new Uint8Array(buffer.slice(e, e + body_length))
 
                 // We've got our patch!
                 let patch = {unit, range, content: patch_content}
@@ -170,7 +182,7 @@ function parse_update (req, cb) {
                 })
                 patches.push(patch)
 
-                buffer = h.remaining_bytes.slice(body_length)
+                buffer = buffer.slice(e + body_length)
             }
 
             // We got all the patches!  Pause the stream and tell the callback!
@@ -367,7 +379,7 @@ async function send_update(res, data, url, peer) {
     assert(body_exists || patches, 'Missing body or patches')
     assert(!(body_exists && patches), 'Cannot send both body and patches')
 
-    res.write(`HTTP 200 OK\r\n`)
+    if (res.isSubscription) res.write(`HTTP 200 OK\r\n`)
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(data)) {
@@ -414,60 +426,6 @@ async function send_update(res, data, url, peer) {
         for (var i = 0; i < 1 + extra_newlines; i++)
             res.write("\r\n")
     }
-}
-
-// a parsing utility function that will inspect a byte array of incoming data
-// to see if there is header information at the beginning,
-// namely some non-newline characters followed by two newlines
-function extractHeader(input) {
-    // Find the start of the headers
-    let begin_headers_i = 0;
-    while (input[begin_headers_i] === 13 || input[begin_headers_i] === 10) {
-        begin_headers_i++;
-    }
-    if (begin_headers_i === input.length) {
-        return null; // Incomplete headers
-    }
-
-    // Look for the double-newline at the end of the headers
-    let end_headers_i = begin_headers_i;
-    let size_of_tail = 0;
-    while (end_headers_i < input.length) {
-        if (input[end_headers_i] === 10 && input[end_headers_i + 1] === 10) {
-            size_of_tail = 2;
-            break;
-        }
-        if (input[end_headers_i] === 10 && input[end_headers_i + 1] === 13 && input[end_headers_i + 2] === 10) {
-            size_of_tail = 3;
-            break;
-        }
-        if (input[end_headers_i] === 13 && input[end_headers_i + 1] === 10 && input[end_headers_i + 2] === 10) {
-            size_of_tail = 3;
-            break;
-        }
-        if (input[end_headers_i] === 13 && input[end_headers_i + 1] === 10 && input[end_headers_i + 2] === 13 && input[end_headers_i + 3] === 10) {
-            size_of_tail = 4;
-            break;
-        }
-
-        end_headers_i++;
-    }
-
-    // If no double-newline is found, wait for more input
-    if (end_headers_i === input.length) {
-        return null; // Incomplete headers
-    }
-
-    // Extract the header string
-    const headerBytes = input.slice(begin_headers_i, end_headers_i);
-    const headerString = new TextDecoder('utf-8').decode(new Uint8Array(headerBytes));
-
-    // Return the remaining bytes and the header string
-    const remainingBytes = input.slice(end_headers_i + size_of_tail);
-    return {
-        remaining_bytes: remainingBytes,
-        header_string: headerString
-    };
 }
 
 function get_binary_length(x) {

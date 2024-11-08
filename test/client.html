@@ -76,6 +76,18 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test server sending binary body without subscription",
+    async () => {
+        let a = new AbortController()
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {headers: {skip_first: true, send_binary_body: true, giveup: true}}).then(x => x.arrayBuffer()).then(resolve)
+        })
+        return '' + new Uint8Array(x)
+    },
+    '0,1,2,3'
+)
+
+runTest(
     "test server sending binary body (ArrayBuffer)",
     async () => {
         let a = new AbortController()

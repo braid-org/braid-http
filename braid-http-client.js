@@ -575,18 +575,29 @@ function parse_update (state) {
 // Parsing helpers
 function parse_headers (input) {
 
-    var h = extractHeader(input)
-    if (!h) return {result: 'waiting'}
+    // Find the start of the headers
+    let s = 0;
+    while (input[s] === 13 || input[s] === 10) s++
+    if (s === input.length) return {result: 'waiting'}
+
+    // Look for the double-newline at the end of the headers.
+    let e = s;
+    while (++e) {
+        if (e > input.length) return {result: 'waiting'}
+        if (input[e - 1] === 10 && (input[e - 2] === 10 || (input[e - 2] === 13 && input[e - 3] === 10))) break
+    }
+
+    // Extract the header string
+    var headers_source = new TextDecoder('utf-8').decode(new Uint8Array(input.slice(s, e)))
 
     // Skip "HTTP 200 OK"
-    h.header_string = h.header_string.replace(/^HTTP 200.*\r?\n/, '')
+    headers_source = headers_source.replace(/^HTTP 200.*\r?\n/, '')
 
-    var headers_source = h.header_string
     var headers_length = headers_source.length
     
     // Let's parse them!  First define some variables:
     var headers = {},
-        header_regex = /(:?[\w-_]+):\s?(.*)\r?\n?/gy,  // Parses one line a time
+        header_regex = /(:?[\w-_]+):\s?(.*)[\r\n]*/gy,  // Parses one line a time
         match,
         found_last_match = false
 
@@ -619,7 +630,7 @@ function parse_headers (input) {
         headers.patches = JSON.parse(headers.patches)
 
     // Update the input
-    input = h.remaining_bytes
+    input = input.slice(e)
 
     // And return the parsed result
     return { result: 'success', headers, input }
@@ -785,60 +796,6 @@ function extra_headers (headers) {
         return undefined
 
     return result
-}
-
-// a parsing utility function that will inspect a byte array of incoming data
-// to see if there is header information at the beginning,
-// namely some non-newline characters followed by two newlines
-function extractHeader(input) {
-    // Find the start of the headers
-    let begin_headers_i = 0;
-    while (input[begin_headers_i] === 13 || input[begin_headers_i] === 10) {
-        begin_headers_i++;
-    }
-    if (begin_headers_i === input.length) {
-        return null; // Incomplete headers
-    }
-
-    // Look for the double-newline at the end of the headers
-    let end_headers_i = begin_headers_i;
-    let size_of_tail = 0;
-    while (end_headers_i < input.length) {
-        if (input[end_headers_i] === 10 && input[end_headers_i + 1] === 10) {
-            size_of_tail = 2;
-            break;
-        }
-        if (input[end_headers_i] === 10 && input[end_headers_i + 1] === 13 && input[end_headers_i + 2] === 10) {
-            size_of_tail = 3;
-            break;
-        }
-        if (input[end_headers_i] === 13 && input[end_headers_i + 1] === 10 && input[end_headers_i + 2] === 10) {
-            size_of_tail = 3;
-            break;
-        }
-        if (input[end_headers_i] === 13 && input[end_headers_i + 1] === 10 && input[end_headers_i + 2] === 13 && input[end_headers_i + 3] === 10) {
-            size_of_tail = 4;
-            break;
-        }
-
-        end_headers_i++;
-    }
-
-    // If no double-newline is found, wait for more input
-    if (end_headers_i === input.length) {
-        return null; // Incomplete headers
-    }
-
-    // Extract the header string
-    const headerBytes = input.slice(begin_headers_i, end_headers_i);
-    const headerString = new TextDecoder('utf-8').decode(new Uint8Array(headerBytes));
-
-    // Return the remaining bytes and the header string
-    const remainingBytes = input.slice(end_headers_i + size_of_tail);
-    return {
-        remaining_bytes: remainingBytes,
-        header_string: headerString
-    };
 }
 
 function get_binary_length(x) {
