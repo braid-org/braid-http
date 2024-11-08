@@ -367,12 +367,6 @@ async function send_update(res, data, url, peer) {
     assert(body_exists || patches, 'Missing body or patches')
     assert(!(body_exists && patches), 'Cannot send both body and patches')
 
-    // Write the beginning of a new multiresponse response
-    if (!res.wrote_104_multiresponse) {
-        res.write(`HTTP 104 Multiresponse\r\n\r\n`)
-        res.wrote_104_multiresponse = true
-    }
-
     res.write(`HTTP 200 OK\r\n`)
 
     // Write the headers or virtual headers

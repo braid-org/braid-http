@@ -578,12 +578,6 @@ function parse_headers (input) {
     var h = extractHeader(input)
     if (!h) return {result: 'waiting'}
 
-    // Skip "HTTP 104 Multiresponse"
-    if (h.header_string.startsWith('HTTP 104')) {
-        h = extractHeader(h.remaining_bytes)
-        if (!h) return {result: 'waiting'}
-    }
-
     // Skip "HTTP 200 OK"
     h.header_string = h.header_string.replace(/^HTTP 200.*\r?\n/, '')
 
