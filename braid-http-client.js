@@ -244,7 +244,7 @@ async function braid_fetch (url, params = {}) {
             let on_error = e => {
                 on_error = () => {}
 
-                if (!params.retry || (e.name === "AbortError")) {
+                if (!params.retry || e.name === "AbortError" || e.startsWith?.('Parse error in headers')) {
                     subscription_error?.(e)
                     return fail(e)
                 }
