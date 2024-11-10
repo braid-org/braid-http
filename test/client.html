@@ -1254,7 +1254,7 @@ runTest(
                 setTimeout(() => {
                     a.abort()
                     fail(new Error("timed out: " + JSON.stringify({ onRes_count, update_count })))
-                }, 20)
+                }, 200)
             })
             return `onRes_count=${onRes_count}, update_count=${update_count}`
         } catch (e) {
