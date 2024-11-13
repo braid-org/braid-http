@@ -562,6 +562,21 @@ runTest(
 addSectionHeader("Misc")
 
 runTest(
+    "Verify that fetch params are not mutated",
+    async () => {
+        let x = {
+            method: 'PUT',
+            patches: [{
+                unit: 'text', range: '[0:0]', content: 'hello'
+            }]
+        }
+        let y = await (await fetch("/check_parents", x)).json()
+        return x.patches[0].content
+    },
+    'hello'
+)
+
+runTest(
     "Verify content-type with charset=utf-8 is handled correctly",
     async () => {
         let updates = []
