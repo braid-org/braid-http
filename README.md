@@ -1,6 +1,6 @@
 # Braid-HTTP
 
-This polyfill library implements the [Braid-HTTP v04 protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) in Javascript.  It gives browsers a `braid_fetch()` drop-in replacement for the `fetch()` API, and gives nodejs an `http` plugin, allowing them to speak Braid in a simple way.
+This polyfill library implements the [Braid-HTTP v04 protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt), modified slightly to follow the HTTP Multiresponse concept discussed at [braid.org/meeting-89](https://braid.org/meeting-89). It provides browsers with a `braid_fetch()` drop-in replacement for the `fetch()` API, and offers nodejs an `http` plugin, enabling simple Braid communication.
 
 Developed in [braid.org](https://braid.org).
 
@@ -53,8 +53,14 @@ fetch('https://braid.org/chat', {subscribe: true}).then(
             // {
             //   version: ["me"],
             //   parents: ["mom", "dad"],
-            //   patches: [{unit: "json", range: ".foo", content: "3"}]
-            //   body:    "3"
+            //   patches: [{
+            //.      unit: "json",
+            //       range: ".foo",
+            //       content: new Uint8Array([51]),
+            //       content_text: "3" <-- getter
+            //.  }],
+            //   body: new Uint8Array([51]),
+            //   body_text: "3" <-- getter
             // }
             //
             // Note that `update` will contain either patches *or* body
@@ -113,7 +119,7 @@ for await (var update of subscription_iterator) {
     // Or complete snapshots:
     else
         // Beware the server doesn't send these yet.
-        chat = JSON.parse(update.body)
+        chat = JSON.parse(update.body_text)
 
     render_stuff()
 }
@@ -233,10 +239,16 @@ function connect () {
                 // {
                 //   version: ["me"],
                 //   parents: ["mom", "dad"],
-                //   patches: [{unit: "json", range: ".foo", content: "3"}]
-                //   body:    "3"
+                //   patches: [{
+                //.      unit: "json",
+                //       range: ".foo",
+                //       content: new Uint8Array([51]),
+                //       content_text: "3" <-- getter
+                //.  }],
+                //   body: new Uint8Array([51]),
+                //   body_text: "3" <-- getter
                 // }
-                //   // Update will contain either patches *or* body, but not both
+                // Update will contain either patches *or* body, but not both
                 console.log('We got a new update!', update)
             })
 
