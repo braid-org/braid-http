@@ -238,6 +238,9 @@ require('http2').createSecureServer({
         } else if (req.url === "/401") {
             res.writeHead(401, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ error: 401 }))
+        } else if (req.url === "/408") {
+            res.writeHead(408, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: 408 }))
         } else if (req.url === "/keep_open") {
         } else if (req.url === "/check_parents") {
             res.writeHead(200, { "Content-Type": "application/json" })
