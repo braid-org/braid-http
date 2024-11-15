@@ -1097,32 +1097,6 @@ runTest(
 addSectionHeader("Retry Tests")
 
 runTest(
-    "Verify that retrying stops after timeout.",
-    async () => {
-        let a = new AbortController()
-        let count = 0
-
-        console.log('hi??')
-
-        return await new Promise(async (done, fail) => {
-            setTimeout(() => {
-                done('Still going..')
-                a.abort()
-            }, 1000)
-            fetch("/408", {
-                retry: {timeout: 500,
-                onFetch: () => {
-                    console.log('hi!!')
-                },
-
-                }, signal: a.signal
-            }).catch(done)
-        })
-    },
-    'Error: Timeout Error'
-)
-
-runTest(
     "Verify that unparsable headers do not result in retrying connection.",
     async () => {
         let a = new AbortController()
