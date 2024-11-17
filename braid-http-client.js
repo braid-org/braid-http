@@ -395,7 +395,7 @@ async function braid_fetch (url, params = {}) {
 
                         case 502: // Bad Gateway
                         case 504: // Gateway Timeout
-                            give_up = false;
+                            give_up = false
                     }
                     if (give_up) {
                         let e = new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`)
@@ -578,12 +578,12 @@ function parse_update (state) {
 function parse_headers (input) {
 
     // Find the start of the headers
-    let start = 0;
+    var start = 0
     while (input[start] === 13 || input[start] === 10) start++
     if (start === input.length) return {result: 'waiting'}
 
     // Look for the double-newline at the end of the headers.
-    let end = start;
+    var end = start
     while (++end) {
         if (end > input.length) return {result: 'waiting'}
         if (    input[end - 1] === 10
