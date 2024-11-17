@@ -57,7 +57,8 @@ var fetch = braid_fetch
 let test_update = {
     version: ['test'],
     parents: ['oldie'],
-    body: JSON.stringify({this: 'stuff'})
+    body: JSON.stringify({this: 'stuff'}),
+    status: "200"
 }
 let delay = 0
 
@@ -594,11 +595,11 @@ runTest(
         })
         return updates.join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
 runTest(
@@ -776,11 +777,11 @@ runTest(
         })
         return updates.join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
 runTest(
@@ -804,11 +805,11 @@ runTest(
         })
         return updates.join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
 runTest(
@@ -823,11 +824,11 @@ runTest(
         }
         return updates.join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
 addSectionHeader("Write Tests")
@@ -927,11 +928,11 @@ runTest(
         
         return result.map(JSON.stringify).join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"extra_headers":{"hash":"42",":status":"115"}}\n' +
-    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}]}\n' +
-    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}]}\n' +
-    '{"version":["another!"],"body":"\\\"!\\\""}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 );
 
 runTest(
@@ -1219,13 +1220,14 @@ runTest(
     JSON.stringify(test_update)
 )
 
+var {status, ...test_update_without_status} = test_update
 runTest(
     "Should retry on HTTP 408",
     async () => {
         let x = await (await fetch("/retry", { retry: true })).json()
         return JSON.stringify(x)
     },
-    JSON.stringify(test_update)
+    JSON.stringify(test_update_without_status)
 )
 
 runTest(
@@ -1293,9 +1295,9 @@ runTest(
         a.abort()
         return updates.join('\n')
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}\n' +
-    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}"}'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}'
 )
 
 runTest(
@@ -1313,7 +1315,7 @@ runTest(
             })
         })
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}"} -- Error: giving up because of http status: 500'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}","status":"200"} -- Error: giving up because of http status: 500'
 )
 
 runTest(
@@ -1330,7 +1332,7 @@ runTest(
             return '' + updates + ' -- ' + e
         }
     },
-    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}"} -- Error: giving up because of http status: 500'
+    '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}","status":"200"} -- Error: giving up because of http status: 500'
 )
 
 addSectionHeader('Binary Tests')

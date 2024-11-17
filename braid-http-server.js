@@ -325,7 +325,14 @@ function braidify (req, res, next) {
 }
 
 async function send_update(res, data, url, peer) {
-    var {version, parents, patches, patch, body} = data
+    var {version, parents, patches, patch, body, status} = data
+
+    if (status) {
+        assert(typeof status === 'number', 'sendUpdate: status must be a number')
+        assert(status > 100 && status < 600, 'sendUpdate: status must be a number between 100 and 600')
+    }
+    else
+        status = 200
 
     function set_header (key, val) {
         if (res.isSubscription)
@@ -379,7 +386,7 @@ async function send_update(res, data, url, peer) {
     assert(body_exists || patches, 'Missing body or patches')
     assert(!(body_exists && patches), 'Cannot send both body and patches')
 
-    if (res.isSubscription) res.write(`HTTP 200 OK\r\n`)
+    if (res.isSubscription) res.write(`HTTP ${status} OK\r\n`)
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(data)) {

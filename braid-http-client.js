@@ -489,6 +489,7 @@ var subscription_parser = (cb) => ({
                     parents: this.state.parents,
                     body:    this.state.body,
                     patches: this.state.patches,
+                    status:  this.state.status,
 
                     // Output extra_headers if there are some
                     extra_headers: extra_headers(this.state.headers)
@@ -563,6 +564,7 @@ function parse_update (state) {
         state.headers = parsed.headers
         state.version = state.headers.version
         state.parents = state.headers.parents
+        state.status  = state.headers[':status']
 
         // Take the parsed headers out of the buffer
         state.input = parsed.input
@@ -576,22 +578,24 @@ function parse_update (state) {
 function parse_headers (input) {
 
     // Find the start of the headers
-    let s = 0;
-    while (input[s] === 13 || input[s] === 10) s++
-    if (s === input.length) return {result: 'waiting'}
+    let start = 0;
+    while (input[start] === 13 || input[start] === 10) start++
+    if (start === input.length) return {result: 'waiting'}
 
     // Look for the double-newline at the end of the headers.
-    let e = s;
-    while (++e) {
-        if (e > input.length) return {result: 'waiting'}
-        if (input[e - 1] === 10 && (input[e - 2] === 10 || (input[e - 2] === 13 && input[e - 3] === 10))) break
+    let end = start;
+    while (++end) {
+        if (end > input.length) return {result: 'waiting'}
+        if (    input[end - 1] === 10
+            && (input[end - 2] === 10 || (input[end - 2] === 13 && input[end - 3] === 10)))
+            break
     }
 
     // Extract the header string
-    var headers_source = new TextDecoder('utf-8').decode(new Uint8Array(input.slice(s, e)))
+    var headers_source = new TextDecoder('utf-8').decode(new Uint8Array(input.slice(start, end)))
 
-    // Skip "HTTP 200 OK"
-    headers_source = headers_source.replace(/^HTTP 200.*\r?\n/, '')
+    // Convert "HTTP 200 OK" to a :status: 200 header
+    headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/, ':status: $1\r\n')
 
     var headers_length = headers_source.length
     
@@ -630,7 +634,7 @@ function parse_headers (input) {
         headers.patches = JSON.parse(headers.patches)
 
     // Update the input
-    input = input.slice(e)
+    input = input.slice(end)
 
     // And return the parsed result
     return { result: 'success', headers, input }
@@ -787,7 +791,7 @@ function extra_headers (headers) {
 
     // Remove the non-extra parts
     var known_headers = ['version', 'parents', 'patches',
-                         'content-length', 'content-range']
+                         'content-length', 'content-range', ':status']
     for (var i = 0; i < known_headers.length; i++)
         delete result[known_headers[i]]
 
@@ -807,7 +811,8 @@ function get_binary_length(x) {
 function deep_copy(x) {
     if (x === null || typeof x !== 'object') return x
     if (Array.isArray(x)) return x.map(x => deep_copy(x))
-    if (Object.prototype.toString.call(x) === '[object Object]') return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
+    if (Object.prototype.toString.call(x) === '[object Object]')
+        return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
     return x
 }
 
