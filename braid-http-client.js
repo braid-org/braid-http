@@ -592,7 +592,7 @@ function parse_headers (input) {
     }
 
     // Extract the header string
-    var headers_source = new TextDecoder('utf-8').decode(new Uint8Array(input.slice(start, end)))
+    var headers_source = input.slice(start, end).map(x => String.fromCharCode(x)).join('')
 
     // Convert "HTTP 200 OK" to a :status: 200 header
     headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/, ':status: $1\r\n')

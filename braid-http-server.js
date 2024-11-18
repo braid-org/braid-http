@@ -150,7 +150,7 @@ function parse_update (req, cb) {
                 }
 
                 // Extract the header string
-                let headers_source = new TextDecoder('utf-8').decode(new Uint8Array(buffer.slice(s, e)))
+                let headers_source = buffer.slice(s, e).map(x => String.fromCharCode(x)).join('')
 
                 // Now let's parse those headers.
                 var headers = require('parse-headers')(headers_source)
