@@ -563,6 +563,48 @@ runTest(
 addSectionHeader("Misc")
 
 runTest(
+    "Verify that client writes ASCII versions",
+    async () => {
+        return await (await fetch("/eval", {
+            method: 'POST',
+            version: ['hello🌍-0'],
+            body: `res.end(req.headers['version'])`
+        })).text()
+    },
+    '"hello\\ud83c\\udf0d-0"'
+)
+
+runTest(
+    "Verify that server writes ASCII versions",
+    async () => {
+        let x = await fetch('/json', {headers: {skip_first: true, send_unicode_version: true, giveup: true}})
+        return x.headers.get('version')
+    },
+    '"hello\\ud83c\\udf0d-0"'
+)
+
+runTest(
+    "Verify that client writes ASCII parents",
+    async () => {
+        return await (await fetch("/eval", {
+            method: 'POST',
+            parents: ['hello🌍-0', '🌈-5'],
+            body: `res.end(req.headers['parents'])`
+        })).text()
+    },
+    '"hello\\ud83c\\udf0d-0", "\\ud83c\\udf08-5"'
+)
+
+runTest(
+    "Verify that server writes ASCII parents",
+    async () => {
+        let x = await fetch('/json', {headers: {skip_first: true, send_unicode_parents: true, giveup: true}})
+        return x.headers.get('parents')
+    },
+    '"hello\\ud83c\\udf0d-0", "\\ud83c\\udf08-5"'
+)
+
+runTest(
     "Verify that fetch params are not mutated",
     async () => {
         let x = {

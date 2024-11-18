@@ -400,10 +400,10 @@ async function send_update(res, data, url, peer) {
         // so we convert `value` from array to comma-separated strings.
         if (header === 'version') {
             header = 'Version'               // Capitalize for prettiness
-            value = value.map(JSON.stringify).join(", ")
+            value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         } else if (header === 'parents') {
             header = 'Parents'               // Capitalize for prettiness
-            value = value.map(JSON.stringify).join(", ")
+            value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         }
 
         // We don't output patches or body yet
@@ -445,6 +445,10 @@ function get_binary_length(x) {
 function write_binary(res, body) {
     if (body instanceof ArrayBuffer) body = new Uint8Array(body)
     res.write(body)
+}
+
+function ascii_ify(s) {
+    return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
 module.exports = braidify

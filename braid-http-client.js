@@ -162,9 +162,9 @@ async function braid_fetch (url, params = {}) {
 
     // We provide some shortcuts for Braid params
     if (params.version)
-        params.headers.set('version', params.version.map(JSON.stringify).join(', '))
+        params.headers.set('version', params.version.map(JSON.stringify).map(ascii_ify).join(', '))
     if (Array.isArray(params.parents))
-        params.headers.set('parents', params.parents.map(JSON.stringify).join(', '))
+        params.headers.set('parents', params.parents.map(JSON.stringify).map(ascii_ify).join(', '))
     if (params.subscribe)
         params.headers.set('subscribe', 'true')
     if (params.peer)
@@ -814,6 +814,10 @@ function deep_copy(x) {
     if (Object.prototype.toString.call(x) === '[object Object]')
         return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
     return x
+}
+
+function ascii_ify(s) {
+    return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
 // ****************************

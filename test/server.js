@@ -77,6 +77,15 @@ require('http2').createSecureServer({
             // Send the current version
             if (!req.headers.skip_first) res.sendUpdate(test_update)
 
+            if (req.headers.send_unicode_version) res.sendUpdate({
+                version: ['hello🌍-0'],
+                body: 'hi'
+            })
+            if (req.headers.send_unicode_parents) res.sendUpdate({
+                parents: ['hello🌍-0', '🌈-5'],
+                body: 'hi'
+            })
+
             // Send a binary body update
             if (req.headers.send_binary_body_arraybuffer) res.sendUpdate({
                 version: ['test'],
