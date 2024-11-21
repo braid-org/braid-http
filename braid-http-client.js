@@ -595,7 +595,8 @@ function parse_headers (input) {
     var headers_source = input.slice(start, end).map(x => String.fromCharCode(x)).join('')
 
     // Convert "HTTP 200 OK" to a :status: 200 header
-    headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/, ':status: $1\r\n')
+    headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/,
+                                            ':status: $1\r\n')
 
     var headers_length = headers_source.length
     
