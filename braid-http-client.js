@@ -728,18 +728,21 @@ function parse_body (state) {
 
             // Parse Range Patch format
             {
+                var to_text = (bytes) =>
+                    new TextDecoder('utf-8').decode(new Uint8Array(bytes))
+
                 if (!('content-length' in last_patch.headers))
                     return {
                         result: 'error',
                         message: 'no content-length in patch',
-                        patch: last_patch, input: (new TextDecoder('utf-8')).decode(new Uint8Array(state.input))
+                        patch: last_patch, input: to_text(state.input)
                     }
 
                 if (!('content-range' in last_patch.headers))
                     return {
                         result: 'error',
                         message: 'no content-range in patch',
-                        patch: last_patch, input: (new TextDecoder('utf-8')).decode(new Uint8Array(state.input))
+                        patch: last_patch, input: to_text(state.input)
                     }
 
                 var content_length = parseInt(last_patch.headers['content-length'])
@@ -755,7 +758,7 @@ function parse_body (state) {
                     return {
                         result: 'error',
                         message: 'cannot parse content-range in patch',
-                        patch: last_patch, input: (new TextDecoder('utf-8')).decode(new Uint8Array(state.input))
+                        patch: last_patch, input: to_text(state.input)
                     }
 
                 last_patch.unit = match.unit

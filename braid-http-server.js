@@ -25,11 +25,15 @@ var assert = require('assert')
 //
 //       {"some": "json object"}
 //
-function write_patches(res, patches) {
+function write_patches (res, patches) {
     // `patches` must be a patch object or an array of patch objects
     //  - Object:  {unit, range, content}
     //  - Array:  [{unit, range, content}, ...]
 
+    if (typeof patches !== 'object')
+        console.error('We got bad patches!', {patches})
+
+    assert(patches)
     assert(typeof patches === 'object')  // An array is also an object
 
     // An array of one patch behaves like a single patch
@@ -395,7 +399,11 @@ async function send_update(res, data, url, peer) {
     if (!patches && !body)
         body = ''
 
-    if (res.isSubscription) res.write(`HTTP ${status} OK\r\n`)
+    var reason =
+        status === 200 ? 'OK'
+        : 404 ? 'Not Found'
+        : 'Unknown'
+    if (res.isSubscription) res.write(`HTTP ${status} ${reason}\r\n`)
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(data)) {
@@ -403,6 +411,10 @@ async function send_update(res, data, url, peer) {
 
         // A header set to undefined acts like it wasn't set
         if (value === undefined)
+            continue
+
+        // Status headers are set in the status line (above)
+        if (header === 'status')
             continue
 
         // Version and Parents get output in the Structured Headers format,
@@ -423,7 +435,7 @@ async function send_update(res, data, url, peer) {
     }
 
     // Write the patches or body
-    if (body) {
+    if (body || body === '') {
         let binary = typeof body === 'string' ? new TextEncoder().encode(body) : body,
             length = get_binary_length(binary)
         assert(length !== undefined && length !== 'undefined')
