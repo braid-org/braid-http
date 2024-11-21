@@ -46,19 +46,29 @@ function write_patches(res, patches) {
         assert(typeof patch.unit    === 'string')
         assert(typeof patch.range   === 'string')
 
-        if (typeof patch.content === 'string')
-            patch.content = new TextEncoder().encode(patch.content)
-
         if (i > 0)
             res.write('\r\n\r\n')
 
-        let extra_headers = Object.fromEntries(Object.entries(patch).filter(([k, v]) => k != 'unit' && k != 'range' && k != 'content'))
+        // Use a slick object_destructuring line to extract the extra_headers
+        var {unit, range, content, ...extra_headers} = patch
 
-        res.write(`Content-Length: ${get_binary_length(patch.content)}\r
-Content-Range: ${patch.unit} ${patch.range}\r
-${Object.entries(extra_headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}\r
-`)
-        write_binary(res, patch.content)
+        // Binarize the patch content
+        var binary_content = (typeof patch.content === 'string'
+                              ? new TextEncoder().encode(patch.content)
+                              : patch.content)
+
+        // Write the basic headers
+        res.write('Content-Length: ' + get_binary_length(binary_content) + '\r\n'
+                  + 'Content-Range: ' + patch.unit + ' ' + patch.range + '\r\n')
+
+        // Write the extra headers:
+        for (var header in extra_headers)
+            res.write(`${header}: ${extra_headers[header]}\r\n`)
+
+        res.write('\r\n')
+
+        // Write the patch content
+        write_binary(res, binary_content)
     })
 }
 
@@ -345,29 +355,27 @@ async function send_update(res, data, url, peer) {
         write_binary(res, body)
     }
 
-    // console.log('sending version', {url, peer, version, parents, patches, body,
-    //                                 subscription: res.isSubscription})
+    // console.log('Sending Update', {url, peer, data, subscription: res.isSubscription})
 
-    // Validate that the body and patches are strings,
-    // or in the case of body, it could be binary
+    // Validate the body and patches
+    assert(!(patch && patches),
+           'sendUpdate: cannot have both `update.patch` and `update.patches` set')
+    if (patch)
+        patches = [patch]
+    assert(!(body && patches),
+           'sendUpdate: cannot have both `update.body` and `update.patch(es)')
+    assert(!patches || Array.isArray(patches),
+           'sendUpdate: `patches` provided is not array')
+
+    // Validate body format
     if (body !== undefined) {
         assert(typeof body === 'string' || get_binary_length(body) != null)
         if (body instanceof Blob) body = await body.arrayBuffer()
-    } else {
-        // Only one of patch or patches can be set
-        assert(!(patch && patches))
-        assert((patch || patches) !== undefined)
-        assert((patch || patches) !== null)
+    }
 
-        // Patches must be an array
-        if (patches)
-            assert(Array.isArray(patches))
-
-        // But if using `patch`, then we set `patches` to just that object
-        if (patch)
-            patches = patch
-
-        // Now `patches` will be an array of patches or a single patch object.
+    // Validate patches format
+    if (patches !== undefined) {
+        // Now `patches` will be an array of patches
         //
         // This distinction is used in write_patches() to determine whether
         // to inline a single patch in the update body vs. writing out a
@@ -377,14 +385,15 @@ async function send_update(res, data, url, peer) {
             assert('unit' in p)
             assert('range' in p)
             assert('content' in p)
-            assert(typeof p.content === 'string' || get_binary_length(p.content) != null)
+            assert(typeof p.content === 'string'
+                   || get_binary_length(p.content) != null)
             if (p.content instanceof Blob) p.content = await p.content.arrayBuffer()
         }
     }
 
-    var body_exists = body || body === ''
-    assert(body_exists || patches, 'Missing body or patches')
-    assert(!(body_exists && patches), 'Cannot send both body and patches')
+    // To send a response without a body, we just send an empty body
+    if (!patches && !body)
+        body = ''
 
     if (res.isSubscription) res.write(`HTTP ${status} OK\r\n`)
 
@@ -414,10 +423,12 @@ async function send_update(res, data, url, peer) {
     }
 
     // Write the patches or body
-    if (body_exists) {
-        let x = typeof body === 'string' ? new TextEncoder().encode(body) : body
-        set_header('Content-Length', get_binary_length(x))
-        write_body(x)
+    if (body) {
+        let binary = typeof body === 'string' ? new TextEncoder().encode(body) : body,
+            length = get_binary_length(binary)
+        assert(length !== undefined && length !== 'undefined')
+        set_header('Content-Length', length)
+        write_body(binary)
     } else
         write_patches(res, patches)
 
