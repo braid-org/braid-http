@@ -116,22 +116,11 @@ function braidify_http (http) {
 // ***************************
 
 var normal_fetch,
-    AbortController,
-    Headers,
     is_nodejs = typeof window === 'undefined'
 
 if (is_nodejs) {
     // Nodejs
-
-    // Note that reconnect logic doesn't work in node-fetch, because it
-    // doesn't call the .catch() handler when the stream fails.
-    //
-    // See https://github.com/node-fetch/node-fetch/issues/753
-
-    normal_fetch = require('node-fetch')
-    AbortController = require('abort-controller')
-    Headers = normal_fetch.Headers
-    var to_whatwg_stream = require('web-streams-node').toWebReadableStream
+    normal_fetch = fetch
 } else {
     // Web Browser
     normal_fetch = window.fetch
@@ -418,9 +407,6 @@ async function braid_fetch (url, params = {}) {
 
 // Parse a stream of versions from the incoming bytes
 async function handle_fetch_stream (stream, cb, on_bytes) {
-    if (is_nodejs)
-        stream = to_whatwg_stream(stream)
-
     // Set up a reader
     var reader = stream.getReader(),
         parser = subscription_parser(cb)

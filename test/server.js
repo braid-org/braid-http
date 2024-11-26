@@ -2,6 +2,9 @@ var braidify = require('../braid-http-server.js')
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
+var braid_fetch = require('../braid-http-client.js').fetch
+
+allow_self_signed_certs()
 
 let port = 9000
 let test_update = {
@@ -301,3 +304,17 @@ require('http2').createSecureServer({
     console.log(args)
     console.log(`Listening on https://localhost:${port}...`)
 })
+
+function allow_self_signed_certs() {
+    // see https://github.com/nodejs/node/issues/43187
+    fetch().catch(() => { })
+    var globalDispatcherSymbol = Symbol.for('undici.globalDispatcher.1')
+    var Agent = globalThis[globalDispatcherSymbol].constructor
+
+    Object.defineProperty(globalThis, globalDispatcherSymbol, {
+        value: new Agent({ connect: { rejectUnauthorized: false } }),
+        writable: true,
+        enumerable: false,
+        configurable: false
+    })
+}

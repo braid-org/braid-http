@@ -1137,6 +1137,203 @@ runTest(
     'returned 200'
 );
 
+addSectionHeader('Testing braid wrapper for node fetch')
+
+runTest(
+    "Subscribe and receive multiple updates",
+    async () => {
+        const codeToEval = `
+            let updates = []
+            ;(new Promise(async (resolve, reject) => {
+                try {
+                    (await braid_fetch('https://localhost:' + port + '/json',
+                        {subscribe: true})).subscribe(
+                        update => {
+                            if (update.body != null) update.body = update.body_text
+                            if (update.patches) for (let p of update.patches) p.content = p.content_text
+                            updates.push(update)
+                            if (updates.length === 5) resolve()
+                        },
+                        reject
+                    )
+                } catch (e) {
+                    reject(e)
+                }            
+            })).then(() => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(updates));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        
+        return result.map(JSON.stringify).join('\n')
+    },
+    '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}\n' +
+    '{"version":["test1"],"parents":["oldie","goodie"],"patches":[{"unit":"json","range":"[1]","content":"1"}],"status":"115","extra_headers":{"hash":"42"}}\n' +
+    '{"version":["test2"],"patches":[{"unit":"json","range":"[2]","content":"2"}],"status":"200"}\n' +
+    '{"version":["test3"],"patches":[{"unit":"json","range":"[3]","content":"3","extra_headers":{"hash":"43"}},{"unit":"json","range":"[4]","content":"4"}],"status":"200"}\n' +
+    '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
+);
+
+runTest(
+    "PUT with single patch, not in array",
+    async () => {
+        const codeToEval = `
+            let p = new Promise(async (resolve, reject) => {
+                let res = await braid_fetch(
+                    'https://localhost:' + port + '/json',
+                    {
+                        version: ['test1'],
+                        patches: {unit: 'json', range: '[0]', content: '"test1"'},
+                        method: 'PUT'
+                    }
+                )
+
+                resolve('returned ' + res.status)
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'returned 200'
+);
+
+runTest(
+    "PUT with single patch, in array",
+    async () => {
+        const codeToEval = `
+            let p = new Promise(async (resolve, reject) => {
+                var res = await braid_fetch(
+                    'https://localhost:' + port + '/json',
+                    {
+                        version: ['test2'],
+                        patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
+                        method: 'PUT'
+                    }
+                )
+                resolve('returned ' + res.status)
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'returned 200'
+);
+
+runTest(
+    "PUT with multiples patches",
+    async () => {
+        const codeToEval = `
+            let p = new Promise(async (resolve, reject) => {
+                var res = await braid_fetch(
+                    'https://localhost:' + port + '/json',
+                    {
+                        version: ['test3'],
+                        patches: [
+                            {unit: 'jsonpath', range: '[0]', content: '"test3"'},
+                            {unit: 'jsonpath', range: '[1]', content: '"test3"'},
+                            {unit: 'jsonpath', range: '[2]', content: '"test3"'}
+                        ],
+                        method: 'PUT'
+                    }
+                )
+                resolve('returned ' + res.status)
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'returned 200'
+);
+
+runTest(
+    "PUT with empty patches array",
+    async () => {
+        const codeToEval = `
+            let p = new Promise(async (resolve, reject) => {
+                var res = await braid_fetch(
+                    'https://localhost:' + port + '/json',
+                    {
+                        version: ['test4'],
+                        patches: [],
+                        method: 'PUT'
+                    }
+                )
+                resolve('returned ' + res.status)
+            })
+            p.then(x => {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(x));
+            })
+        `;
+
+        const response = await fetch('/eval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: codeToEval
+        });
+
+        if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+
+        const result = await response.json();
+        return result
+    },
+    'returned 200'
+);
+
 addSectionHeader("Retry Tests")
 
 runTest(
