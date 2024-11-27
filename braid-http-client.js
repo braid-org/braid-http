@@ -222,7 +222,7 @@ async function braid_fetch (url, params = {}) {
             () => underlying_aborter.abort()
         )
 
-    var waitTime = 10
+    var waitTime = 1
     var res = null
     var subscription_cb = null
     var subscription_error = null
@@ -240,9 +240,9 @@ async function braid_fetch (url, params = {}) {
 
                 underlying_aborter.abort()
 
-                console.log(`retrying in ${waitTime}ms: ${url} after error: ${e}`)
-                setTimeout(connect, waitTime)
-                waitTime = Math.min(waitTime * 2, 3000)
+                console.log(`retrying in ${waitTime}s: ${url} after error: ${e}`)
+                setTimeout(connect, waitTime * 1000)
+                waitTime = Math.min(waitTime + 1, 3)
             }
 
             try {
@@ -399,7 +399,7 @@ async function braid_fetch (url, params = {}) {
                 done(res)
 
                 params?.retry?.onRes?.(res)
-                waitTime = 10
+                waitTime = 1
             } catch (e) { on_error(e) }
         }
     })
