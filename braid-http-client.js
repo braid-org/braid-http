@@ -226,6 +226,7 @@ async function braid_fetch (url, params = {}) {
     var res = null
     var subscription_cb = null
     var subscription_error = null
+    var cb_running = false
 
     return await new Promise((done, fail) => {
         connect()
@@ -233,7 +234,11 @@ async function braid_fetch (url, params = {}) {
             let on_error = e => {
                 on_error = () => {}
 
-                if (!params.retry || e.name === "AbortError" || e.startsWith?.('Parse error in headers')) {
+                if (!params.retry || 
+                    e.name === "AbortError" || 
+                    e.startsWith?.('Parse error in headers') ||
+                    cb_running) {
+
                     subscription_error?.(e)
                     return fail(e)
                 }
@@ -313,7 +318,9 @@ async function braid_fetch (url, params = {}) {
                                 if (original_signal?.aborted) throw new DOMException('already aborted', 'AbortError')
 
                                 // Yay!  We got a new version!  Tell the callback!
+                                cb_running = true
                                 cb(result)
+                                cb_running = false
                             } else
                                 // This error handling code runs if the connection
                                 // closes, or if there is unparseable stuff in the
