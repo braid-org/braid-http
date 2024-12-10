@@ -582,6 +582,25 @@ runTest(
 )
 
 runTest(
+    "Verify error in async cb stops retry",
+    async () => {
+        return await new Promise((resolve, reject) => {
+            let a = new AbortController()
+            fetch('/json', {subscribe: true, retry: true, signal: a.signal}).then(
+                res => res.subscribe(
+                    async update => { throw Error('My Error') },
+                    e => resolve(e.message)
+                )).catch(reject)
+            setTimeout(() => {
+                reject('timed out')
+                a.abort()
+            }, 1000)
+        })
+    },
+    'My Error'
+)
+
+runTest(
     "Verify that client writes ASCII versions",
     async () => {
         return await (await fetch("/eval", {

@@ -64,16 +64,19 @@ function braidify_http (http) {
                     on_update = f
 
                     // And set up a subscription parser
-                    var parser = subscription_parser((update, error) => {
+                    var parser = subscription_parser(async (update, error) => {
                         if (!error)
-                            on_update && on_update(update)
+                            on_update && (await on_update(update))
                         else
                             on_error && on_error(error)
                     })
 
                     // That will run each time we get new data
+                    var chain = Promise.resolve()
                     res.orig_on('data', (chunk) => {
-                        parser.read(chunk)
+                        chain = chain.then(async () => {
+                            await parser.read(chunk)
+                        })
                     })
                 }
 
@@ -312,14 +315,14 @@ async function braid_fetch (url, params = {}) {
 
                         // Each time something happens, we'll either get a new
                         // version back, or an error.
-                        (result, err) => {
+                        async (result, err) => {
                             if (!err) {
                                 // check whether we aborted
                                 if (original_signal?.aborted) throw new DOMException('already aborted', 'AbortError')
 
                                 // Yay!  We got a new version!  Tell the callback!
                                 cb_running = true
-                                cb(result)
+                                await cb(result)
                                 cb_running = false
                             } else
                                 // This error handling code runs if the connection
@@ -426,21 +429,21 @@ async function handle_fetch_stream (stream, cb, on_bytes) {
             var {done, value} = await reader.read()
         }
         catch (e) {
-            cb(null, e)
+            await cb(null, e)
             return
         }
 
         // Check if this connection has been closed!
         if (done) {
             console.debug("Connection closed.")
-            cb(null, 'Connection closed')
+            await cb(null, 'Connection closed')
             return
         }
 
         on_bytes?.(value)
 
         // Tell the parser to process some more stream
-        parser.read(value)
+        await parser.read(value)
     }
 }
 
@@ -459,7 +462,7 @@ var subscription_parser = (cb) => ({
 
     // You give it new input information as soon as you get it, and it will
     // report back with new versions as soon as it finds them.
-    read (input) {
+    async read (input) {
 
         // Store the new input!
         for (let x of input) this.state.input.push(x)
@@ -471,7 +474,7 @@ var subscription_parser = (cb) => ({
             try {
                 this.state = parse_update (this.state)
             } catch (e) {
-                this.cb(null, e)
+                await this.cb(null, e)
                 return
             }
 
@@ -503,9 +506,9 @@ var subscription_parser = (cb) => ({
                 }
 
                 try {
-                    this.cb(update)
+                    await this.cb(update)
                 } catch (e) {
-                    this.cb(null, e)
+                    await this.cb(null, e)
                     return
                 }
 
@@ -515,7 +518,7 @@ var subscription_parser = (cb) => ({
 
             // Or maybe there's an error to report upstream
             else if (this.state.result === 'error') {
-                this.cb(null, this.state.message)
+                await this.cb(null, this.state.message)
                 return
             }
 
