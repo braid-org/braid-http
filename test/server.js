@@ -1,4 +1,5 @@
 var braidify = require('../braid-http-server.js')
+braidify.use_multiplexing = true
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
@@ -14,6 +15,7 @@ let test_update = {
 }
 let retries_left = 4
 let giveup_completely_set = {}
+let faulty_mux_i = 0
 
 process.on("unhandledRejection", (x) =>
     console.log(`unhandledRejection: ${x.stack}`)
@@ -28,6 +30,8 @@ require('http2').createSecureServer({
      allowHTTP1: true
    },
     async (req, res) => {
+        console.log('Request:', req.url, req.method)
+
         // Only allow connections from localhost
         if (req.socket.remoteAddress !== '127.0.0.1'
             && req.socket.remoteAddress !== '::1'
@@ -39,28 +43,57 @@ require('http2').createSecureServer({
             return;
         }
 
-        // Braidifies our server
-        braidify(req, res)
+        // MULTIPLEX
+        if (req.method === 'MULTIPLEX' && req.url === '/faulty_mux') {
+            faulty_mux_i++
+            if (faulty_mux_i === 1) {
+                res.writeHead(425)
+                return res.end('')
+            }
+        } else if (req.method === 'MULTIPLEX' && req.url === '/bad_mux') {
+            res.writeHead(500)
+            return res.end('')
+        } else if (req.method === 'MULTIPLEX' && req.url.split('/')[2] === 'bad_stream') {
+            res.writeHead(500)
+            return res.end('')
+        } else if (req.url === '/500') {
+            res.writeHead(500)
+            return res.end('')
+        }
 
-        console.log('Request:', req.url, req.method,
-                    req.subscribe ? ('Subscribe: ' + req.subscribe)
-                    : 'no subscription')
+        if (req.headers.pre_delay_ms) await new Promise(done => setTimeout(done, parseFloat(req.headers.pre_delay_ms)))
 
-        // New eval endpoint
-        if (req.url.startsWith('/eval') && req.method === 'POST') {
-            let body = '';
+        var eval_func = () => new Promise((done, fail) => {
+            let body = ''
             req.on('data', chunk => {
-                body += chunk.toString();
+                body += chunk.toString()
             });
             req.on('end', () => {
                 try {
-                    eval(body);
+                    done(eval(body))
                 } catch (error) {
-                    res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end(`Error: ${error.message}`);
+                    res.writeHead(500, { 'Content-Type': 'text/plain' })
+                    res.end(`Error: ${error.message}`)
+                    fail(error)
                 }
-            });
-            return;
+            })
+        })
+
+        if (req.url.startsWith('/eval_pre_braidify') && req.method === 'POST')
+            if ((await eval_func()) !== 'keep going') return
+
+        // Braidifies our server
+        braidify(req, res)
+
+        if (req.url.startsWith('/eval') && req.method === 'POST')
+            if ((await eval_func()) !== 'keep going') return
+
+        // MULTIPLEX
+        if (res.writableEnded) return
+        if (req.method === 'MULTIPLEX') return
+        if (req.url === '/kill_mux') {
+            braidify.multiplexers?.get(req.headers.mux)?.res.end('AAAAA')
+            return res.end(`ok`)
         }
 
         // We'll serve Braid at the /json route!

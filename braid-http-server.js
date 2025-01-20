@@ -230,8 +230,7 @@ function braidify (req, res, next) {
     // Extract braid info from headers
     var version = ('version' in req.headers) && JSON.parse('['+req.headers.version+']'),
         parents = ('parents' in req.headers) && JSON.parse('['+req.headers.parents+']'),
-        peer = req.headers['peer'],
-        url = req.url.substr(1)
+        peer = req.headers['peer']
 
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
@@ -242,6 +241,151 @@ function braidify (req, res, next) {
     req.version   = version
     req.parents   = parents
     req.subscribe = subscribe
+
+    // Multiplexer stuff
+    if (braidify.use_multiplexing && req.method === 'MULTIPLEX') {
+        // parse the multiplexer id and stream id from the url
+        var [multiplexer, stream] = req.url.slice(1).split('/')
+
+        // if there's just a multiplexer, then we're creating a multiplexer..
+        if (!stream) {
+            // maintain a Map of all the multiplexers
+            if (!braidify.multiplexers) braidify.multiplexers = new Map()
+            braidify.multiplexers.set(multiplexer, {streams: new Map(), res})
+
+            // when the response closes,
+            // let everyone know the multiplexer has died
+            res.on('close', () => {
+                for (var f of braidify.multiplexers.get(multiplexer).streams.values()) f()
+                braidify.multiplexers.delete(multiplexer)
+            })
+
+            // keep the connection open,
+            // so people can send multiplexed data to it
+            res.writeHead(200, {
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                ...req.httpVersion !== '2.0' && {'Connection': 'keep-alive'}
+            })
+
+            // but write something.. won't interfere with stream,
+            // and helps flush the headers
+            return res.write(`\r\n`)
+        } else {
+            // in this case, we're closing the given stream
+            var m = braidify.multiplexers?.get(multiplexer)
+
+            // if the multiplexer doesn't exist, send an error
+            if (!m) {
+                var msg = `multiplexer ${multiplexer} does not exist`
+                res.writeHead(400, {'Content-Type': 'text/plain'})
+                res.end(msg)
+                return
+            }
+
+            // remove this stream, and notify it
+            let s = m.streams.get(stream)
+            if (s) {
+                s()
+                m.streams.delete(stream)
+            } else m.streams.set(stream, 'abort')
+
+            // let the requester know we succeeded
+            res.writeHead(200, {})
+            return res.end(``)
+        }
+    }
+
+    // a multiplexer header means the user wants to send the
+    // results of this request to the provided multiplexer,
+    // tagged with the given stream id
+    if (braidify.use_multiplexing && req.headers.multiplexer) {
+        // parse the multiplexer id and stream id from the url
+        var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
+
+        var end_things = (msg) => {
+            res.statusCode = 400
+            res.end(msg)
+        }
+
+        // find the multiplexer object (contains a response object)
+        var m = braidify.multiplexers?.get(multiplexer)
+        if (!m) return end_things(`multiplexer ${multiplexer} does not exist`)
+
+        // special case: check that this stream isn't already aborted
+        if (m.streams.get(stream) === 'abort') {
+            m.streams.delete(stream)
+            return end_things(`multiplexer stream ${req.headers.multiplexer} already aborted`)
+        }
+
+        // let the requester know we've multiplexed their response
+        res.writeHead(293, {multiplexer: req.headers.multiplexer})
+        res.end('Ok.')
+
+        // and now set things up so that future use of the
+        // response object forwards stuff into the multiplexer
+
+        // first we create a kind of fake socket
+        class MultiplexedWritable extends require('stream').Writable {
+            constructor(multiplexer, stream) {
+                super()
+                this.multiplexer = multiplexer
+                this.stream = stream
+            }
+
+            _write(chunk, encoding, callback) {
+                var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
+                this.multiplexer.res.write(`${len} bytes for stream ${this.stream}\r\n`)
+                this.multiplexer.res.write(chunk, encoding, callback)
+
+                // console.log(`wrote:`)
+                // console.log(`${len} bytes for stream /${this.stream}\r\n`)
+                // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
+                // else console.log('STRING?: ' + chunk)
+            }
+        }
+        var mw = new MultiplexedWritable(m, stream)
+
+        // then we create a fake server response,
+        // that pipes data to our fake socket
+        var res2 = new (require('http').ServerResponse)({})
+        res2.useChunkedEncodingByDefault = false
+        res2.assignSocket(mw)
+
+        // register a handler for when the multiplexer closes,
+        // to close our fake response stream
+        m.streams.set(stream, () => res2.destroy())
+
+        // when our fake response is done,
+        // we want to send a special message to the multiplexer saying so
+        res2.on('finish', () => m.res.write(`close stream ${stream}\r\n`))
+
+        // we want access to "res" to be forwarded to our fake "res2",
+        // so that it goes into the multiplexer
+        function* get_props(obj) {
+            do {
+                for (var x of Object.getOwnPropertyNames(obj)) yield x
+            } while (obj = Object.getPrototypeOf(obj))
+        }
+        for (let key of get_props(res)) {
+            if (key === '_events' || key === 'emit') continue
+            if (res2[key] === undefined) continue
+            var value = res[key]
+            if (typeof value === 'function') {
+                res[key] = res2[key].bind(res2)
+            } else {
+                +((key) => {
+                    Object.defineProperty(res, key, {
+                        get: () => res2[key],
+                        set: x => res2[key] = x
+                    })
+                })(key)
+            }
+        }
+
+        // this is provided so code can know if the response has been multiplexed
+        res.multiplexer = res2
+    }
 
     // Add the braidly request/response helper methods
     res.sendUpdate = (stuff) => send_update(res, stuff, req.url, peer)
@@ -275,7 +419,7 @@ function braidify (req, res, next) {
 
             // We have a subscription!
             res.statusCode = 209
-            res.setHeader("subscribe", req.headers.subscribe)
+            res.setHeader("subscribe", req.headers.subscribe ?? 'true')
             res.setHeader('cache-control', 'no-cache, no-transform')
 
 

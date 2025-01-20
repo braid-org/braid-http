@@ -41,9 +41,21 @@
             background-color: #fefefe;
             font-weight: bold;
         }
+        #summaryContainer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 20px;
+        }
+        .summaryBox {
+            width: 25px;
+            height: 25px;
+            border: 1px solid #ddd;
+        }
     </style>
 </head>
 <script src="/braid-http-client.js"></script>
+<div id="summaryContainer"></div>
 <table id="testTable">
     <tr>
         <th>Name</th>
@@ -53,7 +65,8 @@
 </table>
 <script type="module">
 
-var fetch = braid_fetch
+var og_fetch = fetch
+fetch = braid_fetch
 let test_update = {
     version: ['test'],
     parents: ['oldie'],
@@ -98,6 +111,19 @@ function addSectionHeader(headerText) {
     }
 }
 
+let summaryContainer = document.getElementById('summaryContainer');
+
+function createSummaryBox() {
+    const box = document.createElement('div');
+    box.className = 'summaryBox running';
+    summaryContainer.appendChild(box);
+    return box;
+}
+
+function updateSummaryBox(box, passed) {
+    box.className = `summaryBox ${passed ? 'passed' : 'failed'}`;
+}
+
 async function runTest(testName, testFunction, expectedResult) {
     let func = addSectionHeader.my_func
     addSectionHeader.my_func = null
@@ -107,17 +133,469 @@ async function runTest(testName, testFunction, expectedResult) {
     await new Promise(done => setTimeout(done, delay))
     func?.()
     const row = createTestRow(testName, expectedResult)
+    const summaryBox = createSummaryBox()
+
     try {
         let got = await testFunction()
         if (got == expectedResult) {
             updateTestResult(row, true, got)
+            updateSummaryBox(summaryBox, true)
         } else {
             updateTestResult(row, false, got)
+            updateSummaryBox(summaryBox, false)
         }
     } catch (error) {
         updateTestResult(row, false, error.message || error)
+        updateSummaryBox(summaryBox, false)
     }
 }
+
+addSectionHeader("Multiplexing Tests")
+
+braid_fetch.use_multiplexing = true
+
+runTest(
+    "Basic MULTIPLEX method test.",
+    async () => {
+        var r = await og_fetch('/abc123', {method: 'MULTIPLEX'})
+        var {done, value} = await r.body.getReader().read()
+        return !!(r.ok && value)
+    },
+    true
+)
+
+runTest(
+    "Test receiving multiplexed message.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                multiplexer: `/${m}/${s}`
+            }
+        })
+        if (!r.multiplexer) throw new Error('not multiplexed')
+        var x = await new Promise(async done => {
+            r.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify(u))
+            })
+        })
+        a.abort()
+        return x
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Test receiving multiplexed message using subscription",
+    async () => {
+        var a1 = new AbortController()
+        var r1 = await fetch('/json', {
+            signal: a1.signal,
+            subscribe: true,
+        })
+
+        var a2 = new AbortController()
+        var r2 = await fetch('/json', {
+            signal: a2.signal,
+            subscribe: true,
+            multiplex: true,
+        })
+
+        if (!r2.multiplexer) throw new Error('not multiplexed')
+
+        var x = await new Promise(done => {
+            r2.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify(u))
+            })
+        })
+
+        a1.abort()
+        a2.abort()
+
+        return x
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Test closing multiplexed stream",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                multiplexer: `/${m}/${s}`
+            }
+        })
+        if (!r.multiplexer) throw new Error('not multiplexed')
+        var x = await new Promise(async done => {
+            r.subscribe(u => {
+            }, e => done('multiplex stream ended'))
+            await og_fetch('/kill_mux', {headers: {mux: m}})
+        })
+        a.abort()
+        return x
+    },
+    'multiplex stream ended'
+)
+
+runTest(
+    "Test closing multiplexer before headers received",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        setTimeout(() => {
+            og_fetch('/kill_mux', {headers: {mux: m}})
+        }, 500)
+        try {
+            var r = await fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                headers: { multiplexer: `/${m}/${s}` },
+                body: `
+                    setTimeout(() => {
+                        res.setHeader('test', '42')
+                        res.end('hi')
+                    }, 1000)
+                `});
+        } catch (e) { return '' + e }
+        return 'hm..'
+    },
+    'Error: giving up because of http status: 400'
+)
+
+runTest(
+    "Test closing multiplexed stream with retry",
+    async () => {
+        return await new Promise(async done => {
+            var count = 0
+            var a = new AbortController()
+            var m = Math.random().toString(36).slice(2)
+            var s = Math.random().toString(36).slice(2)
+            var r = await fetch('/json', {
+                signal: a.signal,
+                subscribe: true,
+                headers: { multiplexer: `/${m}/${s}` },
+                retry: { onRes: () => count++ }
+            })
+            if (!r.multiplexer) throw new Error('not multiplexed')
+            r.subscribe(u => {
+                if (count === 2) {
+                    u.body = u.body_text
+                    done(JSON.stringify(u))
+                    a.abort()
+                }
+            }, e => {})
+            await og_fetch('/kill_mux', {headers: {mux: m}})
+        })
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Test aborting multiplexed subscription.",
+    async () => {
+        await fetch('/json', {subscribe: true})
+        let good = false
+        let a = new AbortController()
+        try {
+            let res = await fetch("/json", {
+                signal: a.signal,
+                retry: true,
+                subscribe: true,
+            })
+            await new Promise((done, fail) => {
+                setTimeout(() => a.abort(), 30)
+                setTimeout(() => fail(new Error("abort failed 1")), 60)
+                res.subscribe((update) => {
+                    if (update.body != null) update.body = update.body_text
+                    if (JSON.stringify(update) === JSON.stringify(test_update)) good = true
+                }, fail)
+            })
+        } catch (e) {
+            return e.name === "AbortError" && good ? "passed" : "failed"
+        }
+    },
+    "passed"
+)
+
+runTest(
+    "Test ending multiplexed subscription on the server side.",
+    async () => {
+        var onRes_count = 0
+        var update_count = 0
+        try {
+            await new Promise(async (done, fail) => {
+                var a = new AbortController()
+                var m = Math.random().toString(36).slice(2)
+                var s = Math.random().toString(36).slice(2)
+                var res = await fetch("/json", {
+                    retry: { onRes: () => onRes_count++ },
+                    subscribe: true,
+                    signal: a.signal,
+                    headers: {
+                        giveup: true,
+                        multiplexer: `/${m}/${s}`
+                    }
+                })
+                res.subscribe(
+                    (update) => {
+                        if (update.body != null) update.body = update.body_text
+                        if (JSON.stringify(update) === JSON.stringify(test_update)) update_count++
+                        if (update_count > 1) done()
+                    },
+                    (e) => fail(new Error("fetch error: " + e))
+                )
+                setTimeout(() => {
+                    a.abort()
+                    fail(new Error("timed out: " + JSON.stringify({ onRes_count, update_count })))
+                }, 3000)
+            })
+            return `onRes_count=${onRes_count}, update_count=${update_count}`
+        } catch (e) {
+            return e.message
+        }
+    },
+    "onRes_count=2, update_count=2"
+)
+
+runTest(
+    "Test retry when first establishinig multiplexed stream",
+    async () => {
+        if ((await (await og_fetch('/eval', {
+            method: 'POST',
+            body: `
+                faulty_mux_i = 0
+                res.end('ok!')
+            `})).text()) !== 'ok!') throw new Error('fail to reset_faulty_mux')
+
+        var a = new AbortController()
+        var m = 'faulty_mux'
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { multiplexer: `/${m}/${s}` },
+        })
+        if (!r.multiplexer) throw new Error('not multiplexed')
+        a.abort()
+        return 'multiplexed!'
+    },
+    'multiplexed!'
+)
+
+runTest(
+    "Test that server multiplexed stream can detect closure.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/eval', {
+            method: 'POST',
+            signal: a.signal,
+            headers: { multiplexer: `/${m}/${s}` },
+            body: `
+                res.setHeader('test', '42')
+                res.startSubscription({
+                    onClose: () => {
+                        _${m} = 42
+                    }
+                })
+                res.write('\\r\\n')
+            `});
+        if (r.headers.get('test') !== '42') throw new Error('sad')
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+        var r2 = await fetch('/eval', {
+            method: 'POST',
+            signal: a.signal,
+            body: `
+                res.end('' + _${m})
+            `});
+        var x = await r2.text()
+        a.abort()
+        return x
+    },
+    '42'
+);
+
+runTest(
+    "Test failing to establish multiplexed connection.",
+    async () => {
+        var a = new AbortController()
+        var m = 'bad_mux'
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { multiplexer: `/${m}/${s}` },
+        })
+        return '' + !!r.multiplexer
+    },
+    'false'
+);
+
+runTest(
+    "Test failing to establish multiplexed stream.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        try {
+            var r = await fetch('/500', {
+                signal: a.signal,
+                headers: { multiplexer: `/${m}/${s}` },
+            })
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
+        return 'hm..'
+    },
+    'Error: Could not establish multiplexed stream'
+);
+
+runTest(
+    "Test failing to close multiplexed stream.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = 'bad_stream'
+        try {
+            var r = await fetch('/500', {
+                signal: a.signal,
+                headers: { multiplexer: `/${m}/${s}` },
+            })
+        } catch (e) { return '' + e }
+        return 'hm..'
+    },
+    'Error: giving up because of http status: 500'
+);
+
+runTest(
+    "Test header syntax error in multiplexed stream.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        try {
+            var r = await fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                headers: { multiplexer: `/${m}/${s}` },
+                body: `
+                    var m = braidify.multiplexers?.get(${JSON.stringify(m)})
+                    m.res.write('10 bytes for stream ${s}\\r\\na b\\r\\na b\\r\\n')
+                    setTimeout(() => {
+                        m.res.write('2 bytes for stream ${s}\\r\\n\\r\\n')
+                        res.write('aaaaabbbb')
+                    }, 1000)
+                `
+            })
+        } catch (e) { return '' + e }
+        return 'hm..: ' + r.status + (await r.body.getReader().read()).value
+    },
+    'Error: error parsing headers'
+);
+
+runTest(
+    "Test 2nd GET causing multiplexed connection.",
+    async () => {
+        var a = new AbortController()
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+
+            multiplex: true
+        })
+        var r2 = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+
+            multiplex: true
+        })
+        setTimeout(() => a.abort(), 0)
+        return '' + !!r2.multiplexer
+    },
+    'true'
+);
+
+runTest(
+    "Test stream parsing error.",
+    async () => {
+        var a = new AbortController()
+        var r = await fetch('/eval', {
+            signal: a.signal,
+            method: 'POST',
+            subscribe: true,
+            body: `
+                res.write('\\r\\n\\r\\n\\r\\nHTP 555\\r\\n\\r\\n\\r\\n')
+            `
+        })
+        setTimeout(() => a.abort(), 2000)
+        return await new Promise((done, fail) => {
+            r.subscribe(u => {
+                done(JSON.stringify(u))
+
+            }, e => {
+                done('' + e)
+
+            })
+
+        })
+    },
+    'Parse error in headers: ""HTP 555\\r\\n\\r\\n""'
+);
+
+runTest(
+    "Test server getting GET for multiplexer that doesn't exist.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        try {
+            var r = await fetch('/eval_pre_braidify', {
+                method: 'POST',
+                signal: a.signal,
+                headers: { multiplexer: `/${m}/${s}` },
+                body: `
+                    braidify.multiplexers.delete(${JSON.stringify(m)})
+                    'keep going'
+                `});
+        } catch (e) { return '' + e }
+        return 'hm..'
+    },
+    'Error: giving up because of http status: 400'
+);
+
+runTest(
+    "Test multiplexed stream aborted before GET, on server",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var s2 = Math.random().toString(36).slice(2)
+        await fetch('/json', {
+            subscribe: true,
+            headers: { multiplexer: `/${m}/${s2}` }
+        })
+        await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX'})
+        try {
+            var r = await fetch('/json', {
+                subscribe: true,
+                headers: { multiplexer: `/${m}/${s}` }                
+            })
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
+        return 'hm..'
+    },
+    'Error: Could not establish multiplexed stream'
+)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 
