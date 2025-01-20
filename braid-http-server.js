@@ -243,9 +243,10 @@ function braidify (req, res, next) {
     req.subscribe = subscribe
 
     // Multiplexer stuff
-    if (braidify.use_multiplexing && req.method === 'MULTIPLEX') {
+    if ((braidify.use_multiplexing && req.method === 'MULTIPLEX') ||
+        (braidify.use_multiplexing === 'USE GET' && req.url.startsWith('/MULTIPLEX/'))) {
         // parse the multiplexer id and stream id from the url
-        var [multiplexer, stream] = req.url.slice(1).split('/')
+        var [multiplexer, stream] = req.url.slice(1).replace(/^MULTIPLEX\//, '').split('/')
 
         // if there's just a multiplexer, then we're creating a multiplexer..
         if (!stream) {

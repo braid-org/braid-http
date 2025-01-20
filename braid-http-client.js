@@ -859,7 +859,10 @@ async function multiplex_fetch(url, params) {
 
         // attempt to establish a multiplexed connection
         try {
-            var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
+            if (braid_fetch.use_multiplexing === 'USE GET')
+                var r = await braid_fetch(`${origin}/MULTIPLEX/${multiplexer}`, {retry: true})
+            else
+                var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
         } catch (e) {
             // fallback to normal fetch if multiplexed connection fails
             console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
@@ -922,7 +925,10 @@ async function multiplex_fetch(url, params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {method: 'MULTIPLEX', retry: true})
+                    if (braid_fetch.use_multiplexing === 'USE GET')
+                        await braid_fetch(`${origin}/MULTIPLEX${params.headers.get('multiplexer')}`, {retry: true})
+                    else
+                        await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {method: 'MULTIPLEX', retry: true})
                 } catch (e) {
                     console.error(`Could not cancel multiplexed connection:`, e)
                     throw e

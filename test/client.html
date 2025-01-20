@@ -152,7 +152,7 @@ async function runTest(testName, testFunction, expectedResult) {
 
 addSectionHeader("Multiplexing Tests")
 
-braid_fetch.use_multiplexing = true
+braid_fetch.use_multiplexing = true // 'USE GET'
 
 runTest(
     "Basic MULTIPLEX method test.",

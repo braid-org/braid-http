@@ -1,5 +1,5 @@
 var braidify = require('../braid-http-server.js')
-braidify.use_multiplexing = true
+braidify.use_multiplexing = true // 'USE GET'
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
@@ -44,16 +44,21 @@ require('http2').createSecureServer({
         }
 
         // MULTIPLEX
-        if (req.method === 'MULTIPLEX' && req.url === '/faulty_mux') {
+        var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/MULTIPLEX/')
+        if (is_mux) {
+            var [multiplexer, stream] = req.url.slice(1).replace(/^MULTIPLEX\//, '').split('/')
+        }
+
+        if (is_mux && multiplexer === 'faulty_mux') {
             faulty_mux_i++
             if (faulty_mux_i === 1) {
                 res.writeHead(425)
                 return res.end('')
             }
-        } else if (req.method === 'MULTIPLEX' && req.url === '/bad_mux') {
+        } else if (is_mux && multiplexer === 'bad_mux') {
             res.writeHead(500)
             return res.end('')
-        } else if (req.method === 'MULTIPLEX' && req.url.split('/')[2] === 'bad_stream') {
+        } else if (is_mux && stream === 'bad_stream') {
             res.writeHead(500)
             return res.end('')
         } else if (req.url === '/500') {
@@ -90,7 +95,7 @@ require('http2').createSecureServer({
 
         // MULTIPLEX
         if (res.writableEnded) return
-        if (req.method === 'MULTIPLEX') return
+        if (is_mux) return
         if (req.url === '/kill_mux') {
             braidify.multiplexers?.get(req.headers.mux)?.res.end('AAAAA')
             return res.end(`ok`)
