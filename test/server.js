@@ -1,5 +1,5 @@
 var braidify = require('../braid-http-server.js')
-braidify.use_multiplexing = true // 'USE GET'
+braidify.use_multiplexing = true
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
