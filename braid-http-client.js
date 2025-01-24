@@ -312,22 +312,6 @@ async function braid_fetch (url, params = {}) {
                     (params.headers.has('multiplexer') ||
                         (params.headers.has('subscribe') &&
                             braid_fetch.subscription_counts?.[origin] > 1))) {
-
-                    // invent a new multiplexer and stream id
-                    // if not provided
-                    if (!params.headers.has('multiplexer')) {
-                        // we want to keep the same multiplexer id for each origin
-                        if (!braid_fetch.multiplexers)
-                            braid_fetch.multiplexers = {}
-                        if (!braid_fetch.multiplexers[origin])
-                            braid_fetch.multiplexers[origin] =
-                                Math.random().toString(36).slice(2)
-
-                        // the stream id is different each time
-                        var stream = Math.random().toString(36).slice(2)
-                        params.headers.set('multiplexer',
-                            `/${braid_fetch.multiplexers[origin]}/${stream}`)
-                    }
                     res = await multiplex_fetch(url, params)
                 } else {
                     res = await normal_fetch(url, params)
@@ -849,13 +833,17 @@ function parse_body (state) {
 // This tells the server to send the results to the given multiplexer.
 //
 async function multiplex_fetch(url, params) {
-    // extract multiplexer id from the header
-    var multiplexer = params.headers.get('multiplexer').split('/')[1]
+    var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
 
-    // create a new multiplexer if it doesn't exist
+    // the mux_key is the same as the origin, unless it is being overriden
+    // (the overriding is done by the tests)
+    var mux_key = params.headers.get('multiplexer')?.split('/')[1] ?? origin
+
+    // create a new multiplexer if it doesn't exist for this origin
     if (!multiplex_fetch.multiplexers) multiplex_fetch.multiplexers = {}
-    if (!multiplex_fetch.multiplexers[multiplexer]) multiplex_fetch.multiplexers[multiplexer] = (async () => {
-        var origin = url[0] === '/' ? location.origin : new URL(url).origin
+    if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] = (async () => {
+        // make up a new multiplexer id (unless it is being overriden)
+        var multiplexer = params.headers.get('multiplexer')?.split('/')[1] ?? Math.random().toString(36).slice(2)
 
         // attempt to establish a multiplexed connection
         try {
@@ -863,10 +851,7 @@ async function multiplex_fetch(url, params) {
         } catch (e) {
             // fallback to normal fetch if multiplexed connection fails
             console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
-            return (url, params) => {
-                params.headers.delete('multiplexer')
-                return normal_fetch(url, params)
-            }
+            return (url, params) => normal_fetch(url, params)
         }
 
         // parse the multiplexed stream,
@@ -879,13 +864,18 @@ async function multiplex_fetch(url, params) {
             // the multiplexer stream has died.. let everyone know..
             mux_error = e
             for (var f of streams.values()) f()
-            delete multiplex_fetch.multiplexers[multiplexer]
+            delete multiplex_fetch.multiplexers[mux_key]
         })
 
         // return a "fetch" for this multiplexer
         return async (url, params) => {
-            // extract stream id from the header
-            var stream = params.headers.get('multiplexer').split('/')[2]
+            // make up a new stream id (unless it is being overriden)
+            var stream = params.headers.get('multiplexer')?.split('/')[2] ?? Math.random().toString(36).slice(2)
+
+            // add the multiplexer header without affecting the underlying params
+            var mux_headers = new Headers(params.headers)
+            mux_headers.set('multiplexer', `/${multiplexer}/${stream}`)
+            params = {...params, headers: mux_headers}
 
             // setup a way to receive incoming data from the multiplexer
             var buffers = []
@@ -1008,7 +998,7 @@ async function multiplex_fetch(url, params) {
     })()
 
     // call the special fetch function for the multiplexer
-    return await (await multiplex_fetch.multiplexers[multiplexer])(url, params)
+    return await (await multiplex_fetch.multiplexers[mux_key])(url, params)
 }
 
 // waits on reader for chunks like: 123 bytes for stream ABC\r\n..123 bytes..
