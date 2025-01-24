@@ -124,30 +124,42 @@ function updateSummaryBox(box, passed) {
     box.className = `summaryBox ${passed ? 'passed' : 'failed'}`;
 }
 
-async function runTest(testName, testFunction, expectedResult) {
-    let func = addSectionHeader.my_func
-    addSectionHeader.my_func = null
+var wait_for_me = Promise.resolve()
+var wait_list = []
 
-    delay += 70
+function waitForTests(cb) {
+    wait_for_me = Promise.all(wait_list).then(() => cb())
+    wait_list = []    
+}
 
-    await new Promise(done => setTimeout(done, delay))
-    func?.()
-    const row = createTestRow(testName, expectedResult)
-    const summaryBox = createSummaryBox()
+function runTest(testName, testFunction, expectedResult) {
+    wait_list.push((async () => {
+        let func = addSectionHeader.my_func
+        addSectionHeader.my_func = null
 
-    try {
-        let got = await testFunction()
-        if (got == expectedResult) {
-            updateTestResult(row, true, got)
-            updateSummaryBox(summaryBox, true)
-        } else {
-            updateTestResult(row, false, got)
+        await wait_for_me
+
+        delay += 70
+
+        await new Promise(done => setTimeout(done, delay))
+        func?.()
+        const row = createTestRow(testName, expectedResult)
+        const summaryBox = createSummaryBox()
+
+        try {
+            let got = await testFunction()
+            if (got == expectedResult) {
+                updateTestResult(row, true, got)
+                updateSummaryBox(summaryBox, true)
+            } else {
+                updateTestResult(row, false, got)
+                updateSummaryBox(summaryBox, false)
+            }
+        } catch (error) {
+            updateTestResult(row, false, error.message || error)
             updateSummaryBox(summaryBox, false)
         }
-    } catch (error) {
-        updateTestResult(row, false, error.message || error)
-        updateSummaryBox(summaryBox, false)
-    }
+    })())
 }
 
 addSectionHeader("Multiplexing Tests")
@@ -596,6 +608,8 @@ runTest(
     },
     'Error: Could not establish multiplexed stream'
 )
+
+waitForTests(() => braid_fetch.use_multiplexing = false)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 
