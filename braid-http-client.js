@@ -236,7 +236,7 @@ async function braid_fetch (url, params = {}) {
     // then we want to multiplex
     var subscription_counts_on_close = null
     if (params.headers.has('subscribe')) {
-        var origin = url[0] === '/' ? location.origin : new URL(url).origin
+        var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
         if (!braid_fetch.subscription_counts)
             braid_fetch.subscription_counts = {}
         braid_fetch.subscription_counts[origin] =
@@ -847,11 +847,19 @@ async function multiplex_fetch(url, params) {
 
         // attempt to establish a multiplexed connection
         try {
+            if (params.use_multiplex_header) throw 'skip to trying header'
             var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
         } catch (e) {
-            // fallback to normal fetch if multiplexed connection fails
-            console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
-            return (url, params) => normal_fetch(url, params)
+            // some servers don't like custom methods,
+            // so let's try with a custom header
+            try {
+                var using_multiplex_header = true
+                r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {MULTIPLEX: true}, retry: true})
+            } catch (e) {
+                // fallback to normal fetch if multiplexed connection fails
+                console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
+                return (url, params) => normal_fetch(url, params)
+            }
         }
 
         // parse the multiplexed stream,
@@ -912,7 +920,7 @@ async function multiplex_fetch(url, params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {method: 'MULTIPLEX', retry: true})
+                    await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {...using_multiplex_header ? {headers: {MULTIPLEX: true}} : {method: 'MULTIPLEX'}, retry: true})
                 } catch (e) {
                     console.error(`Could not cancel multiplexed connection:`, e)
                     throw e

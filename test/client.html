@@ -177,6 +177,111 @@ runTest(
 )
 
 runTest(
+    "Test falling back to MULTIPLEX header if method doesn't work.",
+    async () => {
+        var a = new AbortController()
+        var m = 'bad_mux_method'
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { multiplexer: `/${m}/${s}` },
+        })
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+        return '' + !!r.multiplexer
+    },
+    'true'
+)
+
+runTest(
+    "Test option to use MULTIPLEX header regardless.",
+    async () => {
+        var a = new AbortController()
+        var m = 'bad_mux_header'
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            use_multiplex_header: true,
+            headers: { multiplexer: `/${m}/${s}` },
+        })
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+        return '' + !!r.multiplexer
+    },
+    'false'
+)
+
+runTest(
+    "Test that multiplexer code handles a full url (rather than relative one).",
+    async () => {
+        var a1 = new AbortController()
+        var r1 = await fetch('https://localhost:9000/json', {
+            signal: a1.signal,
+            subscribe: true,
+        })
+
+        var a2 = new AbortController()
+        var r2 = await fetch('https://localhost:9000/json', {
+            signal: a2.signal,
+            subscribe: true,
+        })
+
+        if (!r2.multiplexer) throw new Error('not multiplexed')
+
+        let ret = await new Promise(done => r2.subscribe(u => {
+            u.body = u.body_text
+            done(JSON.stringify(u))
+        }))
+
+        a1.abort()
+        a2.abort()
+
+        return ret
+    },
+    JSON.stringify(test_update)
+)
+
+runTest(
+    "Test that multiplexer code handles a full url (rather than relative one) on server.",
+    async () => {
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+            void (async () => {
+                braid_fetch.use_multiplexing = true
+
+                var a1 = new AbortController()
+                var r1 = await braid_fetch('https://localhost:' + port + '/json', {
+                    signal: a1.signal,
+                    subscribe: true,
+                }) 
+                
+                var a2 = new AbortController()
+                var r2 = await braid_fetch('https://localhost:' + port + '/json', {
+                    signal: a2.signal,
+                    subscribe: true,
+                })
+
+                if (!r2.multiplexer) return res.end('not multiplexer!?')
+
+                r2.subscribe(u => {
+                    u.body = u.body_text
+                    if (!res.writableEnded) {
+                        res.end(JSON.stringify(u))
+                        a1.abort()
+                        a2.abort()
+                        braid_fetch.use_multiplexing = false
+                    }
+                })
+            })()
+            `
+        })
+        return await r.text()
+    },
+    JSON.stringify(test_update)
+);
+
+runTest(
     "Test receiving multiplexed message.",
     async () => {
         var a = new AbortController()

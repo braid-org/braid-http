@@ -243,7 +243,7 @@ function braidify (req, res, next) {
     req.subscribe = subscribe
 
     // Multiplexer stuff
-    if (braidify.use_multiplexing && req.method === 'MULTIPLEX') {
+    if (braidify.use_multiplexing && (req.method === 'MULTIPLEX' || req.headers.multiplex)) {
         // parse the multiplexer id and stream id from the url
         var [multiplexer, stream] = req.url.slice(1).split('/')
 
@@ -334,14 +334,19 @@ function braidify (req, res, next) {
             }
 
             _write(chunk, encoding, callback) {
-                var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
-                this.multiplexer.res.write(`${len} bytes for stream ${this.stream}\r\n`)
-                this.multiplexer.res.write(chunk, encoding, callback)
+                try {
+                    var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
+                    this.multiplexer.res.write(`${len} bytes for stream ${this.stream}\r\n`)
+                    this.multiplexer.res.write(chunk, encoding, callback)
 
-                // console.log(`wrote:`)
-                // console.log(`${len} bytes for stream /${this.stream}\r\n`)
-                // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
-                // else console.log('STRING?: ' + chunk)
+                    // console.log(`wrote:`)
+                    // console.log(`${len} bytes for stream /${this.stream}\r\n`)
+                    // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
+                    // else console.log('STRING?: ' + chunk)
+
+                } catch (e) {
+                    callback(e)
+                }
             }
         }
         var mw = new MultiplexedWritable(m, stream)
@@ -368,7 +373,31 @@ function braidify (req, res, next) {
             } while (obj = Object.getPrototypeOf(obj))
         }
         for (let key of get_props(res)) {
-            if (key === '_events' || key === 'emit') continue
+            // skip keys that break stuff for some reason
+            if (
+                // just touching these seems to cause issues
+                key === '_events' || key === 'emit'
+
+                // because we called res.end above,
+                // in http 1, node is going to wait
+                // for the event loop to fire again,
+                // and then call these keys:
+                // "socket" to set it to null,
+                // "detachSocket" to do that,
+                // "_closed" to determine if the socket is closed;
+                // we're going to override that to say true,
+                // we do that below..
+                // we do it so we don't need to add "destroyed" here,
+                // because if _closed was false,
+                // it would try to set destroyed to true
+                || key === 'socket'
+                || key === 'detachSocket'
+                || key === '_closed'
+
+                // adding these lines gets rid of some deprecation warnings.. keep?
+                || key === '_headers'
+                || key === '_headerNames') continue
+
             if (res2[key] === undefined) continue
             var value = res[key]
             if (typeof value === 'function') {
@@ -382,6 +411,19 @@ function braidify (req, res, next) {
                 })(key)
             }
         }
+
+        // node http 1 has the issue that when we call res.end,
+        // which we do above, not everything happens right away..
+        // in the next js event loop tick, it is going to
+        // try to tear down the stream,
+        // but we have proxied all the properties,
+        // so it would tear down our new res2 stream..
+        // to prevent that, we sacrafice this property
+        // (which the end-user hopefully won't be accessing anyway)
+        // to make the http 1 tear down code think its job is complete already,
+        // otherwise it would want to set "destroyed",
+        // and we would need to not proxy that key as well
+        res._closed = true
 
         // this is provided so code can know if the response has been multiplexed
         res.multiplexer = res2
