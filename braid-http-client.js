@@ -845,38 +845,51 @@ async function multiplex_fetch(url, params) {
         // make up a new multiplexer id (unless it is being overriden)
         var multiplexer = params.headers.get('multiplexer')?.split('/')[1] ?? Math.random().toString(36).slice(2)
 
-        // attempt to establish a multiplexed connection
-        try {
-            if (params.use_multiplex_header) throw 'skip to trying header'
-            var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
-        } catch (e) {
-            // some servers don't like custom methods,
-            // so let's try with a custom header
-            try {
-                var using_multiplex_header = true
-                r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {MULTIPLEX: true}, retry: true})
-            } catch (e) {
-                // fallback to normal fetch if multiplexed connection fails
-                console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
-                return (url, params) => normal_fetch(url, params)
-            }
-        }
-
-        // parse the multiplexed stream,
-        // and send messages to the appropriate streams
         var streams = new Map()
         var mux_error = null
-        parse_multiplex_stream(r.body.getReader(), (stream, bytes) => {
-            streams.get(stream)?.(bytes)
-        }, e => {
-            // the multiplexer stream has died.. let everyone know..
-            mux_error = e
-            for (var f of streams.values()) f()
-            delete multiplex_fetch.multiplexers[mux_key]
-        })
+        var using_multiplex_header = false
+
+        var mux_promise = (async () => {
+            // attempt to establish a multiplexed connection
+            try {
+                if (params.use_multiplex_header) throw 'skip to trying header'
+                var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
+            } catch (e) {
+                // some servers don't like custom methods,
+                // so let's try with a custom header
+                try {
+                    using_multiplex_header = true
+                    r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {MULTIPLEX: true}, retry: true})
+                } catch (e) {
+                    // fallback to normal fetch if multiplexed connection fails
+                    console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
+                    return false
+                }
+            }
+
+            // parse the multiplexed stream,
+            // and send messages to the appropriate streams
+            parse_multiplex_stream(r.body.getReader(), (stream, bytes) => {
+                streams.get(stream)?.(bytes)
+            }, e => {
+                // the multiplexer stream has died.. let everyone know..
+                mux_error = e
+                for (var f of streams.values()) f()
+                delete multiplex_fetch.multiplexers[mux_key]
+            })
+        })()
 
         // return a "fetch" for this multiplexer
         return async (url, params) => {
+            // maybe wait for multiplexer to be connected..
+            if (!params.experimental_do_not_wait_for_multiplexer) {
+                if ((await mux_promise) === false) {
+                    // it failed to connect the multiplexer,
+                    // so fallback to normal fetch
+                    return await normal_fetch(url, params)
+                }
+            }
+
             // make up a new stream id (unless it is being overriden)
             var stream = params.headers.get('multiplexer')?.split('/')[2] ?? Math.random().toString(36).slice(2)
 
@@ -930,6 +943,14 @@ async function multiplex_fetch(url, params) {
             // do the underlying fetch
             try {
                 var res = await normal_fetch(url, params)
+
+                if (params.experimental_do_not_wait_for_multiplexer &&
+                    res.status === 422 &&
+                    !(await promise_done(mux_promise))) {
+                    // this error will trigger a retry if the user is using that
+                    throw new Error('multiplexer not yet connected')
+                }
+
                 if (res.status !== 293) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ' got status: ' + res.status)
 
                 // we want to present the illusion that the connection is still open,
@@ -1132,6 +1153,12 @@ function create_abort_error(msg) {
     var e = new Error(msg)
     e.name = 'AbortError'
     return e
+}
+
+async function promise_done(promise) {
+    var pending = {}
+    var ret = await Promise.race([promise, Promise.resolve(pending)])
+    return ret !== pending
 }
 
 // ****************************

@@ -304,7 +304,7 @@ function braidify (req, res, next) {
         var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
 
         var end_things = (msg) => {
-            res.statusCode = 400
+            res.statusCode = 422 // Unprocessable Entity (but good syntax!)
             res.end(msg)
         }
 
