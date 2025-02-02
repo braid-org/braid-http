@@ -294,9 +294,6 @@ function braidify (req, res, next) {
                 m.streams.delete(stream)
             } else m.streams.set(stream, 'abort')
 
-            console.log('got here....!!!!')
-
-
             // let the requester know we succeeded
             res.writeHead(200, { 'Multiplex-Version': '0.0.1' })
             return res.end(``)
