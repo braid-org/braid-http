@@ -853,13 +853,17 @@ async function multiplex_fetch(url, params) {
             // attempt to establish a multiplexed connection
             try {
                 if (params.use_multiplex_header) throw 'skip to trying header'
-                var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', retry: true})
+                var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}, retry: true})
+                if (!r.ok || r.headers.get('Multiplex-Version') !== '0.0.1') throw 'bad'
             } catch (e) {
                 // some servers don't like custom methods,
                 // so let's try with a custom header
                 try {
                     using_multiplex_header = true
-                    r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {MULTIPLEX: true}, retry: true})
+                    r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {Multiplex: true, 'Multiplex-Version': '0.0.1'}, retry: true})
+
+                    if (!r.ok) throw new Error('status not ok: ' + r.status)
+                    if (r.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected 0.0.1')
                 } catch (e) {
                     // fallback to normal fetch if multiplexed connection fails
                     console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
@@ -895,7 +899,8 @@ async function multiplex_fetch(url, params) {
 
             // add the multiplexer header without affecting the underlying params
             var mux_headers = new Headers(params.headers)
-            mux_headers.set('multiplexer', `/${multiplexer}/${stream}`)
+            mux_headers.set('Multiplexer', `/${multiplexer}/${stream}`)
+            mux_headers.set('Multiplex-Version', '0.0.1')
             params = {...params, headers: mux_headers}
 
             // setup a way to receive incoming data from the multiplexer
@@ -933,9 +938,18 @@ async function multiplex_fetch(url, params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {...using_multiplex_header ? {headers: {MULTIPLEX: true}} : {method: 'MULTIPLEX'}, retry: true})
+                    var r = await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {
+                        ...!using_multiplex_header && {method: 'MULTIPLEX'},
+                        headers: {
+                            ...using_multiplex_header && {Multiplex: true},
+                            'Multiplex-Version': '0.0.1'
+                        }, retry: true})
+
+                    if (!r.ok) throw new Error('status not ok: ' + r.status)
+                    if (r.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected 0.0.1')
                 } catch (e) {
-                    console.error(`Could not cancel multiplexed connection:`, e)
+                    e = new Error(`Could not cancel multiplexed connection: ${e}`)
+                    console.error('' + e)
                     throw e
                 }
             }
@@ -951,7 +965,9 @@ async function multiplex_fetch(url, params) {
                     throw new Error('multiplexer not yet connected')
                 }
 
-                if (res.status !== 293) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ' got status: ' + res.status)
+                if (res.status !== 293) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ', got status: ' + res.status)
+
+                if (res.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
 
                 // we want to present the illusion that the connection is still open,
                 // and therefor closable with "abort",

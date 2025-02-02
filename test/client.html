@@ -169,7 +169,7 @@ braid_fetch.use_multiplexing = true
 runTest(
     "Basic MULTIPLEX method test.",
     async () => {
-        var r = await og_fetch('/abc123', {method: 'MULTIPLEX'})
+        var r = await og_fetch('/abc123', {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
         var {done, value} = await r.body.getReader().read()
         return !!(r.ok && value)
     },
@@ -388,7 +388,7 @@ runTest(
         } catch (e) { return '' + e }
         return 'hm..'
     },
-    'Error: giving up because of http status: 400'
+    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 400'
 )
 
 runTest(
@@ -592,7 +592,7 @@ runTest(
         } catch (e) { return '' + e }
         return 'hm..'
     },
-    'Error: giving up because of http status: 500'
+    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 500'
 );
 
 runTest(
@@ -688,7 +688,7 @@ runTest(
         } catch (e) { return '' + e }
         return 'hm..'
     },
-    'Error: giving up because of http status: 400'
+    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 400'
 );
 
 runTest(
@@ -702,7 +702,7 @@ runTest(
             subscribe: true,
             headers: { multiplexer: `/${m}/${s2}` }
         })
-        await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX'})
+        await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
         try {
             var r = await fetch('/json', {
                 subscribe: true,

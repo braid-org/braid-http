@@ -243,7 +243,10 @@ function braidify (req, res, next) {
     req.subscribe = subscribe
 
     // Multiplexer stuff
-    if (braidify.use_multiplexing && (req.method === 'MULTIPLEX' || req.headers.multiplex)) {
+    if (braidify.use_multiplexing &&
+        (req.method === 'MULTIPLEX' || req.headers.multiplex) &&
+        req.headers['multiplex-version'] === '0.0.1') {
+
         // parse the multiplexer id and stream id from the url
         var [multiplexer, stream] = req.url.slice(1).split('/')
 
@@ -263,6 +266,7 @@ function braidify (req, res, next) {
             // keep the connection open,
             // so people can send multiplexed data to it
             res.writeHead(200, {
+                'Multiplex-Version': '0.0.1',
                 'Cache-Control': 'no-cache',
                 'X-Accel-Buffering': 'no',
                 ...req.httpVersion !== '2.0' && {'Connection': 'keep-alive'}
@@ -290,8 +294,11 @@ function braidify (req, res, next) {
                 m.streams.delete(stream)
             } else m.streams.set(stream, 'abort')
 
+            console.log('got here....!!!!')
+
+
             // let the requester know we succeeded
-            res.writeHead(200, {})
+            res.writeHead(200, { 'Multiplex-Version': '0.0.1' })
             return res.end(``)
         }
     }
@@ -299,7 +306,10 @@ function braidify (req, res, next) {
     // a multiplexer header means the user wants to send the
     // results of this request to the provided multiplexer,
     // tagged with the given stream id
-    if (braidify.use_multiplexing && req.headers.multiplexer) {
+    if (braidify.use_multiplexing &&
+        req.headers.multiplexer &&
+        req.headers['multiplex-version'] === '0.0.1') {
+
         // parse the multiplexer id and stream id from the url
         var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
 
@@ -319,7 +329,10 @@ function braidify (req, res, next) {
         }
 
         // let the requester know we've multiplexed their response
-        res.writeHead(293, {multiplexer: req.headers.multiplexer})
+        res.writeHead(293, {
+            multiplexer: req.headers.multiplexer,
+            'Multiplex-Version': '0.0.1'
+        })
         res.end('Ok.')
 
         // and now set things up so that future use of the
