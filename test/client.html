@@ -212,6 +212,18 @@ runTest(
 )
 
 runTest(
+    "Test that when multiplexer doesn't exist, it returns the proper header.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await og_fetch('/json', {headers: {Multiplexer: `/${m}/${s}`, 'Multiplex-Version': '0.0.1'}})
+        return r.headers.get('multiplexer') === `/${m}/${s}`
+    },
+    true
+)
+
+runTest(
     "Test that multiplexer code handles a full url (rather than relative one).",
     async () => {
         var a1 = new AbortController()

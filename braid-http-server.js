@@ -311,7 +311,8 @@ function braidify (req, res, next) {
         var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
 
         var end_things = (msg) => {
-            res.statusCode = 422 // Unprocessable Entity (but good syntax!)
+            // 422 = Unprocessable Entity (but good syntax!)
+            res.writeHead(422, {Multiplexer: req.headers.multiplexer})
             res.end(msg)
         }
 
