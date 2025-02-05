@@ -473,7 +473,7 @@ function braidify (req, res, next) {
             // We have a subscription!
             res.statusCode = 209
             res.setHeader("subscribe", req.headers.subscribe ?? 'true')
-            res.setHeader('cache-control', 'no-cache, no-transform')
+            res.setHeader('cache-control', 'no-cache, no-transform, no-store')
 
 
             // Note: I used to explicitly disable transfer-encoding chunked
