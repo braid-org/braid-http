@@ -726,6 +726,39 @@ runTest(
     'Error: Could not establish multiplexed stream'
 )
 
+waitForTests(() => {})
+
+runTest(
+    "Test client asking for multiplexing, but server doesn't realize it.",
+    async () => {
+        await fetch('/eval', {
+            method: 'POST',
+            body: `
+                braidify.use_multiplexing = false
+                res.end('ok')
+            `
+        })
+
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            experimental_do_not_wait_for_multiplexer: true,
+            headers: { multiplexer: `/${m}/${s}` }
+        })
+        return await new Promise(done => {
+            r.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify(u))
+                a.abort()
+            })
+        })
+    },
+    JSON.stringify(test_update)
+)
+
 waitForTests(() => braid_fetch.use_multiplexing = false)
 
 addSectionHeader("Server sending binary data with sendUpdate")

@@ -965,6 +965,11 @@ async function multiplex_fetch(url, params) {
                     throw new Error('multiplexer not yet connected')
                 }
 
+                // if the response says it's ok,
+                // but it's is not a multiplexed response,
+                // fall back to as if it was a normal fetch
+                if (res.ok && res.status !== 293) return res
+
                 if (res.status !== 293) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ', got status: ' + res.status)
 
                 if (res.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplexer') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
