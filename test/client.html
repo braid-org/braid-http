@@ -232,7 +232,7 @@ runTest(
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
         var r = await og_fetch('/json', {headers: {Multiplexer: `/${m}/${s}`, 'Multiplex-Version': '0.0.1'}})
-        return r.headers.get('multiplexer') === `/${m}/${s}`
+        return r.headers.get('multiplexer') === `/${m}`
     },
     true
 )

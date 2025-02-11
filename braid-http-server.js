@@ -313,20 +313,12 @@ function braidify (req, res, next) {
         // parse the multiplexer id and stream id from the url
         var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
 
-        var end_things = (msg) => {
-            // 422 = Unprocessable Entity (but good syntax!)
-            res.writeHead(422, {Multiplexer: req.headers.multiplexer})
-            res.end(msg)
-        }
-
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
-        if (!m) return end_things(`multiplexer ${multiplexer} does not exist`)
-
-        // special case: check that this stream isn't already aborted
-        if (m.streams.get(stream) === 'abort') {
-            m.streams.delete(stream)
-            return end_things(`multiplexer stream ${req.headers.multiplexer} already aborted`)
+        if (!m) {
+            // 422 = Unprocessable Entity (but good syntax!)
+            res.writeHead(422, {Multiplexer: `/${multiplexer}`})
+            res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
         // let the requester know we've multiplexed their response
