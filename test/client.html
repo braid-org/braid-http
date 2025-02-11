@@ -186,6 +186,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: { multiplexer: `/${m}/${s}` },
+            retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
         return '' + !!r.multiplexer
@@ -199,16 +200,20 @@ runTest(
         var a = new AbortController()
         var m = 'bad_mux_header'
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            use_multiplex_header: true,
-            headers: { multiplexer: `/${m}/${s}` },
-        })
-        await og_fetch('/kill_mux', {headers: {mux: m}})
-        return '' + !!r.multiplexer
+        try {
+            var r = await fetch('/json', {
+                signal: a.signal,
+                subscribe: true,
+                use_multiplex_header: true,
+                headers: { multiplexer: `/${m}/${s}` },
+                retry: true
+            })
+        } catch (e) {
+            return e.message.slice(0, 'Could not establish multiplexed stream'.length)
+        }
+        return 'hm..'
     },
-    'false'
+    'Could not establish multiplexed stream'
 )
 
 runTest(
@@ -272,6 +277,7 @@ runTest(
                 var r2 = await braid_fetch('https://localhost:' + port + '/json', {
                     signal: a2.signal,
                     subscribe: true,
+                    retry: true
                 })
 
                 if (!r2.multiplexer) return res.end('not multiplexer!?')
@@ -515,6 +521,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: { multiplexer: `/${m}/${s}` },
+            retry: true
         })
         if (!r.multiplexer) throw new Error('not multiplexed')
         a.abort()
@@ -563,14 +570,16 @@ runTest(
         var a = new AbortController()
         var m = 'bad_mux'
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            headers: { multiplexer: `/${m}/${s}` },
-        })
-        return '' + !!r.multiplexer
+        try {
+            var r = await fetch('/json', {
+                signal: a.signal,
+                subscribe: true,
+                headers: { multiplexer: `/${m}/${s}` }
+            })
+        } catch (e) { return e.message }
+        return 'hm..'
     },
-    'false'
+    'multiplexer not yet connected'
 );
 
 runTest(
@@ -738,7 +747,6 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            experimental_do_not_wait_for_multiplexer: true,
             headers: { multiplexer: `/${m}/${s}` }
         })
         return await new Promise(done => {

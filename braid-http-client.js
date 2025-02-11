@@ -265,6 +265,7 @@ async function braid_fetch (url, params = {}) {
                 var retry = params.retry && // only try to reconnect if the user has chosen to
                     e.name !== "AbortError" && // don't retry if the user has chosen to abort
                     !e.startsWith?.('Parse error in headers') && // in this case, the server is spewing garbage, so reconnecting might be bad
+                    !e.message?.startsWith?.('Could not establish multiplexed stream') && // the server has told us no, or is using a different version of multiplexing
                     !cb_running // if an error is thrown in the callback, then it may not be good to reconnect, and generate more errors
 
                 if (retry && !original_signal?.aborted) {
@@ -885,14 +886,12 @@ async function multiplex_fetch(url, params) {
 
         // return a "fetch" for this multiplexer
         return async (url, params) => {
-            // maybe wait for multiplexer to be connected..
-            if (!params.experimental_do_not_wait_for_multiplexer) {
-                if ((await mux_promise) === false) {
-                    // it failed to connect the multiplexer,
-                    // so fallback to normal fetch
-                    return await normal_fetch(url, params)
-                }
-            }
+
+            // if we already know the multiplexer is not working,
+            // then fallback to normal fetch
+            // (unless the user is specifically asking for multiplexing)
+            if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplexer'))
+                return await normal_fetch(url, params)
 
             // make up a new stream id (unless it is being overriden)
             var stream = params.headers.get('multiplexer')?.split('/')[2] ?? Math.random().toString(36).slice(2)
@@ -958,10 +957,8 @@ async function multiplex_fetch(url, params) {
             try {
                 var res = await normal_fetch(url, params)
 
-                if (params.experimental_do_not_wait_for_multiplexer &&
-                    res.status === 422 &&
-                    !(await promise_done(mux_promise))) {
-                    // this error will trigger a retry if the user is using that
+                if (res.status === 422 && !(await promise_done(mux_promise))) {
+                    // this error will trigger a retry if the user is using that option
                     throw new Error('multiplexer not yet connected')
                 }
 
