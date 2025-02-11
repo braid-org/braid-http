@@ -177,6 +177,15 @@ runTest(
 )
 
 runTest(
+    `Test for "Incremental: ?1" header in multiplexer response.`,
+    async () => {
+        var r = await og_fetch('/abc123', {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
+        return r.headers.get('Incremental')
+    },
+    '?1'
+)
+
+runTest(
     "Test falling back to MULTIPLEX header if method doesn't work.",
     async () => {
         var a = new AbortController()

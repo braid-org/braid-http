@@ -267,6 +267,7 @@ function braidify (req, res, next) {
             // so people can send multiplexed data to it
             res.writeHead(200, {
                 'Multiplex-Version': '0.0.1',
+                'Incremental': '?1',
                 'Cache-Control': 'no-cache',
                 'X-Accel-Buffering': 'no',
                 ...req.httpVersion !== '2.0' && {'Connection': 'keep-alive'}
