@@ -400,7 +400,7 @@ runTest(
         } catch (e) { return '' + e }
         return 'hm..'
     },
-    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 400'
+    'Error: multiplex stream ended unexpectedly'
 )
 
 runTest(
@@ -593,18 +593,17 @@ runTest(
 runTest(
     "Test failing to close multiplexed stream.",
     async () => {
-        var a = new AbortController()
-        var m = Math.random().toString(36).slice(2)
-        var s = 'bad_stream'
-        try {
-            var r = await fetch('/500', {
-                signal: a.signal,
-                headers: { multiplexer: `/${m}/${s}` },
+        return await new Promise(async done => {
+            window.addEventListener('unhandledrejection', function (event) {
+                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 500') done('saw the error we wanted')
             })
-        } catch (e) { return '' + e }
-        return 'hm..'
+
+            var m = Math.random().toString(36).slice(2)
+            var s = 'bad_stream'
+            fetch('/500', { headers: { multiplexer: `/${m}/${s}` } })
+        })
     },
-    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 500'
+    'saw the error we wanted'
 );
 
 runTest(
@@ -697,10 +696,10 @@ runTest(
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
                 `});
-        } catch (e) { return '' + e }
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) + '..'}
         return 'hm..'
     },
-    'Error: Could not cancel multiplexed connection: Error: giving up because of http status: 400'
+    'Error: Could not establish multiplexed stream..'
 );
 
 runTest(
@@ -714,16 +713,10 @@ runTest(
             subscribe: true,
             headers: { multiplexer: `/${m}/${s2}` }
         })
-        await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
-        try {
-            var r = await fetch('/json', {
-                subscribe: true,
-                headers: { multiplexer: `/${m}/${s}` }                
-            })
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
-        return 'hm..'
+        var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
+        return r.status
     },
-    'Error: Could not establish multiplexed stream'
+    '400'
 )
 
 waitForTests(() => {})

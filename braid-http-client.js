@@ -1041,7 +1041,7 @@ async function multiplex_fetch(url, params) {
                 return res
             } catch (e) {
                 // if we had an error, be sure to unregister ourselves
-                await unset(e)
+                unset(e)
                 throw e
             }
         }

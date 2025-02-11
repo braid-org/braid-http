@@ -277,22 +277,24 @@ function braidify (req, res, next) {
             return res.write(`\r\n`)
         } else {
             // in this case, we're closing the given stream
-            var m = braidify.multiplexers?.get(multiplexer)
 
             // if the multiplexer doesn't exist, send an error
+            var m = braidify.multiplexers?.get(multiplexer)
             if (!m) {
-                var msg = `multiplexer ${multiplexer} does not exist`
                 res.writeHead(400, {'Content-Type': 'text/plain'})
-                res.end(msg)
-                return
+                return res.end(`multiplexer /${multiplexer} does not exist`)
+            }
+
+            // if the stream doesn't exist, send an error
+            let s = m.streams.get(stream)
+            if (!s) {
+                res.writeHead(400, {'Content-Type': 'text/plain'})
+                return res.end(`stream /${multiplexer}/${stream} does not exist`)
             }
 
             // remove this stream, and notify it
-            let s = m.streams.get(stream)
-            if (s) {
-                s()
-                m.streams.delete(stream)
-            } else m.streams.set(stream, 'abort')
+            m.streams.delete(stream)
+            s()
 
             // let the requester know we succeeded
             res.writeHead(200, { 'Multiplex-Version': '0.0.1' })
