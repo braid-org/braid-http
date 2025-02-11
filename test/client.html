@@ -204,16 +204,16 @@ runTest(
 )
 
 runTest(
-    "Test option to use MULTIPLEX header regardless.",
+    "Test option to use MULTIPLEX well-known url regardless.",
     async () => {
         var a = new AbortController()
-        var m = 'bad_mux_header'
+        var m = 'bad_mux_well_known_url'
         var s = Math.random().toString(36).slice(2)
         try {
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                use_multiplex_header: true,
+                use_multiplex_well_known_url: true,
                 headers: { multiplexer: `/${m}/${s}` },
                 retry: true
             })

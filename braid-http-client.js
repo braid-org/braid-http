@@ -848,20 +848,20 @@ async function multiplex_fetch(url, params) {
 
         var streams = new Map()
         var mux_error = null
-        var using_multiplex_header = false
+        var using_multiplex_well_known_url = false
 
         var mux_promise = (async () => {
             // attempt to establish a multiplexed connection
             try {
-                if (params.use_multiplex_header) throw 'skip to trying header'
+                if (params.use_multiplex_well_known_url) throw 'skip to trying header'
                 var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}, retry: true})
                 if (!r.ok || r.headers.get('Multiplex-Version') !== '0.0.1') throw 'bad'
             } catch (e) {
                 // some servers don't like custom methods,
                 // so let's try with a custom header
                 try {
-                    using_multiplex_header = true
-                    r = await braid_fetch(`${origin}/${multiplexer}`, {headers: {Multiplex: true, 'Multiplex-Version': '0.0.1'}, retry: true})
+                    using_multiplex_well_known_url = true
+                    r = await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}`, {headers: {'Multiplex-Version': '0.0.1'}, retry: true})
 
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
                     if (r.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected 0.0.1')
@@ -937,12 +937,10 @@ async function multiplex_fetch(url, params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    var r = await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {
-                        ...!using_multiplex_header && {method: 'MULTIPLEX'},
-                        headers: {
-                            ...using_multiplex_header && {Multiplex: true},
-                            'Multiplex-Version': '0.0.1'
-                        }, retry: true})
+                    var r = await braid_fetch(!using_multiplex_well_known_url ? `${origin}${params.headers.get('multiplexer')}` : `${origin}/.well-known/multiplex${params.headers.get('multiplexer')}`, {
+                        ...!using_multiplex_well_known_url && {method: 'MULTIPLEX'},
+                        headers: { 'Multiplex-Version': '0.0.1' }, retry: true
+                    })
 
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
                     if (r.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected 0.0.1')

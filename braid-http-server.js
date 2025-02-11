@@ -244,11 +244,11 @@ function braidify (req, res, next) {
 
     // Multiplexer stuff
     if (braidify.use_multiplexing &&
-        (req.method === 'MULTIPLEX' || req.headers.multiplex) &&
+        (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')) &&
         req.headers['multiplex-version'] === '0.0.1') {
 
         // parse the multiplexer id and stream id from the url
-        var [multiplexer, stream] = req.url.slice(1).split('/')
+        var [multiplexer, stream] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
 
         // if there's just a multiplexer, then we're creating a multiplexer..
         if (!stream) {
