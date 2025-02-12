@@ -182,7 +182,7 @@ runTest(
     true
 )
 
-waitForTests(() => braid_fetch.use_multiplexing = true)
+waitForTests(() => braid_fetch.multiplexer = {})
 
 runTest(
     `Test for "Incremental: ?1" header in multiplexer response.`,
@@ -221,7 +221,7 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                use_multiplex_well_known_url: true,
+                multiplexer: {via: 'well-known'},
                 headers: { multiplexer: `/${m}/${s}` },
                 retry: true
             })
@@ -282,7 +282,7 @@ runTest(
             method: 'POST',
             body: `
             void (async () => {
-                braid_fetch.use_multiplexing = true
+                braid_fetch.multiplexer = {}
 
                 var a1 = new AbortController()
                 var r1 = await braid_fetch('https://localhost:' + port + '/json', {
@@ -305,7 +305,7 @@ runTest(
                         res.end(JSON.stringify(u))
                         a1.abort()
                         a2.abort()
-                        braid_fetch.use_multiplexing = false
+                        braid_fetch.multiplex = false
                     }
                 })
             })()
@@ -805,7 +805,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-waitForTests(() => braid_fetch.use_multiplexing = false)
+waitForTests(() => braid_fetch.multiplexer = false)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 

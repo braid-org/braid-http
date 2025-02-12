@@ -308,12 +308,13 @@ async function braid_fetch (url, params = {}) {
 
                 // try multiplexing if either of these is true:
                 // - they explicitly want multiplexing
-                // - this is not the first subscription to the same origin
-                if (braid_fetch.use_multiplexing &&
+                // - we have already seen "after" subscriptions to the same origin
+                var mux_params = params.multiplexer ?? braid_fetch.multiplexer
+                if (mux_params &&
                     (params.headers.has('multiplexer') ||
                         (params.headers.has('subscribe') &&
-                            braid_fetch.subscription_counts?.[origin] > 1))) {
-                    res = await multiplex_fetch(url, params)
+                            braid_fetch.subscription_counts?.[origin] > (mux_params.after ?? 1)))) {
+                    res = await multiplex_fetch(url, params, mux_params)
                 } else {
                     res = await normal_fetch(url, params)
                 }
@@ -833,7 +834,7 @@ function parse_body (state) {
 // doesn't exist already, then performs a fetch providing the multiplexer header.
 // This tells the server to send the results to the given multiplexer.
 //
-async function multiplex_fetch(url, params) {
+async function multiplex_fetch(url, params, mux_params) {
     var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
 
     // the mux_key is the same as the origin, unless it is being overriden
@@ -852,7 +853,7 @@ async function multiplex_fetch(url, params) {
         var mux_promise = (async () => {
             // attempt to establish a multiplexed connection
             try {
-                if (params.use_multiplex_well_known_url) throw 'skip to trying header'
+                if (mux_params?.via && mux_params.via !== 'method') throw 'skip to trying header'
                 var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}, retry: true})
                 if (!r.ok || r.headers.get('Multiplex-Version') !== '0.0.1') throw 'bad'
             } catch (e) {
