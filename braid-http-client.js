@@ -848,7 +848,6 @@ async function multiplex_fetch(url, params) {
 
         var streams = new Map()
         var mux_error = null
-        var using_multiplex_well_known_url = false
 
         var mux_promise = (async () => {
             // attempt to establish a multiplexed connection
@@ -860,7 +859,6 @@ async function multiplex_fetch(url, params) {
                 // some servers don't like custom methods,
                 // so let's try with a custom header
                 try {
-                    using_multiplex_well_known_url = true
                     r = await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}`, {headers: {'Multiplex-Version': '0.0.1'}, retry: true})
 
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
@@ -937,8 +935,8 @@ async function multiplex_fetch(url, params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    var r = await braid_fetch(!using_multiplex_well_known_url ? `${origin}${params.headers.get('multiplexer')}` : `${origin}/.well-known/multiplex${params.headers.get('multiplexer')}`, {
-                        ...!using_multiplex_well_known_url && {method: 'MULTIPLEX'},
+                    var r = await braid_fetch(`${origin}/.well-known/multiplex${params.headers.get('multiplexer')}`, {
+                        method: 'DELETE',
                         headers: { 'Multiplex-Version': '0.0.1' }, retry: true
                     })
 

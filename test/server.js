@@ -124,6 +124,8 @@ require('http2').createSecureServer({
             // Send the current version
             if (!req.headers.skip_first) res.sendUpdate(test_update)
 
+            res.multiplexer?.write('\r\r\n\r\r')
+
             if (req.headers.send_unicode_version) res.sendUpdate({
                 version: ['hello🌍-0'],
                 body: 'hi'

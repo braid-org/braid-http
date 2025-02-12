@@ -164,17 +164,25 @@ function runTest(testName, testFunction, expectedResult) {
 
 addSectionHeader("Multiplexing Tests")
 
-braid_fetch.use_multiplexing = true
-
 runTest(
     "Basic MULTIPLEX method test.",
     async () => {
+        await fetch('/eval', {
+            method: 'POST',
+            body: `
+                braidify.use_multiplexing = true
+                res.end('ok')
+            `
+        })
+
         var r = await og_fetch('/abc123', {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
         var {done, value} = await r.body.getReader().read()
         return !!(r.ok && value)
     },
     true
 )
+
+waitForTests(() => braid_fetch.use_multiplexing = true)
 
 runTest(
     `Test for "Incremental: ?1" header in multiplexer response.`,
@@ -332,6 +340,34 @@ runTest(
         return x
     },
     JSON.stringify(test_update)
+)
+
+runTest(
+    "Test receiving multiplexed messages with whitespace between them.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { multiplexer: `/${m}/${s}` }
+        })
+        if (!r.multiplexer) throw new Error('not multiplexed')
+        var x = await new Promise(async done => {
+            r.subscribe(u => {
+
+                console.log('u = ', u)
+
+                u.body = u.body_text
+                if (u.version[0] === 'test1') done(u.version[0])
+            })
+        })
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+        a.abort()
+        return x
+    },
+    'test1'
 )
 
 runTest(
