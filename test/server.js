@@ -99,8 +99,7 @@ require('http2').createSecureServer({
             if ((await eval_func()) !== 'keep going') return
 
         // MULTIPLEX
-        if (res.writableEnded) return
-        if (is_mux) return
+        if (req.is_multiplexer) return
         if (req.url === '/kill_mux') {
             braidify.multiplexers?.get(req.headers.mux)?.res.end('AAAAA')
             return res.end(`ok`)

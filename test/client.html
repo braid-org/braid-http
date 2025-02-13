@@ -182,7 +182,7 @@ runTest(
     true
 )
 
-waitForTests(() => braid_fetch.multiplexer = {})
+waitForTests(() => braid_fetch.multiplex = {})
 
 runTest(
     `Test for "Incremental: ?1" header in multiplexer response.`,
@@ -194,7 +194,7 @@ runTest(
 )
 
 runTest(
-    "Test falling back to MULTIPLEX header if method doesn't work.",
+    "Test falling back to MULTIPLEX well-known url, if method doesn't work.",
     async () => {
         var a = new AbortController()
         var m = 'bad_mux_method'
@@ -202,7 +202,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/${m}/${s}` },
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
             retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
@@ -221,8 +221,8 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                multiplexer: {via: 'well-known'},
-                headers: { multiplexer: `/${m}/${s}` },
+                multiplex: {via: 'POST'},
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
                 retry: true
             })
         } catch (e) {
@@ -239,8 +239,8 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await og_fetch('/json', {headers: {Multiplexer: `/${m}/${s}`, 'Multiplex-Version': '0.0.1'}})
-        return r.headers.get('multiplexer') === `/${m}`
+        var r = await og_fetch('/json', {headers: {Multiplexer: `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': '0.0.1'}})
+        return r.headers.get('bad-multiplexer') === m
     },
     true
 )
@@ -282,29 +282,22 @@ runTest(
             method: 'POST',
             body: `
             void (async () => {
-                braid_fetch.multiplexer = {}
+                braid_fetch.multiplex = true
 
-                var a1 = new AbortController()
-                var r1 = await braid_fetch('https://localhost:' + port + '/json', {
-                    signal: a1.signal,
-                    subscribe: true,
-                }) 
-                
-                var a2 = new AbortController()
-                var r2 = await braid_fetch('https://localhost:' + port + '/json', {
-                    signal: a2.signal,
+                var a = new AbortController()
+                var r = await braid_fetch('https://localhost:' + port + '/json', {
+                    signal: a.signal,
                     subscribe: true,
                     retry: true
                 })
 
-                if (!r2.multiplexer) return res.end('not multiplexer!?')
+                if (!r.multiplexer) return res.end('not multiplexer!?')
 
-                r2.subscribe(u => {
+                r.subscribe(u => {
                     u.body = u.body_text
                     if (!res.writableEnded) {
                         res.end(JSON.stringify(u))
-                        a1.abort()
-                        a2.abort()
+                        a.abort()
                         braid_fetch.multiplex = false
                     }
                 })
@@ -314,7 +307,7 @@ runTest(
         return await r.text()
     },
     JSON.stringify(test_update)
-);
+)
 
 runTest(
     "Test receiving multiplexed message.",
@@ -326,7 +319,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                multiplexer: `/${m}/${s}`
+                multiplexer: `/.well-known/multiplex/${m}/${s}`
             }
         })
         if (!r.multiplexer) throw new Error('not multiplexed')
@@ -351,7 +344,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/${m}/${s}` }
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
         })
         if (!r.multiplexer) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
@@ -413,7 +406,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                multiplexer: `/${m}/${s}`
+                multiplexer: `/.well-known/multiplex/${m}/${s}`
             }
         })
         if (!r.multiplexer) throw new Error('not multiplexed')
@@ -441,7 +434,7 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/${m}/${s}` },
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     setTimeout(() => {
                         res.setHeader('test', '42')
@@ -465,7 +458,7 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { multiplexer: `/${m}/${s}` },
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
                 retry: { onRes: () => count++ }
             })
             if (!r.multiplexer) throw new Error('not multiplexed')
@@ -525,7 +518,7 @@ runTest(
                     signal: a.signal,
                     headers: {
                         giveup: true,
-                        multiplexer: `/${m}/${s}`
+                        multiplexer: `/.well-known/multiplex/${m}/${s}`
                     }
                 })
                 res.subscribe(
@@ -565,7 +558,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/${m}/${s}` },
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
             retry: true
         })
         if (!r.multiplexer) throw new Error('not multiplexed')
@@ -584,7 +577,7 @@ runTest(
         var r = await fetch('/eval', {
             method: 'POST',
             signal: a.signal,
-            headers: { multiplexer: `/${m}/${s}` },
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
             body: `
                 res.setHeader('test', '42')
                 res.startSubscription({
@@ -619,7 +612,7 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { multiplexer: `/${m}/${s}` }
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
             })
         } catch (e) { return e.message }
         return 'hm..'
@@ -636,7 +629,7 @@ runTest(
         try {
             var r = await fetch('/500', {
                 signal: a.signal,
-                headers: { multiplexer: `/${m}/${s}` },
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
             })
         } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
         return 'hm..'
@@ -649,12 +642,12 @@ runTest(
     async () => {
         return await new Promise(async done => {
             window.addEventListener('unhandledrejection', function (event) {
-                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 500') done('saw the error we wanted')
+                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 422') done('saw the error we wanted')
             })
 
             var m = Math.random().toString(36).slice(2)
             var s = 'bad_stream'
-            fetch('/500', { headers: { multiplexer: `/${m}/${s}` } })
+            fetch('/500', { headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` } })
         })
     },
     'saw the error we wanted'
@@ -670,7 +663,7 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/${m}/${s}` },
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     var m = braidify.multiplexers?.get(${JSON.stringify(m)})
                     m.res.write('10 bytes for stream ${s}\\r\\na b\\r\\na b\\r\\n')
@@ -745,7 +738,7 @@ runTest(
             var r = await fetch('/eval_pre_braidify', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/${m}/${s}` },
+                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
@@ -765,12 +758,12 @@ runTest(
         var s2 = Math.random().toString(36).slice(2)
         await fetch('/json', {
             subscribe: true,
-            headers: { multiplexer: `/${m}/${s2}` }
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s2}` }
         })
         var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
         return r.status
     },
-    '400'
+    '422'
 )
 
 waitForTests(() => {})
@@ -792,7 +785,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/${m}/${s}` }
+            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
         })
         return await new Promise(done => {
             r.subscribe(u => {
@@ -805,7 +798,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-waitForTests(() => braid_fetch.multiplexer = false)
+waitForTests(() => braid_fetch.multiplex = false)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 
@@ -826,7 +819,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_arraybuffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_body_arraybuffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.body)
@@ -844,7 +837,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_body: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.body)
@@ -862,7 +855,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_blob: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_body_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.body)
@@ -880,7 +873,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_body_buffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_body_buffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.body)
@@ -898,7 +891,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_arraybuffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch_arraybuffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content)
@@ -916,7 +909,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content)
@@ -934,7 +927,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_blob: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content)
@@ -952,7 +945,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patch_buffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch_buffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content)
@@ -970,7 +963,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_arraybuffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches_arraybuffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(new Blob([update.patches[0].content, update.patches[1].content]))
@@ -990,7 +983,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(new Blob([update.patches[0].content, update.patches[1].content]))
@@ -1010,7 +1003,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_blob: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(new Blob([update.patches[0].content, update.patches[1].content]))
@@ -1030,7 +1023,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true, send_binary_patches_buffer: true, giveup: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches_buffer: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(new Blob([update.patches[0].content, update.patches[1].content]))
@@ -1131,7 +1124,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content instanceof Uint8Array)
@@ -1149,7 +1142,7 @@ runTest(
     async () => {
         let a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, signal: a.signal, headers: {skip_first: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content_text)
@@ -1232,7 +1225,7 @@ runTest(
     "Handle client-side undefined body_text without exceptions",
     async () => {
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, headers: {skip_first: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, headers: {skip_first: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         try {
@@ -1255,7 +1248,7 @@ runTest(
     async () => {
         return await new Promise((resolve, reject) => {
             let a = new AbortController()
-            fetch('/json', {subscribe: true, retry: true, signal: a.signal}).then(
+            fetch('/json', {subscribe: true, multiplex: false, retry: true, signal: a.signal}).then(
                 res => res.subscribe(
                     update => { throw Error('My Error') },
                     e => resolve(e.message)
@@ -1274,7 +1267,7 @@ runTest(
     async () => {
         return await new Promise((resolve, reject) => {
             let a = new AbortController()
-            fetch('/json', {subscribe: true, retry: true, signal: a.signal}).then(
+            fetch('/json', {subscribe: true, multiplex: false, retry: true, signal: a.signal}).then(
                 res => res.subscribe(
                     async update => { throw Error('My Error') },
                     e => resolve(e.message)
@@ -1350,7 +1343,7 @@ runTest(
     async () => {
         let updates = []
         await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, headers: {charset: true}}).then(
+            fetch('/json', {subscribe: true, multiplex: false, headers: {charset: true}}).then(
                 res => res.subscribe(
                     (update) => {
                         if (update.body != null) update.body = update.body_text
@@ -1423,6 +1416,7 @@ runTest(
             let s = ''
             let x = await fetch('/json', {
                 subscribe: true,
+                multiplex: false, 
                 headers: {giveup: true},
                 onBytes: (x) => {
                     s += new TextDecoder('utf-8').decode(x)
@@ -1455,7 +1449,7 @@ runTest(
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
             let st = Date.now()
-            fetch('/json', {subscribe: true, heartbeats: 0.5, signal: a.signal, onBytes: () => {
+            fetch('/json', {subscribe: true, multiplex: false, heartbeats: 0.5, signal: a.signal, onBytes: () => {
                 if (Date.now() - st > 500) resolve('got beat!')
             }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
         })
@@ -1472,7 +1466,7 @@ runTest(
         let x = await new Promise((resolve, reject) => {
             let st = Date.now()
             setTimeout(() => resolve('did not get!'), 1000)
-            fetch('/json', {subscribe: true, signal: a.signal, onBytes: () => {
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, onBytes: () => {
                 if (Date.now() - st > 500) resolve('got beat!')
             }}).then(res => res.subscribe(() => {}, reject)).catch(reject)
         })
@@ -1510,7 +1504,7 @@ runTest(
         let a = new AbortController()
         let x = await new Promise((resolve, reject) => {
             setTimeout(() => resolve("didn't restart"), 1000);
-            fetch('/json', {heartbeats: 0.5, subscribe: true, signal: a.signal, retry: {
+            fetch('/json', {heartbeats: 0.5, subscribe: true, multiplex: false, signal: a.signal, retry: {
                 onRes: () => {
                     res_count++
                     if (res_count > 1) {
@@ -1532,7 +1526,7 @@ runTest(
     async () => {
         let updates = []
         await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true}).then(
+            fetch('/json', {subscribe: true, multiplex: false}).then(
                 res => res.subscribe(
                     update => {
                         if (update.body != null) update.body = update.body_text
@@ -1558,7 +1552,7 @@ runTest(
         let updates = []
         await new Promise(async (resolve, reject) => {
             try {
-                (await fetch('/json', {subscribe: true})).subscribe(
+                (await fetch('/json', {subscribe: true, multiplex: false})).subscribe(
                     update => {
                         if (update.body != null) update.body = update.body_text
                         if (update.patches) for (let p of update.patches) p.content = p.content_text
@@ -1584,7 +1578,7 @@ runTest(
     "Subscribe and receive multiple updates, using 'for await'",
     async () => {
         let updates = []
-        for await (var update of (await fetch('/json', {subscribe: true})).subscription) {
+        for await (var update of (await fetch('/json', {subscribe: true, multiplex: false})).subscription) {
             if (update.body != null) update.body = update.body_text
             if (update.patches) for (let p of update.patches) p.content = p.content_text
             updates.push(JSON.stringify(update))
@@ -1667,7 +1661,7 @@ runTest(
             ;(new Promise((resolve, reject) => {
                 https.get(
                     'https://localhost:' + port + '/json',
-                    {subscribe: true, rejectUnauthorized: false},
+                    {subscribe: true, multiplex: false, rejectUnauthorized: false},
                     (res) => {
                         res.on('update', (update) => {
                             if (update.body != null) update.body = update.body_text
@@ -1873,7 +1867,7 @@ runTest(
             ;(new Promise(async (resolve, reject) => {
                 try {
                     (await braid_fetch('https://localhost:' + port + '/json',
-                        {subscribe: true})).subscribe(
+                        {subscribe: true, multiplex: false})).subscribe(
                         update => {
                             if (update.body != null) update.body = update.body_text
                             if (update.patches) for (let p of update.patches) p.content = p.content_text
@@ -2073,7 +2067,7 @@ runTest(
                     count++
                     if (count === 2) fail('retried')
                 }
-            }, subscribe: true, signal: a.signal })
+            }, subscribe: true, multiplex: false, signal: a.signal })
             res.subscribe((u) => {}, done)
         })
     },
@@ -2146,6 +2140,7 @@ runTest(
                 signal: a.signal,
                 retry: true,
                 subscribe: true,
+                multiplex: false,
             })
             await new Promise((done, fail) => {
                 setTimeout(() => a.abort(), 30)
@@ -2172,6 +2167,7 @@ runTest(
                     retry: true,
                     signal: a.signal,
                     subscribe: true,
+                    multiplex: false,
                 })
             } catch (e) {
                 fail(e)
@@ -2222,6 +2218,7 @@ runTest(
                 let res = await fetch("/json", {
                     retry: { onRes: () => onRes_count++ },
                     subscribe: true,
+                    multiplex: false,
                     headers: { giveup: true },
                     signal: a.signal,
                 })
@@ -2251,7 +2248,7 @@ runTest(
     async () => {
         let updates = []
         let a = new AbortController()
-        for await (var update of (await fetch('/json', {retry: true, signal: a.signal, subscribe: true, headers: {giveup: true}})).subscription) {
+        for await (var update of (await fetch('/json', {retry: true, signal: a.signal, subscribe: true, multiplex: false, headers: {giveup: true}})).subscription) {
             if (update.body != null) update.body = update.body_text
             updates.push(JSON.stringify(update))
 
@@ -2271,7 +2268,7 @@ runTest(
         let giveup_completely = Math.random().toString(36).slice(2)
         let updates = []
         return await new Promise(async (done, fail) => {
-            let res = await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})
+            let res = await fetch('/json', {retry: true, subscribe: true, multiplex: false, headers: {giveup_completely}, multiplex: false})
             res.subscribe((update) => {
                 if (update.body != null) update.body = update.body_text
                 updates.push(JSON.stringify(update))
@@ -2289,7 +2286,7 @@ runTest(
         let giveup_completely = Math.random().toString(36).slice(2)
         let updates = []
         try {
-            for await (var update of (await fetch('/json', {retry: true, subscribe: true, headers: {giveup_completely}})).subscription) {
+            for await (var update of (await fetch('/json', {retry: true, subscribe: true, multiplex: false, headers: {giveup_completely}})).subscription) {
                 if (update.body != null) update.body = update.body_text
                 updates.push(JSON.stringify(update))
             }
@@ -2319,7 +2316,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let x = await new Promise(async (done, fail) => {
-            let x = await fetch('/binary', {subscribe: true, signal: a.signal})
+            let x = await fetch('/binary', {subscribe: true, multiplex: false, signal: a.signal})
             x.subscribe(done, fail)
         })
         a.abort()

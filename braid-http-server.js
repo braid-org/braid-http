@@ -247,6 +247,14 @@ function braidify (req, res, next) {
         (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')) &&
         req.headers['multiplex-version'] === '0.0.1') {
 
+        // let the caller know we're handling things
+        req.is_multiplexer = res.is_multiplexer = true
+
+        // free the cors
+        res.setHeader("Access-Control-Allow-Origin", "*")
+        res.setHeader("Access-Control-Allow-Methods", "*")
+        res.setHeader("Access-Control-Allow-Headers", "*")
+
         // parse the multiplexer id and stream id from the url
         var [multiplexer, stream] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
 
@@ -265,7 +273,7 @@ function braidify (req, res, next) {
 
             // keep the connection open,
             // so people can send multiplexed data to it
-            res.writeHead(200, {
+            res.writeHead(200, 'OK', {
                 'Multiplex-Version': '0.0.1',
                 'Incremental': '?1',
                 'Cache-Control': 'no-cache',
@@ -282,15 +290,15 @@ function braidify (req, res, next) {
             // if the multiplexer doesn't exist, send an error
             var m = braidify.multiplexers?.get(multiplexer)
             if (!m) {
-                res.writeHead(400, {'Content-Type': 'text/plain'})
-                return res.end(`multiplexer /${multiplexer} does not exist`)
+                res.writeHead(422, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
+                return res.end(`multiplexer ${multiplexer} does not exist`)
             }
 
             // if the stream doesn't exist, send an error
             let s = m.streams.get(stream)
             if (!s) {
-                res.writeHead(400, {'Content-Type': 'text/plain'})
-                return res.end(`stream /${multiplexer}/${stream} does not exist`)
+                res.writeHead(422, 'Stream no exist', {'Bad-Stream': stream})
+                return res.end(`stream ${stream} does not exist`)
             }
 
             // remove this stream, and notify it
@@ -298,7 +306,7 @@ function braidify (req, res, next) {
             s()
 
             // let the requester know we succeeded
-            res.writeHead(200, { 'Multiplex-Version': '0.0.1' })
+            res.writeHead(200, 'OK', { 'Multiplex-Version': '0.0.1' })
             return res.end(``)
         }
     }
@@ -310,23 +318,54 @@ function braidify (req, res, next) {
         req.headers.multiplexer &&
         req.headers['multiplex-version'] === '0.0.1') {
 
-        // parse the multiplexer id and stream id from the url
-        var [multiplexer, stream] = req.headers.multiplexer.slice(1).split('/')
+        // parse the multiplexer id and stream id from the header
+        var [multiplexer, stream] = req.headers.multiplexer.split('/').slice(3)
 
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
         if (!m) {
-            // 422 = Unprocessable Entity (but good syntax!)
-            res.writeHead(422, {Multiplexer: `/${multiplexer}`})
-            res.end(`multiplexer ${multiplexer} does not exist`)
+            res.writeHead(422, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
+            return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
         // let the requester know we've multiplexed their response
-        res.writeHead(293, {
-            multiplexer: req.headers.multiplexer,
-            'Multiplex-Version': '0.0.1'
-        })
-        res.end('Ok.')
+        var og_stream = res.stream
+        var og_socket = res.socket
+        var og_res_end = () => {
+            og_res_end = null
+            if (!braidify.cors_headers) braidify.cors_headers = new Set([
+                'Access-Control-Allow-Origin',
+                'Access-Control-Allow-Methods',
+                'Access-Control-Allow-Headers',
+                'Access-Control-Allow-Credentials',
+                'Access-Control-Expose-Headers',
+                'Access-Control-Max-Age'
+            ].map(x => x.toLowerCase()))
+
+            // copy any CORS headers from the user
+            var cors_headers = Object.entries(res.getHeaders()).
+                filter(x => braidify.cors_headers.has(x.key))
+
+            if (og_stream) {
+                og_stream.respond({
+                    ':status': 293,
+                    Multiplexer: req.headers.multiplexer,
+                    'Multiplex-Version': '0.0.1',
+                    ...Object.fromEntries(cors_headers)
+                })
+                og_stream.write('Ok.')
+                og_stream.end()
+            } else {
+                og_socket.write('HTTP/1.1 293 Responded via multiplexer\r\n')
+                og_socket.write(`Multiplexer: ${req.headers.multiplexer}\r\n`)
+                og_socket.write(`Multiplex-Version: 0.0.1\r\n`)
+                cors_headers.forEach(([key, value]) =>
+                    og_socket.write(`${key}: ${value}\r\n`))
+                og_socket.write('\r\n')
+                og_socket.write('Ok.')
+                og_socket.end()
+            }
+        }
 
         // and now set things up so that future use of the
         // response object forwards stuff into the multiplexer
@@ -340,6 +379,8 @@ function braidify (req, res, next) {
             }
 
             _write(chunk, encoding, callback) {
+                og_res_end?.()
+
                 try {
                     var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
                     this.multiplexer.res.write(`${len} bytes for stream ${this.stream}\r\n`)
@@ -365,7 +406,10 @@ function braidify (req, res, next) {
 
         // register a handler for when the multiplexer closes,
         // to close our fake response stream
-        m.streams.set(stream, () => res2.destroy())
+        m.streams.set(stream, () => {
+            og_res_end?.()
+            res2.destroy()
+        })
 
         // when our fake response is done,
         // we want to send a special message to the multiplexer saying so
@@ -383,22 +427,6 @@ function braidify (req, res, next) {
             if (
                 // just touching these seems to cause issues
                 key === '_events' || key === 'emit'
-
-                // because we called res.end above,
-                // in http 1, node is going to wait
-                // for the event loop to fire again,
-                // and then call these keys:
-                // "socket" to set it to null,
-                // "detachSocket" to do that,
-                // "_closed" to determine if the socket is closed;
-                // we're going to override that to say true,
-                // we do that below..
-                // we do it so we don't need to add "destroyed" here,
-                // because if _closed was false,
-                // it would try to set destroyed to true
-                || key === 'socket'
-                || key === 'detachSocket'
-                || key === '_closed'
 
                 // adding these lines gets rid of some deprecation warnings.. keep?
                 || key === '_headers'
@@ -418,21 +446,8 @@ function braidify (req, res, next) {
             }
         }
 
-        // node http 1 has the issue that when we call res.end,
-        // which we do above, not everything happens right away..
-        // in the next js event loop tick, it is going to
-        // try to tear down the stream,
-        // but we have proxied all the properties,
-        // so it would tear down our new res2 stream..
-        // to prevent that, we sacrafice this property
-        // (which the end-user hopefully won't be accessing anyway)
-        // to make the http 1 tear down code think its job is complete already,
-        // otherwise it would want to set "destroyed",
-        // and we would need to not proxy that key as well
-        res._closed = true
-
         // this is provided so code can know if the response has been multiplexed
-        res.multiplexer = res2
+        res.multiplexer = m.res
     }
 
     // Add the braidly request/response helper methods

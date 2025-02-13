@@ -306,15 +306,14 @@ async function braid_fetch (url, params = {}) {
 
                 // Now we run the original fetch....
 
-                // try multiplexing if either of these is true:
-                // - they explicitly want multiplexing
-                // - we have already seen "after" subscriptions to the same origin
-                var mux_params = params.multiplexer ?? braid_fetch.multiplexer
-                if (mux_params &&
+                // try multiplexing if the multiplex flag is set, and conditions are met
+                var mux_params = params.multiplex ?? braid_fetch.multiplex
+                if (mux_params !== false &&
                     (params.headers.has('multiplexer') ||
-                        (params.headers.has('subscribe') &&
-                            braid_fetch.subscription_counts?.[origin] > (mux_params.after ?? 1)))) {
-                    res = await multiplex_fetch(url, params, mux_params)
+                    (params.headers.has('subscribe') &&
+                        braid_fetch.subscription_counts?.[origin] >
+                            (!mux_params ? 1 : (mux_params.after ?? 0))))) {
+                    res = await multiplex_fetch(url, params, mux_params?.via === 'POST')
                 } else {
                     res = await normal_fetch(url, params)
                 }
@@ -828,24 +827,18 @@ function parse_body (state) {
 
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
-//
-// This function assumes a header in params called 'multiplexer' with a value
-// that looks like /multiplexer_id/stream_id. It creates a multiplexer if it
-// doesn't exist already, then performs a fetch providing the multiplexer header.
-// This tells the server to send the results to the given multiplexer.
-//
-async function multiplex_fetch(url, params, mux_params) {
+async function multiplex_fetch(url, params, skip_multiplex_method) {
     var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
 
     // the mux_key is the same as the origin, unless it is being overriden
     // (the overriding is done by the tests)
-    var mux_key = params.headers.get('multiplexer')?.split('/')[1] ?? origin
+    var mux_key = params.headers.get('multiplexer')?.split('/')[3] ?? origin
 
     // create a new multiplexer if it doesn't exist for this origin
     if (!multiplex_fetch.multiplexers) multiplex_fetch.multiplexers = {}
     if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] = (async () => {
         // make up a new multiplexer id (unless it is being overriden)
-        var multiplexer = params.headers.get('multiplexer')?.split('/')[1] ?? Math.random().toString(36).slice(2)
+        var multiplexer = params.headers.get('multiplexer')?.split('/')[3] ?? Math.random().toString(36).slice(2)
 
         var streams = new Map()
         var mux_error = null
@@ -853,14 +846,14 @@ async function multiplex_fetch(url, params, mux_params) {
         var mux_promise = (async () => {
             // attempt to establish a multiplexed connection
             try {
-                if (mux_params?.via && mux_params.via !== 'method') throw 'skip to trying header'
+                if (skip_multiplex_method) throw 'skip multiplex method'
                 var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}, retry: true})
                 if (!r.ok || r.headers.get('Multiplex-Version') !== '0.0.1') throw 'bad'
             } catch (e) {
                 // some servers don't like custom methods,
                 // so let's try with a custom header
                 try {
-                    r = await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}`, {headers: {'Multiplex-Version': '0.0.1'}, retry: true})
+                    r = await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}`, {method: 'POST', headers: {'Multiplex-Version': '0.0.1'}, retry: true})
 
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
                     if (r.headers.get('Multiplex-Version') !== '0.0.1') throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected 0.0.1')
@@ -893,11 +886,11 @@ async function multiplex_fetch(url, params, mux_params) {
                 return await normal_fetch(url, params)
 
             // make up a new stream id (unless it is being overriden)
-            var stream = params.headers.get('multiplexer')?.split('/')[2] ?? Math.random().toString(36).slice(2)
+            var stream = params.headers.get('multiplexer')?.split('/')[4] ?? Math.random().toString(36).slice(2)
 
             // add the multiplexer header without affecting the underlying params
             var mux_headers = new Headers(params.headers)
-            mux_headers.set('Multiplexer', `/${multiplexer}/${stream}`)
+            mux_headers.set('Multiplexer', `/.well-known/multiplex/${multiplexer}/${stream}`)
             mux_headers.set('Multiplex-Version', '0.0.1')
             params = {...params, headers: mux_headers}
 
@@ -936,7 +929,7 @@ async function multiplex_fetch(url, params, mux_params) {
                 stream_error = e
                 bytes_available()
                 try {
-                    var r = await braid_fetch(`${origin}/.well-known/multiplex${params.headers.get('multiplexer')}`, {
+                    var r = await braid_fetch(`${origin}${params.headers.get('multiplexer')}`, {
                         method: 'DELETE',
                         headers: { 'Multiplex-Version': '0.0.1' }, retry: true
                     })
