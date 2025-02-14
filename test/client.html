@@ -642,7 +642,7 @@ runTest(
     async () => {
         return await new Promise(async done => {
             window.addEventListener('unhandledrejection', function (event) {
-                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 422') done('saw the error we wanted')
+                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 404') done('saw the error we wanted')
             })
 
             var m = Math.random().toString(36).slice(2)
@@ -763,7 +763,7 @@ runTest(
         var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
         return r.status
     },
-    '422'
+    '404'
 )
 
 waitForTests(() => {})

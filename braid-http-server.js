@@ -290,14 +290,14 @@ function braidify (req, res, next) {
             // if the multiplexer doesn't exist, send an error
             var m = braidify.multiplexers?.get(multiplexer)
             if (!m) {
-                res.writeHead(422, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
+                res.writeHead(404, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
                 return res.end(`multiplexer ${multiplexer} does not exist`)
             }
 
             // if the stream doesn't exist, send an error
             let s = m.streams.get(stream)
             if (!s) {
-                res.writeHead(422, 'Stream no exist', {'Bad-Stream': stream})
+                res.writeHead(404, 'Stream no exist', {'Bad-Stream': stream})
                 return res.end(`stream ${stream} does not exist`)
             }
 
@@ -324,7 +324,7 @@ function braidify (req, res, next) {
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
         if (!m) {
-            res.writeHead(422, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
+            res.writeHead(424, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
             return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 

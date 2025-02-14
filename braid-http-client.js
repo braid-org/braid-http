@@ -947,7 +947,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
             try {
                 var res = await normal_fetch(url, params)
 
-                if (res.status === 422 && !(await promise_done(mux_promise))) {
+                if (res.status === 424 && !(await promise_done(mux_promise))) {
                     // this error will trigger a retry if the user is using that option
                     throw new Error('multiplexer not yet connected')
                 }
