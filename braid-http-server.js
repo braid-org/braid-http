@@ -343,7 +343,7 @@ function braidify (req, res, next) {
             ].map(x => x.toLowerCase()))
 
             // copy any CORS headers from the user
-            var cors_headers = Object.entries(res.getHeaders()).
+            var cors_headers = Object.entries(res2.getHeaders()).
                 filter(x => braidify.cors_headers.has(x.key))
 
             if (og_stream) {
@@ -427,6 +427,10 @@ function braidify (req, res, next) {
             if (
                 // just touching these seems to cause issues
                 key === '_events' || key === 'emit'
+
+                // empirically, on an http1 server,
+                // this causes res2 to close prematurely
+                || key === 'destroyed'
 
                 // adding these lines gets rid of some deprecation warnings.. keep?
                 || key === '_headers'
