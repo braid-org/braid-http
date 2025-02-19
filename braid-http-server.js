@@ -243,9 +243,10 @@ function braidify (req, res, next) {
     req.subscribe = subscribe
 
     // Multiplexer stuff
-    if (braidify.use_multiplexing &&
+    var multiplex_version = '1.0'
+    if ((braidify.enable_multiplex ?? true) &&
         (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')) &&
-        req.headers['multiplex-version'] === '0.0.1') {
+        req.headers['multiplex-version'] === multiplex_version) {
 
         // let the caller know we're handling things
         req.is_multiplexer = res.is_multiplexer = true
@@ -262,6 +263,17 @@ function braidify (req, res, next) {
         if (!stream) {
             // maintain a Map of all the multiplexers
             if (!braidify.multiplexers) braidify.multiplexers = new Map()
+
+            // if this multiplexer already exists, respond with an error
+            if (braidify.multiplexers.has(multiplexer)) {
+                res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
+                return res.end(JSON.stringify({
+                    error: 'Multiplexer already exists',
+                    message: `Cannot create duplicate multiplexer with ID '${multiplexer}'`,
+                    details: 'This multiplexer ID must be unique'
+                }))
+            }
+
             braidify.multiplexers.set(multiplexer, {streams: new Map(), res})
 
             // when the response closes,
@@ -274,7 +286,7 @@ function braidify (req, res, next) {
             // keep the connection open,
             // so people can send multiplexed data to it
             res.writeHead(200, 'OK', {
-                'Multiplex-Version': '0.0.1',
+                'Multiplex-Version': multiplex_version,
                 'Incremental': '?1',
                 'Cache-Control': 'no-cache',
                 'X-Accel-Buffering': 'no',
@@ -306,7 +318,7 @@ function braidify (req, res, next) {
             s()
 
             // let the requester know we succeeded
-            res.writeHead(200, 'OK', { 'Multiplex-Version': '0.0.1' })
+            res.writeHead(200, 'OK', { 'Multiplex-Version': multiplex_version })
             return res.end(``)
         }
     }
@@ -314,12 +326,12 @@ function braidify (req, res, next) {
     // a multiplexer header means the user wants to send the
     // results of this request to the provided multiplexer,
     // tagged with the given stream id
-    if (braidify.use_multiplexing &&
-        req.headers.multiplexer &&
-        req.headers['multiplex-version'] === '0.0.1') {
+    if ((braidify.enable_multiplex ?? true) &&
+        req.headers['multiplex-at'] &&
+        req.headers['multiplex-version'] === multiplex_version) {
 
         // parse the multiplexer id and stream id from the header
-        var [multiplexer, stream] = req.headers.multiplexer.split('/').slice(3)
+        var [multiplexer, stream] = req.headers['multiplex-at'].split('/').slice(3)
 
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
@@ -349,16 +361,16 @@ function braidify (req, res, next) {
             if (og_stream) {
                 og_stream.respond({
                     ':status': 293,
-                    Multiplexer: req.headers.multiplexer,
-                    'Multiplex-Version': '0.0.1',
+                    'Multiplex-At': req.headers['multiplex-at'],
+                    'Multiplex-Version': multiplex_version,
                     ...Object.fromEntries(cors_headers)
                 })
                 og_stream.write('Ok.')
                 og_stream.end()
             } else {
                 og_socket.write('HTTP/1.1 293 Responded via multiplexer\r\n')
-                og_socket.write(`Multiplexer: ${req.headers.multiplexer}\r\n`)
-                og_socket.write(`Multiplex-Version: 0.0.1\r\n`)
+                og_socket.write(`Multiplex-At: ${req.headers['multiplex-at']}\r\n`)
+                og_socket.write(`Multiplex-Version: ${multiplex_version}\r\n`)
                 cors_headers.forEach(([key, value]) =>
                     og_socket.write(`${key}: ${value}\r\n`))
                 og_socket.write('\r\n')
@@ -383,11 +395,11 @@ function braidify (req, res, next) {
 
                 try {
                     var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
-                    this.multiplexer.res.write(`${len} bytes for stream ${this.stream}\r\n`)
+                    this.multiplexer.res.write(`${len} bytes for request ${this.stream}\r\n`)
                     this.multiplexer.res.write(chunk, encoding, callback)
 
                     // console.log(`wrote:`)
-                    // console.log(`${len} bytes for stream /${this.stream}\r\n`)
+                    // console.log(`${len} bytes for request /${this.stream}\r\n`)
                     // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
                     // else console.log('STRING?: ' + chunk)
 

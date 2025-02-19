@@ -211,10 +211,10 @@ require('http2').createSecureServer({
                 ]
             })
 
-            if (req.headers.giveup) return res.end()
+            if (req.headers.giveup) return setTimeout(() => res.end(), 300)
             if (req.headers.giveup_completely) {
                 giveup_completely_set[req.headers.giveup_completely] = true
-                return res.end()
+                return setTimeout(() => res.end(), 300)
             }
 
             if (req.subscribe) {

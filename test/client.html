@@ -164,6 +164,8 @@ function runTest(testName, testFunction, expectedResult) {
 
 addSectionHeader("Multiplexing Tests")
 
+var multiplex_version = '1.0'
+
 runTest(
     "Basic MULTIPLEX method test.",
     async () => {
@@ -175,19 +177,21 @@ runTest(
             `
         })
 
-        var r = await og_fetch('/abc123', {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
+        var m = Math.random().toString(36).slice(2)
+        var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         var {done, value} = await r.body.getReader().read()
         return !!(r.ok && value)
     },
     true
 )
 
-waitForTests(() => braid_fetch.multiplex = {})
+waitForTests(() => braid_fetch.enable_multiplex = {})
 
 runTest(
     `Test for "Incremental: ?1" header in multiplexer response.`,
     async () => {
-        var r = await og_fetch('/abc123', {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
+        var m = Math.random().toString(36).slice(2)
+        var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         return r.headers.get('Incremental')
     },
     '?1'
@@ -202,11 +206,11 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
             retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return '' + !!r.multiplexer
+        return '' + !!r.is_multiplexed
     },
     'true'
 )
@@ -222,7 +226,7 @@ runTest(
                 signal: a.signal,
                 subscribe: true,
                 multiplex: {via: 'POST'},
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
                 retry: true
             })
         } catch (e) {
@@ -239,7 +243,7 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await og_fetch('/json', {headers: {Multiplexer: `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': '0.0.1'}})
+        var r = await og_fetch('/json', {headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
         return r.headers.get('bad-multiplexer') === m
     },
     true
@@ -260,7 +264,7 @@ runTest(
             subscribe: true,
         })
 
-        if (!r2.multiplexer) throw new Error('not multiplexed')
+        if (!r2.is_multiplexed) throw new Error('not multiplexed')
 
         let ret = await new Promise(done => r2.subscribe(u => {
             u.body = u.body_text
@@ -282,7 +286,7 @@ runTest(
             method: 'POST',
             body: `
             void (async () => {
-                braid_fetch.multiplex = true
+                braid_fetch.enable_multiplex = true
 
                 var a = new AbortController()
                 var r = await braid_fetch('https://localhost:' + port + '/json', {
@@ -291,14 +295,14 @@ runTest(
                     retry: true
                 })
 
-                if (!r.multiplexer) return res.end('not multiplexer!?')
+                if (!r.is_multiplexed) return res.end('not multiplexer!?')
 
                 r.subscribe(u => {
                     u.body = u.body_text
                     if (!res.writableEnded) {
                         res.end(JSON.stringify(u))
                         a.abort()
-                        braid_fetch.multiplex = false
+                        braid_fetch.enable_multiplex = false
                     }
                 })
             })()
@@ -319,10 +323,10 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                multiplexer: `/.well-known/multiplex/${m}/${s}`
+                'Multiplex-At': `/.well-known/multiplex/${m}/${s}`
             }
         })
-        if (!r.multiplexer) throw new Error('not multiplexed')
+        if (!r.is_multiplexed) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
                 u.body = u.body_text
@@ -344,9 +348,9 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
         })
-        if (!r.multiplexer) throw new Error('not multiplexed')
+        if (!r.is_multiplexed) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
 
@@ -379,7 +383,7 @@ runTest(
             multiplex: true,
         })
 
-        if (!r2.multiplexer) throw new Error('not multiplexed')
+        if (!r2.is_multiplexed) throw new Error('not multiplexed')
 
         var x = await new Promise(done => {
             r2.subscribe(u => {
@@ -406,10 +410,10 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                multiplexer: `/.well-known/multiplex/${m}/${s}`
+                'Multiplex-At': `/.well-known/multiplex/${m}/${s}`
             }
         })
-        if (!r.multiplexer) throw new Error('not multiplexed')
+        if (!r.is_multiplexed) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
             }, e => done('multiplex stream ended'))
@@ -434,7 +438,7 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     setTimeout(() => {
                         res.setHeader('test', '42')
@@ -458,10 +462,10 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
                 retry: { onRes: () => count++ }
             })
-            if (!r.multiplexer) throw new Error('not multiplexed')
+            if (!r.is_multiplexed) throw new Error('not multiplexed')
             r.subscribe(u => {
                 if (count === 2) {
                     u.body = u.body_text
@@ -510,15 +514,13 @@ runTest(
         try {
             await new Promise(async (done, fail) => {
                 var a = new AbortController()
-                var m = Math.random().toString(36).slice(2)
-                var s = Math.random().toString(36).slice(2)
                 var res = await fetch("/json", {
                     retry: { onRes: () => onRes_count++ },
                     subscribe: true,
+                    multiplex: true,
                     signal: a.signal,
                     headers: {
                         giveup: true,
-                        multiplexer: `/.well-known/multiplex/${m}/${s}`
                     }
                 })
                 res.subscribe(
@@ -558,10 +560,10 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
             retry: true
         })
-        if (!r.multiplexer) throw new Error('not multiplexed')
+        if (!r.is_multiplexed) throw new Error('not multiplexed')
         a.abort()
         return 'multiplexed!'
     },
@@ -577,7 +579,7 @@ runTest(
         var r = await fetch('/eval', {
             method: 'POST',
             signal: a.signal,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
             body: `
                 res.setHeader('test', '42')
                 res.startSubscription({
@@ -612,12 +614,35 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
             })
         } catch (e) { return e.message }
         return 'hm..'
     },
     'multiplexer not yet connected'
+);
+
+runTest(
+    "Test that creating duplicate multiplexed connections fails correctly.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+        })
+
+        var r2 = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
+        var o = await r2.json()
+        return `status: ${r2.status}, json.error: ` + o.error + `, error as expected: ${JSON.stringify(o) === JSON.stringify({
+            "error": "Multiplexer already exists",
+            "message": `Cannot create duplicate multiplexer with ID '${m}'`,
+            "details": "This multiplexer ID must be unique"
+        })}`
+    },
+    'status: 409, json.error: Multiplexer already exists, error as expected: true'
 );
 
 runTest(
@@ -629,7 +654,7 @@ runTest(
         try {
             var r = await fetch('/500', {
                 signal: a.signal,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
             })
         } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
         return 'hm..'
@@ -647,7 +672,7 @@ runTest(
 
             var m = Math.random().toString(36).slice(2)
             var s = 'bad_stream'
-            fetch('/500', { headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` } })
+            fetch('/500', { headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` } })
         })
     },
     'saw the error we wanted'
@@ -663,12 +688,12 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     var m = braidify.multiplexers?.get(${JSON.stringify(m)})
-                    m.res.write('10 bytes for stream ${s}\\r\\na b\\r\\na b\\r\\n')
+                    m.res.write('10 bytes for request ${s}\\r\\na b\\r\\na b\\r\\n')
                     setTimeout(() => {
-                        m.res.write('2 bytes for stream ${s}\\r\\n\\r\\n')
+                        m.res.write('2 bytes for request ${s}\\r\\n\\r\\n')
                         res.write('aaaaabbbb')
                     }, 1000)
                 `
@@ -696,7 +721,7 @@ runTest(
             multiplex: true
         })
         setTimeout(() => a.abort(), 0)
-        return '' + !!r2.multiplexer
+        return '' + !!r2.is_multiplexed
     },
     'true'
 );
@@ -738,7 +763,7 @@ runTest(
             var r = await fetch('/eval_pre_braidify', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
                 body: `
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
@@ -758,9 +783,9 @@ runTest(
         var s2 = Math.random().toString(36).slice(2)
         await fetch('/json', {
             subscribe: true,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s2}` }
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s2}` }
         })
-        var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': '0.0.1'}})
+        var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         return r.status
     },
     '404'
@@ -785,7 +810,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { multiplexer: `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
         })
         return await new Promise(done => {
             r.subscribe(u => {
@@ -798,7 +823,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-waitForTests(() => braid_fetch.multiplex = false)
+waitForTests(() => braid_fetch.enable_multiplex = false)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 
