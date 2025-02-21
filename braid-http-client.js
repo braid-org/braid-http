@@ -868,8 +868,19 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
 
             // parse the multiplexed stream,
             // and send messages to the appropriate requests
-            parse_multiplex_stream(r.body.getReader(), (reqest, bytes) => {
-                requests.get(reqest)?.(bytes)
+            var try_deleting = new Set()
+            parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
+                if (requests.has(request)) {
+                    requests.get(request)(bytes)
+                } else if (!try_deleting.has(request)) {
+                    try_deleting.add(request)
+                    try {
+                        await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}/${request}`, {
+                            method: 'DELETE',
+                            headers: { 'Multiplex-Version': multiplex_version }, retry: true
+                        })
+                    } finally { try_deleting.delete(request) }
+                }
             }, e => {
                 // the multiplexer stream has died.. let everyone know..
                 mux_error = e
@@ -1074,16 +1085,18 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                     }
                     if (headerComplete) {
                         var headerStr = new TextDecoder().decode(buffers[0].slice(0, header_length))
-                        var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close) request ([A-Za-z0-9_-]+)\r\n$/)
+                        var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close|start) request ([A-Za-z0-9_-]+)\r\n$/)
+
                         if (!m) throw new Error('invalid multiplex header')
                         request_id = m[3]
 
                         buffers[0] = buffers[0].slice(header_length)
                         buffers_size -= header_length
 
-                        if (m[1] === 'close') {
-                            cb(request_id)
-                            break
+                        if (m[1] === 'close' || m[1] === 'start') {
+                            cb(request_id, m[1] === 'start' ? new Uint8Array() : undefined)
+                            header_length = 0
+                            header_started = false
                         } else chunk_size = 1 * m[2]
                     } else break
                 } else if (chunk_size !== null && buffers_size >= chunk_size) {
@@ -1098,7 +1111,6 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                     cb(request_id, chunk)
 
                     chunk_size = null
-                    request_id = null
                     header_length = 0
                     header_started = false
                 } else break

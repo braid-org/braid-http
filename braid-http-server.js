@@ -340,6 +340,8 @@ function braidify (req, res, next) {
             return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
+        m.res.write(`start request ${request}\r\n`)
+
         // let the requester know we've multiplexed their response
         var og_stream = res.stream
         var og_socket = res.socket

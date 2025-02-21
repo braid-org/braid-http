@@ -15,6 +15,7 @@ let test_update = {
 let retries_left = 4
 let giveup_completely_set = {}
 let faulty_mux_i = 0
+let deleted_request_count = new Set()
 
 process.on("unhandledRejection", (x) =>
     console.log(`unhandledRejection: ${x.stack}`)
@@ -45,8 +46,10 @@ require('http2').createSecureServer({
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')
         if (is_mux) {
-            var [multiplexer, reqest] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
+            var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
         }
+
+        if (is_mux && request) deleted_request_count[request] = (deleted_request_count[request] ?? 0) + 1
 
         if (is_mux && multiplexer === 'faulty_mux') {
             faulty_mux_i++
@@ -63,7 +66,7 @@ require('http2').createSecureServer({
         } else if (is_mux && multiplexer === 'bad_mux_well_known_url' && req.url.startsWith('/.well-known/multiplex/')) {
             res.writeHead(500)
             return res.end('')
-        } else if (is_mux && reqest === 'bad_reqest') {
+        } else if (is_mux && request === 'bad_request') {
             res.writeHead(500)
             return res.end('')
         } else if (req.url === '/500') {

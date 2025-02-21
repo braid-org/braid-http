@@ -314,6 +314,36 @@ runTest(
 )
 
 runTest(
+    "Test closing unrecognized requests in the multiplexer.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {signal: a.signal, headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
+
+        var s2 = Math.random().toString(36).slice(2)
+        var r2 = await fetch('/eval', {
+            method: 'POST',
+            body: `
+            void (async () => {
+                braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start request ${s2}\\r\\n'.repeat(3))
+
+                setTimeout(() => {
+                    braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start request ${s2}\\r\\n'.repeat(3))
+                }, 300)
+
+                setTimeout(() => {
+                    res.end(JSON.stringify(deleted_request_count[${JSON.stringify(s2)}]))
+                }, 600)
+            })()
+            `
+        })
+        return await r2.text()
+    },
+    '2'
+)
+
+runTest(
     "Test receiving multiplexed message.",
     async () => {
         var a = new AbortController()
