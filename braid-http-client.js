@@ -265,7 +265,7 @@ async function braid_fetch (url, params = {}) {
                 var retry = params.retry && // only try to reconnect if the user has chosen to
                     e.name !== "AbortError" && // don't retry if the user has chosen to abort
                     !e.startsWith?.('Parse error in headers') && // in this case, the server is spewing garbage, so reconnecting might be bad
-                    !e.message?.startsWith?.('Could not establish multiplexed stream') && // the server has told us no, or is using a different version of multiplexing
+                    !e.message?.startsWith?.('Could not establish multiplexed request') && // the server has told us no, or is using a different version of multiplexing
                     !cb_running // if an error is thrown in the callback, then it may not be good to reconnect, and generate more errors
 
                 if (retry && !original_signal?.aborted) {
@@ -842,7 +842,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
         // make up a new multiplexer id (unless it is being overriden)
         var multiplexer = params.headers.get('multiplex-at')?.split('/')[3] ?? Math.random().toString(36).slice(2)
 
-        var streams = new Map()
+        var requests = new Map()
         var mux_error = null
 
         var mux_promise = (async () => {
@@ -861,19 +861,19 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                     if (r.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected ' + multiplex_version)
                 } catch (e) {
                     // fallback to normal fetch if multiplexed connection fails
-                    console.error(`Could not establish multiplexed connection.\nGot error: ${e}.\nFalling back to normal connection.`)
+                    console.error(`Could not establish multiplexer.\nGot error: ${e}.\nFalling back to normal connection.`)
                     return false
                 }
             }
 
             // parse the multiplexed stream,
-            // and send messages to the appropriate streams
-            parse_multiplex_stream(r.body.getReader(), (stream, bytes) => {
-                streams.get(stream)?.(bytes)
+            // and send messages to the appropriate requests
+            parse_multiplex_stream(r.body.getReader(), (reqest, bytes) => {
+                requests.get(reqest)?.(bytes)
             }, e => {
                 // the multiplexer stream has died.. let everyone know..
                 mux_error = e
-                for (var f of streams.values()) f()
+                for (var f of requests.values()) f()
                 delete multiplex_fetch.multiplexers[mux_key]
             })
         })()
@@ -887,27 +887,27 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
             if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-at'))
                 return await normal_fetch(url, params)
 
-            // make up a new stream id (unless it is being overriden)
-            var stream = params.headers.get('multiplex-at')?.split('/')[4] ?? Math.random().toString(36).slice(2)
+            // make up a new request id (unless it is being overriden)
+            var request = params.headers.get('multiplex-at')?.split('/')[4] ?? Math.random().toString(36).slice(2)
 
             // add the Multiplex-At header without affecting the underlying params
             var mux_headers = new Headers(params.headers)
-            mux_headers.set('Multiplex-At', `/.well-known/multiplex/${multiplexer}/${stream}`)
+            mux_headers.set('Multiplex-At', `/.well-known/multiplex/${multiplexer}/${request}`)
             mux_headers.set('Multiplex-Version', multiplex_version)
             params = {...params, headers: mux_headers}
 
             // setup a way to receive incoming data from the multiplexer
             var buffers = []
             var bytes_available = () => {}
-            var stream_error = null
+            var request_error = null
 
             // this utility calls the callback whenever new data is available to process
             async function process_buffers(cb) {
                 while (true) {
                     // wait for data if none is available
-                    if (!mux_error && !stream_error && !buffers.length)
+                    if (!mux_error && !request_error && !buffers.length)
                         await new Promise(done => bytes_available = done)
-                    if (mux_error || stream_error) throw (mux_error || stream_error)
+                    if (mux_error || request_error) throw (mux_error || request_error)
 
                     // process the data
                     let ret = cb()
@@ -915,20 +915,18 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 }
             }
 
-            // tell the multiplexer to send bytes for this stream to us
-            streams.set(stream, bytes => {
-                if (!bytes) {
-                    streams.delete(stream)
-                    buffers.push(bytes)
-                } else if (!mux_error) buffers.push(bytes)
+            // tell the multiplexer to send bytes for this request to us
+            requests.set(request, bytes => {
+                if (!bytes) buffers.push(bytes)
+                else if (!mux_error) buffers.push(bytes)
                 bytes_available()
             })
 
             // prepare a function that we'll call to cleanly tear things down
             var unset = async e => {
                 unset = () => {}
-                streams.delete(stream)
-                stream_error = e
+                requests.delete(request)
+                request_error = e
                 bytes_available()
                 try {
                     var r = await braid_fetch(`${origin}${params.headers.get('multiplex-at')}`, {
@@ -939,7 +937,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
                     if (r.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected ' + multiplex_version)
                 } catch (e) {
-                    e = new Error(`Could not cancel multiplexed connection: ${e}`)
+                    e = new Error(`Could not cancel multiplexed request: ${e}`)
                     console.error('' + e)
                     throw e
                 }
@@ -947,9 +945,11 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
 
             // do the underlying fetch
             try {
+                var mux_was_done = await promise_done(mux_promise)
+
                 var res = await normal_fetch(url, params)
 
-                if (res.status === 424 && !(await promise_done(mux_promise))) {
+                if (res.status === 424 && !mux_was_done) {
                     // this error will trigger a retry if the user is using that option
                     throw new Error('multiplexer not yet connected')
                 }
@@ -959,29 +959,29 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 // fall back to as if it was a normal fetch
                 if (res.ok && res.status !== 293) return res
 
-                if (res.status !== 293) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplex-at') + ', got status: ' + res.status)
+                if (res.status !== 293) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-at') + ', got status: ' + res.status)
 
-                if (res.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('Could not establish multiplexed stream ' + params.headers.get('multiplex-at') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
+                if (res.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-at') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
 
                 // we want to present the illusion that the connection is still open,
                 // and therefor closable with "abort",
-                // so we handle the abort ourselves to close the multiplexed stream
+                // so we handle the abort ourselves to close the multiplexed request
                 params.signal?.addEventListener('abort', () =>
-                    unset(create_abort_error('stream aborted')))
+                    unset(create_abort_error('request aborted')))
 
                 // first, we need to listen for the headers..
                 var headers_buffer = new Uint8Array()
                 var parsed_headers = await process_buffers(() => {
-                    // check if the stream has been closed
-                    var stream_ended = !buffers[buffers.length - 1]
-                    if (stream_ended) buffers.pop()
+                    // check if the request has been closed
+                    var request_ended = !buffers[buffers.length - 1]
+                    if (request_ended) buffers.pop()
 
                     // aggregate all the new buffers into our big headers_buffer
                     headers_buffer = concat_buffers([headers_buffer, ...buffers])
                     buffers = []
 
-                    // and if the stream had ended, put that information back
-                    if (stream_ended) buffers.push(null)
+                    // and if the request had ended, put that information back
+                    if (request_ended) buffers.push(null)
 
                     // try parsing what we got so far as headers..
                     var x = parse_headers(headers_buffer)
@@ -992,7 +992,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                         console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
                         throw new Error('error parsing headers')
                     } else if (x.result === 'waiting') {
-                        if (stream_ended) throw new Error('Multiplexed stream ended before headers received.')
+                        if (request_ended) throw new Error('Multiplexed request ended before headers received.')
                     } else return x
                 })
 
@@ -1006,7 +1006,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
 
                 // create our own fake response object,
                 // to mimik fetch's response object,
-                // feeding the user our stream data from the multiplexer
+                // feeding the user our request data from the multiplexer
                 var res = new Response(new ReadableStream({
                     async start(controller) {
                         try {
@@ -1047,7 +1047,7 @@ async function parse_multiplex_stream(reader, cb, on_error) {
         var buffers = [new Uint8Array(0)]
         var buffers_size = 0
         var chunk_size = null
-        var stream_id = null
+        var request_id = null
         var header_length = 0
         var header_started = false
 
@@ -1076,13 +1076,13 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                         var headerStr = new TextDecoder().decode(buffers[0].slice(0, header_length))
                         var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close) request ([A-Za-z0-9_-]+)\r\n$/)
                         if (!m) throw new Error('invalid multiplex header')
-                        stream_id = m[3]
+                        request_id = m[3]
 
                         buffers[0] = buffers[0].slice(header_length)
                         buffers_size -= header_length
 
                         if (m[1] === 'close') {
-                            cb(stream_id)
+                            cb(request_id)
                             break
                         } else chunk_size = 1 * m[2]
                     } else break
@@ -1093,12 +1093,12 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                     buffers[0] = buffers[0].slice(chunk_size)
                     buffers_size -= chunk_size
 
-                    // console.log(`stream_id: ${stream_id}, ${new TextDecoder().decode(chunk)}`)
+                    // console.log(`request_id: ${request_id}, ${new TextDecoder().decode(chunk)}`)
 
-                    cb(stream_id, chunk)
+                    cb(request_id, chunk)
 
                     chunk_size = null
-                    stream_id = null
+                    request_id = null
                     header_length = 0
                     header_started = false
                 } else break

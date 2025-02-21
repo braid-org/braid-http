@@ -256,11 +256,11 @@ function braidify (req, res, next) {
         res.setHeader("Access-Control-Allow-Methods", "*")
         res.setHeader("Access-Control-Allow-Headers", "*")
 
-        // parse the multiplexer id and stream id from the url
-        var [multiplexer, stream] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
+        // parse the multiplexer id and request id from the url
+        var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
 
         // if there's just a multiplexer, then we're creating a multiplexer..
-        if (!stream) {
+        if (!request) {
             // maintain a Map of all the multiplexers
             if (!braidify.multiplexers) braidify.multiplexers = new Map()
 
@@ -274,12 +274,12 @@ function braidify (req, res, next) {
                 }))
             }
 
-            braidify.multiplexers.set(multiplexer, {streams: new Map(), res})
+            braidify.multiplexers.set(multiplexer, {requests: new Map(), res})
 
             // when the response closes,
             // let everyone know the multiplexer has died
             res.on('close', () => {
-                for (var f of braidify.multiplexers.get(multiplexer).streams.values()) f()
+                for (var f of braidify.multiplexers.get(multiplexer).requests.values()) f()
                 braidify.multiplexers.delete(multiplexer)
             })
 
@@ -293,11 +293,11 @@ function braidify (req, res, next) {
                 ...req.httpVersion !== '2.0' && {'Connection': 'keep-alive'}
             })
 
-            // but write something.. won't interfere with stream,
+            // but write something.. won't interfere with multiplexer,
             // and helps flush the headers
             return res.write(`\r\n`)
         } else {
-            // in this case, we're closing the given stream
+            // in this case, we're closing the given request
 
             // if the multiplexer doesn't exist, send an error
             var m = braidify.multiplexers?.get(multiplexer)
@@ -306,15 +306,15 @@ function braidify (req, res, next) {
                 return res.end(`multiplexer ${multiplexer} does not exist`)
             }
 
-            // if the stream doesn't exist, send an error
-            let s = m.streams.get(stream)
+            // if the request doesn't exist, send an error
+            let s = m.requests.get(request)
             if (!s) {
-                res.writeHead(404, 'Stream no exist', {'Bad-Stream': stream})
-                return res.end(`stream ${stream} does not exist`)
+                res.writeHead(404, 'Multiplexed request not found', {'Bad-Request': request})
+                return res.end(`request ${request} does not exist`)
             }
 
-            // remove this stream, and notify it
-            m.streams.delete(stream)
+            // remove this request, and notify it
+            m.requests.delete(request)
             s()
 
             // let the requester know we succeeded
@@ -323,15 +323,15 @@ function braidify (req, res, next) {
         }
     }
 
-    // a multiplexer header means the user wants to send the
+    // a Multiplex-At header means the user wants to send the
     // results of this request to the provided multiplexer,
-    // tagged with the given stream id
+    // tagged with the given request id
     if ((braidify.enable_multiplex ?? true) &&
         req.headers['multiplex-at'] &&
         req.headers['multiplex-version'] === multiplex_version) {
 
-        // parse the multiplexer id and stream id from the header
-        var [multiplexer, stream] = req.headers['multiplex-at'].split('/').slice(3)
+        // parse the multiplexer id and request id from the header
+        var [multiplexer, request] = req.headers['multiplex-at'].split('/').slice(3)
 
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
@@ -384,10 +384,10 @@ function braidify (req, res, next) {
 
         // first we create a kind of fake socket
         class MultiplexedWritable extends require('stream').Writable {
-            constructor(multiplexer, stream) {
+            constructor(multiplexer, request) {
                 super()
                 this.multiplexer = multiplexer
-                this.stream = stream
+                this.request = request
             }
 
             _write(chunk, encoding, callback) {
@@ -395,11 +395,11 @@ function braidify (req, res, next) {
 
                 try {
                     var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
-                    this.multiplexer.res.write(`${len} bytes for request ${this.stream}\r\n`)
+                    this.multiplexer.res.write(`${len} bytes for request ${this.request}\r\n`)
                     this.multiplexer.res.write(chunk, encoding, callback)
 
                     // console.log(`wrote:`)
-                    // console.log(`${len} bytes for request /${this.stream}\r\n`)
+                    // console.log(`${len} bytes for request /${this.request}\r\n`)
                     // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
                     // else console.log('STRING?: ' + chunk)
 
@@ -408,7 +408,7 @@ function braidify (req, res, next) {
                 }
             }
         }
-        var mw = new MultiplexedWritable(m, stream)
+        var mw = new MultiplexedWritable(m, request)
 
         // then we create a fake server response,
         // that pipes data to our fake socket
@@ -417,15 +417,15 @@ function braidify (req, res, next) {
         res2.assignSocket(mw)
 
         // register a handler for when the multiplexer closes,
-        // to close our fake response stream
-        m.streams.set(stream, () => {
+        // to close our fake response
+        m.requests.set(request, () => {
             og_res_end?.()
             res2.destroy()
         })
 
         // when our fake response is done,
         // we want to send a special message to the multiplexer saying so
-        res2.on('finish', () => m.res.write(`close stream ${stream}\r\n`))
+        res2.on('finish', () => m.res.write(`close request ${request}\r\n`))
 
         // we want access to "res" to be forwarded to our fake "res2",
         // so that it goes into the multiplexer

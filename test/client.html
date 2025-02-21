@@ -230,11 +230,11 @@ runTest(
                 retry: true
             })
         } catch (e) {
-            return e.message.slice(0, 'Could not establish multiplexed stream'.length)
+            return e.message.slice(0, 'Could not establish multiplexed request'.length)
         }
         return 'hm..'
     },
-    'Could not establish multiplexed stream'
+    'Could not establish multiplexed request'
 )
 
 runTest(
@@ -401,7 +401,7 @@ runTest(
 )
 
 runTest(
-    "Test closing multiplexed stream",
+    "Test closing multiplexer",
     async () => {
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
@@ -416,13 +416,13 @@ runTest(
         if (!r.is_multiplexed) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
-            }, e => done('multiplex stream ended'))
+            }, e => done('multiplexer ended'))
             await og_fetch('/kill_mux', {headers: {mux: m}})
         })
         a.abort()
         return x
     },
-    'multiplex stream ended'
+    'multiplexer ended'
 )
 
 runTest(
@@ -452,7 +452,7 @@ runTest(
 )
 
 runTest(
-    "Test closing multiplexed stream with retry",
+    "Test closing multiplexer with retry",
     async () => {
         return await new Promise(async done => {
             var count = 0
@@ -545,7 +545,7 @@ runTest(
 )
 
 runTest(
-    "Test retry when first establishinig multiplexed stream",
+    "Test retry when first establishinig multiplexer",
     async () => {
         if ((await (await og_fetch('/eval', {
             method: 'POST',
@@ -571,7 +571,7 @@ runTest(
 )
 
 runTest(
-    "Test that server multiplexed stream can detect closure.",
+    "Test that server multiplexer can detect closure.",
     async () => {
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
@@ -646,7 +646,7 @@ runTest(
 );
 
 runTest(
-    "Test failing to establish multiplexed stream.",
+    "Test failing to establish multiplexed request.",
     async () => {
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
@@ -656,22 +656,22 @@ runTest(
                 signal: a.signal,
                 headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
             })
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) }
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
         return 'hm..'
     },
-    'Error: Could not establish multiplexed stream'
+    'Error: Could not establish multiplexed request'
 );
 
 runTest(
-    "Test failing to close multiplexed stream.",
+    "Test failing to close multiplexed request.",
     async () => {
         return await new Promise(async done => {
             window.addEventListener('unhandledrejection', function (event) {
-                if (event.reason.message === 'Could not cancel multiplexed connection: Error: giving up because of http status: 404') done('saw the error we wanted')
+                if (event.reason.message === 'Could not cancel multiplexed request: Error: giving up because of http status: 404') done('saw the error we wanted')
             })
 
             var m = Math.random().toString(36).slice(2)
-            var s = 'bad_stream'
+            var s = 'bad_request'
             fetch('/500', { headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` } })
         })
     },
@@ -759,6 +759,14 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
+
+        var s2 = Math.random().toString(36).slice(2)
+        var r2 = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s2}` },
+        })
+
         try {
             var r = await fetch('/eval_pre_braidify', {
                 method: 'POST',
@@ -768,14 +776,15 @@ runTest(
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
                 `});
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed stream'.length) + '..'}
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) + '..'}
+        finally { a.abort() }
         return 'hm..'
     },
-    'Error: Could not establish multiplexed stream..'
+    'Error: Could not establish multiplexed request..'
 );
 
 runTest(
-    "Test multiplexed stream aborted before GET, on server",
+    "Test multiplexed request aborted before GET, on server",
     async () => {
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
