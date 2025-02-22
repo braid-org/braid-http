@@ -676,6 +676,29 @@ runTest(
 );
 
 runTest(
+    "Test that creating duplicate multiplexed requests fails correctly.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+        })
+
+        var r2 = await og_fetch(`/json`, {signal: a.signal, subscribe: true, headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
+        var o = await r2.json()
+        return `status: ${r2.status}, json.error: ` + o.error + `, error as expected: ${JSON.stringify(o) === JSON.stringify({
+            "error": "Request already exists",
+            "message": `Cannot create duplicate request with ID '${s}'`,
+            "details": "This request ID must be unique"
+        })}`
+    },
+    'status: 409, json.error: Request already exists, error as expected: true'
+);
+
+runTest(
     "Test failing to establish multiplexed request.",
     async () => {
         var a = new AbortController()

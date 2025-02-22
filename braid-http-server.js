@@ -340,6 +340,16 @@ function braidify (req, res, next) {
             return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
+        // if this request-id already exists, respond with an error
+        if (m.requests.has(request)) {
+            res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
+            return res.end(JSON.stringify({
+                error: 'Request already exists',
+                message: `Cannot create duplicate request with ID '${request}'`,
+                details: 'This request ID must be unique'
+            }))
+        }
+
         m.res.write(`start request ${request}\r\n`)
 
         // let the requester know we've multiplexed their response
