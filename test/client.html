@@ -206,7 +206,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
@@ -226,7 +226,7 @@ runTest(
                 signal: a.signal,
                 subscribe: true,
                 multiplex: {via: 'POST'},
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 retry: true
             })
         } catch (e) {
@@ -243,7 +243,7 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await og_fetch('/json', {headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
+        var r = await og_fetch('/json', {headers: {'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
         return r.headers.get('bad-multiplexer') === m
     },
     true
@@ -319,17 +319,17 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {signal: a.signal, headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
+        var r = await fetch('/json', {signal: a.signal, headers: {'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
 
         var s2 = Math.random().toString(36).slice(2)
         var r2 = await fetch('/eval', {
             method: 'POST',
             body: `
             void (async () => {
-                braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start request ${s2}\\r\\n'.repeat(3))
+                braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start response ${s2}\\r\\n'.repeat(3))
 
                 setTimeout(() => {
-                    braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start request ${s2}\\r\\n'.repeat(3))
+                    braidify.multiplexers.get(${JSON.stringify(m)}).res.write('start response ${s2}\\r\\n'.repeat(3))
                 }, 300)
 
                 setTimeout(() => {
@@ -353,7 +353,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                'Multiplex-At': `/.well-known/multiplex/${m}/${s}`
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`
             }
         })
         if (!r.is_multiplexed) throw new Error('not multiplexed')
@@ -378,7 +378,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
         if (!r.is_multiplexed) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
@@ -440,7 +440,7 @@ runTest(
             signal: a.signal,
             subscribe: true,
             headers: {
-                'Multiplex-At': `/.well-known/multiplex/${m}/${s}`
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`
             }
         })
         if (!r.is_multiplexed) throw new Error('not multiplexed')
@@ -468,7 +468,7 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 body: `
                     setTimeout(() => {
                         res.setHeader('test', '42')
@@ -492,7 +492,7 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 retry: { onRes: () => count++ }
             })
             if (!r.is_multiplexed) throw new Error('not multiplexed')
@@ -590,7 +590,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true
         })
         if (!r.is_multiplexed) throw new Error('not multiplexed')
@@ -609,7 +609,7 @@ runTest(
         var r = await fetch('/eval', {
             method: 'POST',
             signal: a.signal,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             body: `
                 res.setHeader('test', '42')
                 res.startSubscription({
@@ -644,7 +644,7 @@ runTest(
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
             })
         } catch (e) { return e.message }
         return 'hm..'
@@ -661,7 +661,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
 
         var r2 = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
@@ -684,10 +684,10 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
 
-        var r2 = await og_fetch(`/json`, {signal: a.signal, subscribe: true, headers: {'Multiplex-At': `/.well-known/multiplex/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
+        var r2 = await og_fetch(`/json`, {signal: a.signal, subscribe: true, headers: {'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
         var o = await r2.json()
         return `status: ${r2.status}, json.error: ` + o.error + `, error as expected: ${JSON.stringify(o) === JSON.stringify({
             "error": "Request already exists",
@@ -707,7 +707,7 @@ runTest(
         try {
             var r = await fetch('/500', {
                 signal: a.signal,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             })
         } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
         return 'hm..'
@@ -725,7 +725,7 @@ runTest(
 
             var m = Math.random().toString(36).slice(2)
             var s = 'bad_request'
-            fetch('/500', { headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` } })
+            fetch('/500', { headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` } })
         })
     },
     'saw the error we wanted'
@@ -741,12 +741,12 @@ runTest(
             var r = await fetch('/eval', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 body: `
                     var m = braidify.multiplexers?.get(${JSON.stringify(m)})
-                    m.res.write('10 bytes for request ${s}\\r\\na b\\r\\na b\\r\\n')
+                    m.res.write('10 bytes for response ${s}\\r\\na b\\r\\na b\\r\\n')
                     setTimeout(() => {
-                        m.res.write('2 bytes for request ${s}\\r\\n\\r\\n')
+                        m.res.write('2 bytes for response ${s}\\r\\n\\r\\n')
                         res.write('aaaaabbbb')
                     }, 1000)
                 `
@@ -817,14 +817,14 @@ runTest(
         var r2 = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s2}` },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}` },
         })
 
         try {
             var r = await fetch('/eval_pre_braidify', {
                 method: 'POST',
                 signal: a.signal,
-                headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` },
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 body: `
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
@@ -845,7 +845,7 @@ runTest(
         var s2 = Math.random().toString(36).slice(2)
         await fetch('/json', {
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s2}` }
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}` }
         })
         var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         return r.status
@@ -872,7 +872,7 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-At': `/.well-known/multiplex/${m}/${s}` }
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
         return await new Promise(done => {
             r.subscribe(u => {

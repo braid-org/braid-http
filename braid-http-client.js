@@ -309,7 +309,7 @@ async function braid_fetch (url, params = {}) {
                 // try multiplexing if the multiplex flag is set, and conditions are met
                 var mux_params = params.multiplex ?? braid_fetch.enable_multiplex
                 if (mux_params !== false &&
-                    (params.headers.has('multiplex-at') ||
+                    (params.headers.has('multiplex-through') ||
                     (params.headers.has('subscribe') &&
                         braid_fetch.subscription_counts?.[origin] >
                             (!mux_params ? 1 : (mux_params.after ?? 0))))) {
@@ -834,13 +834,13 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
 
     // the mux_key is the same as the origin, unless it is being overriden
     // (the overriding is done by the tests)
-    var mux_key = params.headers.get('multiplex-at')?.split('/')[3] ?? origin
+    var mux_key = params.headers.get('multiplex-through')?.split('/')[3] ?? origin
 
     // create a new multiplexer if it doesn't exist for this origin
     if (!multiplex_fetch.multiplexers) multiplex_fetch.multiplexers = {}
     if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] = (async () => {
         // make up a new multiplexer id (unless it is being overriden)
-        var multiplexer = params.headers.get('multiplex-at')?.split('/')[3] ?? Math.random().toString(36).slice(2)
+        var multiplexer = params.headers.get('multiplex-through')?.split('/')[3] ?? Math.random().toString(36).slice(2)
 
         var requests = new Map()
         var mux_error = null
@@ -855,7 +855,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 // some servers don't like custom methods,
                 // so let's try with a custom header
                 try {
-                    r = await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}`, {method: 'POST', headers: {'Multiplex-Version': multiplex_version}, retry: true})
+                    r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`, {method: 'POST', headers: {'Multiplex-Version': multiplex_version}, retry: true})
 
                     if (!r.ok) throw new Error('status not ok: ' + r.status)
                     if (r.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected ' + multiplex_version)
@@ -875,7 +875,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 } else if (!try_deleting.has(request)) {
                     try_deleting.add(request)
                     try {
-                        await braid_fetch(`${origin}/.well-known/multiplex/${multiplexer}/${request}`, {
+                        await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
                             method: 'DELETE',
                             headers: { 'Multiplex-Version': multiplex_version }, retry: true
                         })
@@ -895,15 +895,15 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
             // if we already know the multiplexer is not working,
             // then fallback to normal fetch
             // (unless the user is specifically asking for multiplexing)
-            if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-at'))
+            if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-through'))
                 return await normal_fetch(url, params)
 
             // make up a new request id (unless it is being overriden)
-            var request = params.headers.get('multiplex-at')?.split('/')[4] ?? Math.random().toString(36).slice(2)
+            var request = params.headers.get('multiplex-through')?.split('/')[4] ?? Math.random().toString(36).slice(2)
 
-            // add the Multiplex-At header without affecting the underlying params
+            // add the Multiplex-Through header without affecting the underlying params
             var mux_headers = new Headers(params.headers)
-            mux_headers.set('Multiplex-At', `/.well-known/multiplex/${multiplexer}/${request}`)
+            mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request}`)
             mux_headers.set('Multiplex-Version', multiplex_version)
             params = {...params, headers: mux_headers}
 
@@ -940,7 +940,7 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 request_error = e
                 bytes_available()
                 try {
-                    var r = await braid_fetch(`${origin}${params.headers.get('multiplex-at')}`, {
+                    var r = await braid_fetch(`${origin}${params.headers.get('multiplex-through')}`, {
                         method: 'DELETE',
                         headers: { 'Multiplex-Version': multiplex_version }, retry: true
                     })
@@ -970,9 +970,9 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                 // fall back to as if it was a normal fetch
                 if (res.ok && res.status !== 293) return res
 
-                if (res.status !== 293) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-at') + ', got status: ' + res.status)
+                if (res.status !== 293) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-through') + ', got status: ' + res.status)
 
-                if (res.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-at') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
+                if (res.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-through') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
 
                 // we want to present the illusion that the connection is still open,
                 // and therefor closable with "abort",
@@ -1085,7 +1085,7 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                     }
                     if (headerComplete) {
                         var headerStr = new TextDecoder().decode(buffers[0].slice(0, header_length))
-                        var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close|start) request ([A-Za-z0-9_-]+)\r\n$/)
+                        var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close|start) response ([A-Za-z0-9_-]+)\r\n$/)
 
                         if (!m) throw new Error('invalid multiplex header')
                         request_id = m[3]

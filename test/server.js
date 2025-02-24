@@ -44,7 +44,7 @@ require('http2').createSecureServer({
         }
 
         // MULTIPLEX
-        var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')
+        var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
         if (is_mux) {
             var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
         }
@@ -63,7 +63,7 @@ require('http2').createSecureServer({
         } else if (is_mux && multiplexer === 'bad_mux_method' && req.method === 'MULTIPLEX') {
             res.writeHead(500)
             return res.end('')
-        } else if (is_mux && multiplexer === 'bad_mux_well_known_url' && req.url.startsWith('/.well-known/multiplex/')) {
+        } else if (is_mux && multiplexer === 'bad_mux_well_known_url' && req.url.startsWith('/.well-known/multiplexer/')) {
             res.writeHead(500)
             return res.end('')
         } else if (is_mux && request === 'bad_request') {

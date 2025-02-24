@@ -245,7 +245,7 @@ function braidify (req, res, next) {
     // Multiplexer stuff
     var multiplex_version = '1.0'
     if ((braidify.enable_multiplex ?? true) &&
-        (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplex/')) &&
+        (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')) &&
         req.headers['multiplex-version'] === multiplex_version) {
 
         // let the caller know we're handling things
@@ -323,15 +323,15 @@ function braidify (req, res, next) {
         }
     }
 
-    // a Multiplex-At header means the user wants to send the
+    // a Multiplex-Through header means the user wants to send the
     // results of this request to the provided multiplexer,
     // tagged with the given request id
     if ((braidify.enable_multiplex ?? true) &&
-        req.headers['multiplex-at'] &&
+        req.headers['multiplex-through'] &&
         req.headers['multiplex-version'] === multiplex_version) {
 
         // parse the multiplexer id and request id from the header
-        var [multiplexer, request] = req.headers['multiplex-at'].split('/').slice(3)
+        var [multiplexer, request] = req.headers['multiplex-through'].split('/').slice(3)
 
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
@@ -350,7 +350,7 @@ function braidify (req, res, next) {
             }))
         }
 
-        m.res.write(`start request ${request}\r\n`)
+        m.res.write(`start response ${request}\r\n`)
 
         // let the requester know we've multiplexed their response
         var og_stream = res.stream
@@ -373,7 +373,7 @@ function braidify (req, res, next) {
             if (og_stream) {
                 og_stream.respond({
                     ':status': 293,
-                    'Multiplex-At': req.headers['multiplex-at'],
+                    'Multiplex-Through': req.headers['multiplex-through'],
                     'Multiplex-Version': multiplex_version,
                     ...Object.fromEntries(cors_headers)
                 })
@@ -381,7 +381,7 @@ function braidify (req, res, next) {
                 og_stream.end()
             } else {
                 og_socket.write('HTTP/1.1 293 Responded via multiplexer\r\n')
-                og_socket.write(`Multiplex-At: ${req.headers['multiplex-at']}\r\n`)
+                og_socket.write(`Multiplex-Through: ${req.headers['multiplex-through']}\r\n`)
                 og_socket.write(`Multiplex-Version: ${multiplex_version}\r\n`)
                 cors_headers.forEach(([key, value]) =>
                     og_socket.write(`${key}: ${value}\r\n`))
@@ -407,14 +407,8 @@ function braidify (req, res, next) {
 
                 try {
                     var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
-                    this.multiplexer.res.write(`${len} bytes for request ${this.request}\r\n`)
+                    this.multiplexer.res.write(`${len} bytes for response ${this.request}\r\n`)
                     this.multiplexer.res.write(chunk, encoding, callback)
-
-                    // console.log(`wrote:`)
-                    // console.log(`${len} bytes for request /${this.request}\r\n`)
-                    // if (Buffer.isBuffer(chunk)) console.log(new TextDecoder().decode(chunk))
-                    // else console.log('STRING?: ' + chunk)
-
                 } catch (e) {
                     callback(e)
                 }
@@ -437,7 +431,7 @@ function braidify (req, res, next) {
 
         // when our fake response is done,
         // we want to send a special message to the multiplexer saying so
-        res2.on('finish', () => m.res.write(`close request ${request}\r\n`))
+        res2.on('finish', () => m.res.write(`close response ${request}\r\n`))
 
         // we want access to "res" to be forwarded to our fake "res2",
         // so that it goes into the multiplexer
