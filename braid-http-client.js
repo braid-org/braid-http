@@ -163,7 +163,10 @@ async function braid_fetch (url, params = {}) {
         params.headers.set('peer', params.peer)
     
     if (params.heartbeats)
-        params.headers.set('heartbeats', typeof params.heartbeats === 'number' ? `${params.heartbeats}s` : params.heartbeats)
+        params.headers.set('heartbeats',
+                           typeof params.heartbeats === 'number'
+                           ? `${params.heartbeats}s`
+                           : params.heartbeats)
 
     // Prevent browsers from going to disk cache
     params.cache = 'no-cache'
