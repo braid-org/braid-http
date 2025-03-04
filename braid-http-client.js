@@ -262,7 +262,7 @@ async function braid_fetch (url, params = {}) {
                 underlying_aborter?.abort()
 
                 // see if we should retry..
-                var retry = params.retry && // only try to reconnect if the user has chosen to
+                var retry = params.retry &&    // only try to reconnect if the user has chosen to
                     e.name !== "AbortError" && // don't retry if the user has chosen to abort
                     !e.startsWith?.('Parse error in headers') && // in this case, the server is spewing garbage, so reconnecting might be bad
                     !e.message?.startsWith?.('Could not establish multiplexed request') && // the server has told us no, or is using a different version of multiplexing
@@ -338,7 +338,7 @@ async function braid_fetch (url, params = {}) {
                                 clearTimeout(timeout)
                                 let wait_seconds = 1.2 * heartbeats + 3
                                 timeout = setTimeout(() => {
-                                    on_error(new Error(`heartbeat not seen in ${wait_seconds.toFixed(2)}s`))
+                                    on_error(new Error(`heartbeat seen in ${wait_seconds.toFixed(2)}s`))
                                 }, wait_seconds * 1000)
                             }
                             on_heartbeat()
@@ -361,7 +361,8 @@ async function braid_fetch (url, params = {}) {
                         async (result, err) => {
                             if (!err) {
                                 // check whether we aborted
-                                if (original_signal?.aborted) throw create_abort_error('already aborted')
+                                if (original_signal?.aborted)
+                                    throw create_abort_error('already aborted')
 
                                 // Yay!  We got a new version!  Tell the callback!
                                 cb_running = true
@@ -540,7 +541,8 @@ var subscription_parser = (cb) => ({
 
                 Object.defineProperty(update, 'body_text', {
                     get: function () {
-                        if (this.body != null) return new TextDecoder('utf-8').decode(this.body.buffer)
+                        if (this.body != null)
+                            return new TextDecoder('utf-8').decode(this.body.buffer)
                     }
                 })
 
@@ -634,7 +636,9 @@ function parse_headers (input) {
 
     // Extract the header string
     var headers_source = input.slice(start, end)
-    headers_source = Array.isArray(headers_source) ? headers_source.map(x => String.fromCharCode(x)).join('') : new TextDecoder().decode(headers_source)
+    headers_source = Array.isArray(headers_source)
+        ? headers_source.map(x => String.fromCharCode(x)).join('')
+        : new TextDecoder().decode(headers_source)
 
     // Convert "HTTP 200 OK" to a :status: 200 header
     headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/,
@@ -837,215 +841,244 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
     var mux_key = params.headers.get('multiplex-through')?.split('/')[3] ?? origin
 
     // create a new multiplexer if it doesn't exist for this origin
-    if (!multiplex_fetch.multiplexers) multiplex_fetch.multiplexers = {}
-    if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] = (async () => {
-        // make up a new multiplexer id (unless it is being overriden)
-        var multiplexer = params.headers.get('multiplex-through')?.split('/')[3] ?? Math.random().toString(36).slice(2)
+    if (!multiplex_fetch.multiplexers)          multiplex_fetch.multiplexers = {}
+    if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] = (
+        async () => {
+            // make up a new multiplexer id (unless it is being overriden)
+            var multiplexer = params.headers.get('multiplex-through')?.split('/')[3]
+                ?? Math.random().toString(36).slice(2)
 
-        var requests = new Map()
-        var mux_error = null
+            var requests = new Map()
+            var mux_error = null
 
-        var mux_promise = (async () => {
-            // attempt to establish a multiplexed connection
-            try {
-                if (skip_multiplex_method) throw 'skip multiplex method'
-                var r = await braid_fetch(`${origin}/${multiplexer}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}, retry: true})
-                if (!r.ok || r.headers.get('Multiplex-Version') !== multiplex_version) throw 'bad'
-            } catch (e) {
-                // some servers don't like custom methods,
-                // so let's try with a custom header
+            var mux_promise = (async () => {
+                // attempt to establish a multiplexed connection
                 try {
-                    r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`, {method: 'POST', headers: {'Multiplex-Version': multiplex_version}, retry: true})
-
-                    if (!r.ok) throw new Error('status not ok: ' + r.status)
-                    if (r.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected ' + multiplex_version)
+                    if (skip_multiplex_method) throw 'skip multiplex method'
+                    var r = await braid_fetch(`${origin}/${multiplexer}`, {
+                        method: 'MULTIPLEX',
+                        headers: {'Multiplex-Version': multiplex_version},
+                        retry: true
+                    })
+                    if (!r.ok || r.headers.get('Multiplex-Version') !== multiplex_version)
+                        throw 'bad'
                 } catch (e) {
-                    // fallback to normal fetch if multiplexed connection fails
-                    console.error(`Could not establish multiplexer.\nGot error: ${e}.\nFalling back to normal connection.`)
-                    return false
-                }
-            }
-
-            // parse the multiplexed stream,
-            // and send messages to the appropriate requests
-            var try_deleting = new Set()
-            parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
-                if (requests.has(request)) {
-                    requests.get(request)(bytes)
-                } else if (!try_deleting.has(request)) {
-                    try_deleting.add(request)
+                    // some servers don't like custom methods,
+                    // so let's try with a custom header
                     try {
-                        await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
+                        r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`,
+                                              {method: 'POST',
+                                               headers: {'Multiplex-Version': multiplex_version},
+                                               retry: true})
+
+                        if (!r.ok) throw new Error('status not ok: ' + r.status)
+                        if (r.headers.get('Multiplex-Version') !== multiplex_version)
+                            throw new Error('wrong multiplex version: '
+                                            + r.headers.get('Multiplex-Version')
+                                            + ', expected ' + multiplex_version)
+                    } catch (e) {
+                        // fallback to normal fetch if multiplexed connection fails
+                        console.error(`Could not establish multiplexer.\n`
+                                      + `Got error: ${e}.\nFalling back to normal connection.`)
+                        return false
+                    }
+                }
+
+                // parse the multiplexed stream,
+                // and send messages to the appropriate requests
+                var try_deleting = new Set()
+                parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
+                    if (requests.has(request)) {
+                        requests.get(request)(bytes)
+                    } else if (!try_deleting.has(request)) {
+                        try_deleting.add(request)
+                        try {
+                            await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
+                                method: 'DELETE',
+                                headers: { 'Multiplex-Version': multiplex_version },
+                                retry: true
+                            })
+                        } finally { try_deleting.delete(request) }
+                    }
+                }, e => {
+                    // the multiplexer stream has died.. let everyone know..
+                    mux_error = e
+                    for (var f of requests.values()) f()
+                    delete multiplex_fetch.multiplexers[mux_key]
+                })
+            })()
+
+            // return a "fetch" for this multiplexer
+            return async (url, params) => {
+
+                // if we already know the multiplexer is not working,
+                // then fallback to normal fetch
+                // (unless the user is specifically asking for multiplexing)
+                if ((await promise_done(mux_promise))
+                    && (await mux_promise) === false
+                    && !params.headers.get('multiplex-through'))
+                    return await normal_fetch(url, params)
+
+                // make up a new request id (unless it is being overriden)
+                var request = params.headers.get('multiplex-through')?.split('/')[4]
+                    ?? Math.random().toString(36).slice(2)
+
+                // add the Multiplex-Through header without affecting the underlying params
+                var mux_headers = new Headers(params.headers)
+                mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request}`)
+                mux_headers.set('Multiplex-Version', multiplex_version)
+                params = {...params, headers: mux_headers}
+
+                // setup a way to receive incoming data from the multiplexer
+                var buffers = []
+                var bytes_available = () => {}
+                var request_error = null
+
+                // this utility calls the callback whenever new data is available to process
+                async function process_buffers(cb) {
+                    while (true) {
+                        // wait for data if none is available
+                        if (!mux_error && !request_error && !buffers.length)
+                            await new Promise(done => bytes_available = done)
+                        if (mux_error || request_error) throw (mux_error || request_error)
+
+                        // process the data
+                        let ret = cb()
+                        if (ret) return ret
+                    }
+                }
+
+                // tell the multiplexer to send bytes for this request to us
+                requests.set(request, bytes => {
+                    if (!bytes) buffers.push(bytes)
+                    else if (!mux_error) buffers.push(bytes)
+                    bytes_available()
+                })
+
+                // prepare a function that we'll call to cleanly tear things down
+                var unset = async e => {
+                    unset = () => {}
+                    requests.delete(request)
+                    request_error = e
+                    bytes_available()
+                    try {
+                        var r = await braid_fetch(`${origin}${params.headers.get('multiplex-through')}`, {
                             method: 'DELETE',
                             headers: { 'Multiplex-Version': multiplex_version }, retry: true
                         })
-                    } finally { try_deleting.delete(request) }
+
+                        if (!r.ok) throw new Error('status not ok: ' + r.status)
+                        if (r.headers.get('Multiplex-Version') !== multiplex_version)
+                            throw new Error('wrong multiplex version: '
+                                            + r.headers.get('Multiplex-Version')
+                                            + ', expected ' + multiplex_version)
+                    } catch (e) {
+                        e = new Error(`Could not cancel multiplexed request: ${e}`)
+                        console.error('' + e)
+                        throw e
+                    }
                 }
-            }, e => {
-                // the multiplexer stream has died.. let everyone know..
-                mux_error = e
-                for (var f of requests.values()) f()
-                delete multiplex_fetch.multiplexers[mux_key]
-            })
-        })()
 
-        // return a "fetch" for this multiplexer
-        return async (url, params) => {
-
-            // if we already know the multiplexer is not working,
-            // then fallback to normal fetch
-            // (unless the user is specifically asking for multiplexing)
-            if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-through'))
-                return await normal_fetch(url, params)
-
-            // make up a new request id (unless it is being overriden)
-            var request = params.headers.get('multiplex-through')?.split('/')[4] ?? Math.random().toString(36).slice(2)
-
-            // add the Multiplex-Through header without affecting the underlying params
-            var mux_headers = new Headers(params.headers)
-            mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request}`)
-            mux_headers.set('Multiplex-Version', multiplex_version)
-            params = {...params, headers: mux_headers}
-
-            // setup a way to receive incoming data from the multiplexer
-            var buffers = []
-            var bytes_available = () => {}
-            var request_error = null
-
-            // this utility calls the callback whenever new data is available to process
-            async function process_buffers(cb) {
-                while (true) {
-                    // wait for data if none is available
-                    if (!mux_error && !request_error && !buffers.length)
-                        await new Promise(done => bytes_available = done)
-                    if (mux_error || request_error) throw (mux_error || request_error)
-
-                    // process the data
-                    let ret = cb()
-                    if (ret) return ret
-                }
-            }
-
-            // tell the multiplexer to send bytes for this request to us
-            requests.set(request, bytes => {
-                if (!bytes) buffers.push(bytes)
-                else if (!mux_error) buffers.push(bytes)
-                bytes_available()
-            })
-
-            // prepare a function that we'll call to cleanly tear things down
-            var unset = async e => {
-                unset = () => {}
-                requests.delete(request)
-                request_error = e
-                bytes_available()
+                // do the underlying fetch
                 try {
-                    var r = await braid_fetch(`${origin}${params.headers.get('multiplex-through')}`, {
-                        method: 'DELETE',
-                        headers: { 'Multiplex-Version': multiplex_version }, retry: true
+                    var mux_was_done = await promise_done(mux_promise)
+
+                    var res = await normal_fetch(url, params)
+
+                    if (res.status === 424 && !mux_was_done) {
+                        // this error will trigger a retry if the user is using that option
+                        throw new Error('multiplexer not yet connected')
+                    }
+
+                    // if the response says it's ok,
+                    // but it's is not a multiplexed response,
+                    // fall back to as if it was a normal fetch
+                    if (res.ok && res.status !== 293) return res
+
+                    if (res.status !== 293)
+                        throw new Error('Could not establish multiplexed request '
+                                        + params.headers.get('multiplex-through')
+                                        + ', got status: ' + res.status)
+
+                    if (res.headers.get('Multiplex-Version') !== multiplex_version)
+                        throw new Error('Could not establish multiplexed request '
+                                        + params.headers.get('multiplex-through')
+                                        + ', got unknown version: '
+                                        + res.headers.get('Multiplex-Version'))
+
+                    // we want to present the illusion that the connection is still open,
+                    // and therefor closable with "abort",
+                    // so we handle the abort ourselves to close the multiplexed request
+                    params.signal?.addEventListener('abort', () =>
+                        unset(create_abort_error('request aborted')))
+
+                    // first, we need to listen for the headers..
+                    var headers_buffer = new Uint8Array()
+                    var parsed_headers = await process_buffers(() => {
+                        // check if the request has been closed
+                        var request_ended = !buffers[buffers.length - 1]
+                        if (request_ended) buffers.pop()
+
+                        // aggregate all the new buffers into our big headers_buffer
+                        headers_buffer = concat_buffers([headers_buffer, ...buffers])
+                        buffers = []
+
+                        // and if the request had ended, put that information back
+                        if (request_ended) buffers.push(null)
+
+                        // try parsing what we got so far as headers..
+                        var x = parse_headers(headers_buffer)
+
+                        // how did it go?
+                        if (x.result === 'error') {
+                            // if we got an error, give up
+                            console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
+                            throw new Error('error parsing headers')
+                        } else if (x.result === 'waiting') {
+                            if (request_ended)
+                                throw new Error('Multiplexed request ended before headers received.')
+                        } else return x
                     })
 
-                    if (!r.ok) throw new Error('status not ok: ' + r.status)
-                    if (r.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('wrong multiplex version: ' + r.headers.get('Multiplex-Version') + ', expected ' + multiplex_version)
+                    // put the bytes left over from the header back
+                    if (parsed_headers.input.length) buffers.unshift(parsed_headers.input)
+
+                    // these headers will also have the status,
+                    // but we want to present the status in a more usual way below
+                    var status = parsed_headers.headers[':status']
+                    delete parsed_headers.headers[':status']
+
+                    // create our own fake response object,
+                    // to mimik fetch's response object,
+                    // feeding the user our request data from the multiplexer
+                    var res = new Response(new ReadableStream({
+                        async start(controller) {
+                            try {
+                                await process_buffers(() => {
+                                    var b = buffers.shift()
+                                    if (!b) return true
+                                    controller.enqueue(b)
+                                })
+                            } finally { controller.close() }
+                        }
+                    }), {
+                        status,
+                        headers: parsed_headers.headers
+                    })
+
+                    // add a convenience property for the user to know if
+                    // this response is being multiplexed
+                    res.is_multiplexed = true
+
+                    // return the fake response object
+                    return res
                 } catch (e) {
-                    e = new Error(`Could not cancel multiplexed request: ${e}`)
-                    console.error('' + e)
+                    // if we had an error, be sure to unregister ourselves
+                    unset(e)
                     throw e
                 }
             }
-
-            // do the underlying fetch
-            try {
-                var mux_was_done = await promise_done(mux_promise)
-
-                var res = await normal_fetch(url, params)
-
-                if (res.status === 424 && !mux_was_done) {
-                    // this error will trigger a retry if the user is using that option
-                    throw new Error('multiplexer not yet connected')
-                }
-
-                // if the response says it's ok,
-                // but it's is not a multiplexed response,
-                // fall back to as if it was a normal fetch
-                if (res.ok && res.status !== 293) return res
-
-                if (res.status !== 293) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-through') + ', got status: ' + res.status)
-
-                if (res.headers.get('Multiplex-Version') !== multiplex_version) throw new Error('Could not establish multiplexed request ' + params.headers.get('multiplex-through') + ', got unknown version: ' + res.headers.get('Multiplex-Version'))
-
-                // we want to present the illusion that the connection is still open,
-                // and therefor closable with "abort",
-                // so we handle the abort ourselves to close the multiplexed request
-                params.signal?.addEventListener('abort', () =>
-                    unset(create_abort_error('request aborted')))
-
-                // first, we need to listen for the headers..
-                var headers_buffer = new Uint8Array()
-                var parsed_headers = await process_buffers(() => {
-                    // check if the request has been closed
-                    var request_ended = !buffers[buffers.length - 1]
-                    if (request_ended) buffers.pop()
-
-                    // aggregate all the new buffers into our big headers_buffer
-                    headers_buffer = concat_buffers([headers_buffer, ...buffers])
-                    buffers = []
-
-                    // and if the request had ended, put that information back
-                    if (request_ended) buffers.push(null)
-
-                    // try parsing what we got so far as headers..
-                    var x = parse_headers(headers_buffer)
-
-                    // how did it go?
-                    if (x.result === 'error') {
-                        // if we got an error, give up
-                        console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
-                        throw new Error('error parsing headers')
-                    } else if (x.result === 'waiting') {
-                        if (request_ended) throw new Error('Multiplexed request ended before headers received.')
-                    } else return x
-                })
-
-                // put the bytes left over from the header back
-                if (parsed_headers.input.length) buffers.unshift(parsed_headers.input)
-
-                // these headers will also have the status,
-                // but we want to present the status in a more usual way below
-                var status = parsed_headers.headers[':status']
-                delete parsed_headers.headers[':status']
-
-                // create our own fake response object,
-                // to mimik fetch's response object,
-                // feeding the user our request data from the multiplexer
-                var res = new Response(new ReadableStream({
-                    async start(controller) {
-                        try {
-                            await process_buffers(() => {
-                                var b = buffers.shift()
-                                if (!b) return true
-                                controller.enqueue(b)
-                            })
-                        } finally { controller.close() }
-                    }
-                }), {
-                    status,
-                    headers: parsed_headers.headers
-                })
-
-                // add a convenience property for the user to know if
-                // this response is being multiplexed
-                res.is_multiplexed = true
-
-                // return the fake response object
-                return res
-            } catch (e) {
-                // if we had an error, be sure to unregister ourselves
-                unset(e)
-                throw e
-            }
-        }
-    })()
+        })()
 
     // call the special fetch function for the multiplexer
     return await (await multiplex_fetch.multiplexers[mux_key])(url, params)
