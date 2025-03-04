@@ -668,8 +668,7 @@ runTest(
         var o = await r2.json()
         return `status: ${r2.status}, json.error: ` + o.error + `, error as expected: ${JSON.stringify(o) === JSON.stringify({
             "error": "Multiplexer already exists",
-            "message": `Cannot create duplicate multiplexer with ID '${m}'`,
-            "details": "This multiplexer ID must be unique"
+            "details": `Cannot create duplicate multiplexer with ID '${m}'`
         })}`
     },
     'status: 409, json.error: Multiplexer already exists, error as expected: true'
@@ -690,12 +689,11 @@ runTest(
         var r2 = await og_fetch(`/json`, {signal: a.signal, subscribe: true, headers: {'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
         var o = await r2.json()
         return `status: ${r2.status}, json.error: ` + o.error + `, error as expected: ${JSON.stringify(o) === JSON.stringify({
-            "error": "Request already exists",
-            "message": `Cannot create duplicate request with ID '${s}'`,
-            "details": "This request ID must be unique"
+            "error": "Request already multiplexed",
+            "details": `Cannot multiplex request with duplicate ID '${s}' for multiplexer '${m}'`,
         })}`
     },
-    'status: 409, json.error: Request already exists, error as expected: true'
+    'status: 409, json.error: Request already multiplexed, error as expected: true'
 );
 
 runTest(

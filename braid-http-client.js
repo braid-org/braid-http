@@ -317,9 +317,8 @@ async function braid_fetch (url, params = {}) {
                         braid_fetch.subscription_counts?.[origin] >
                             (!mux_params ? 1 : (mux_params.after ?? 0))))) {
                     res = await multiplex_fetch(url, params, mux_params?.via === 'POST')
-                } else {
+                } else
                     res = await normal_fetch(url, params)
-                }
 
                 // And customize the response with a couple methods for getting
                 // the braid subscription data:

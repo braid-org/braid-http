@@ -269,8 +269,7 @@ function braidify (req, res, next) {
                 res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
                 return res.end(JSON.stringify({
                     error: 'Multiplexer already exists',
-                    message: `Cannot create duplicate multiplexer with ID '${multiplexer}'`,
-                    details: 'This multiplexer ID must be unique'
+                    details: `Cannot create duplicate multiplexer with ID '${multiplexer}'`
                 }))
             }
 
@@ -344,9 +343,9 @@ function braidify (req, res, next) {
         if (m.requests.has(request)) {
             res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
             return res.end(JSON.stringify({
-                error: 'Request already exists',
-                message: `Cannot create duplicate request with ID '${request}'`,
-                details: 'This request ID must be unique'
+                error: 'Request already multiplexed',
+                details: `Cannot multiplex request with duplicate ID '`
+                         + request + `' for multiplexer '` + multiplexer + `'`
             }))
         }
 
