@@ -179,6 +179,35 @@ runTest(
 )
 
 runTest(
+    "Test retrying MULTIPLEX if duplicate id (with new id).",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            retry: true
+        })
+        delete multiplex_fetch.multiplexers[m]
+        s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            retry: true,
+            onFetch: (url, params) => {
+                if (m) params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
+                else params.headers.delete('Multiplex-Through')
+                m = null
+            }
+        })
+        return '' + !!r.is_multiplexed
+    },
+    'true'
+)
+
+runTest(
     `Test for "Incremental: ?1" header in multiplexer response.`,
     async () => {
         var m = Math.random().toString(36).slice(2)

@@ -851,12 +851,36 @@ async function multiplex_fetch(url, params, mux_params) {
 
             var requests = new Map()
             var mux_error = null
+            var try_deleting = new Set()
 
-            function cleanup(e) {
+            function cleanup(e, stay_dead) {
                 // the multiplexer stream has died.. let everyone know..
                 mux_error = e
-                delete multiplex_fetch.multiplexers[mux_key]
+                if (!stay_dead) delete multiplex_fetch.multiplexers[mux_key]
                 for (var f of requests.values()) f()
+            }
+
+            async function try_deleting_request(request) {
+                if (!try_deleting.has(request)) {
+                    try_deleting.add(request)
+                    try {
+                        var r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
+                            method: 'DELETE',
+                            headers: { 'Multiplex-Version': multiplex_version },
+                            retry: true
+                        })
+
+                        if (!r.ok) throw new Error('status not ok: ' + r.status)
+                        if (r.headers.get('Multiplex-Version') !== multiplex_version)
+                            throw new Error('wrong multiplex version: '
+                                            + r.headers.get('Multiplex-Version')
+                                            + ', expected ' + multiplex_version)
+                    } catch (e) {
+                        e = new Error(`Could not cancel multiplexed request: ${e}`)
+                        console.error('' + e)
+                        throw e
+                    } finally { try_deleting.delete(request) }
+                }
             }
 
             var mux_promise = (async () => {
@@ -868,17 +892,24 @@ async function multiplex_fetch(url, params, mux_params) {
                         headers: {'Multiplex-Version': multiplex_version},
                         retry: true
                     })
+                    if (r.status === 409) {
+                        var e = await r.json()
+                        if (e.error === 'Multiplexer already exists') return cleanup(new Error(e.error))
+                    }
                     if (!r.ok || r.headers.get('Multiplex-Version') !== multiplex_version)
                         throw 'bad'
                 } catch (e) {
                     // some servers don't like custom methods,
-                    // so let's try with a custom header
+                    // so let's try with a well-known url
                     try {
                         r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`,
                                               {method: 'POST',
                                                headers: {'Multiplex-Version': multiplex_version},
                                                retry: true})
-
+                        if (r.status === 409) {
+                            var e = await r.json()
+                            if (e.error === 'Multiplexer already exists') return cleanup(new Error(e.error))
+                        }
                         if (!r.ok) throw new Error('status not ok: ' + r.status)
                         if (r.headers.get('Multiplex-Version') !== multiplex_version)
                             throw new Error('wrong multiplex version: '
@@ -888,7 +919,7 @@ async function multiplex_fetch(url, params, mux_params) {
                         // fallback to normal fetch if multiplexed connection fails
                         console.error(`Could not establish multiplexer.\n`
                                       + `Got error: ${e}.\nFalling back to normal connection.`)
-                        return false
+                        return cleanup(e, true)
                     }
                 }
 
@@ -896,19 +927,9 @@ async function multiplex_fetch(url, params, mux_params) {
                 // and send messages to the appropriate requests
                 var try_deleting = new Set()
                 parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
-                    if (requests.has(request)) {
-                        requests.get(request)(bytes)
-                    } else if (!try_deleting.has(request)) {
-                        try_deleting.add(request)
-                        try {
-                            await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
-                                method: 'DELETE',
-                                headers: { 'Multiplex-Version': multiplex_version },
-                                retry: true
-                            })
-                        } finally { try_deleting.delete(request) }
-                    }
-                }, cleanup)
+                    if (requests.has(request)) requests.get(request)(bytes)
+                    else try_deleting_request(request)
+                }, e => cleanup(e))
             })()
 
             // return a "fetch" for this multiplexer
@@ -956,22 +977,7 @@ async function multiplex_fetch(url, params, mux_params) {
                     requests.delete(request)
                     request_error = e
                     bytes_available()
-                    try {
-                        var r = await braid_fetch(`${origin}${params.headers.get('multiplex-through')}`, {
-                            method: 'DELETE',
-                            headers: { 'Multiplex-Version': multiplex_version }, retry: true
-                        })
-
-                        if (!r.ok) throw new Error('status not ok: ' + r.status)
-                        if (r.headers.get('Multiplex-Version') !== multiplex_version)
-                            throw new Error('wrong multiplex version: '
-                                            + r.headers.get('Multiplex-Version')
-                                            + ', expected ' + multiplex_version)
-                    } catch (e) {
-                        e = new Error(`Could not cancel multiplexed request: ${e}`)
-                        console.error('' + e)
-                        throw e
-                    }
+                    await try_deleting_request(request)
                 }
 
                 // do the underlying fetch
