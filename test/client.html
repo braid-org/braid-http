@@ -218,6 +218,37 @@ runTest(
 )
 
 runTest(
+    "Test handling duplicate request id",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            retry: true
+        })
+
+        var a = new AbortController()
+        var count = 0
+        await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            retry: true,
+            onFetch: (url, params) => {
+                count++
+                params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
+                s = Math.random().toString(36).slice(2)
+            }
+        })
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+        return 'count: ' + count
+    },
+    'count: 2'
+)
+
+runTest(
     "Test falling back to MULTIPLEX well-known url, if method doesn't work.",
     async () => {
         var a = new AbortController()

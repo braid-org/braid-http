@@ -986,6 +986,11 @@ async function multiplex_fetch(url, params, mux_params) {
 
                     var res = await normal_fetch(url, params)
 
+                    if (res.status === 409) {
+                        var e = await r.json()
+                        if (e.error === 'Request already multiplexed') throw new Error(e.error)
+                    }
+
                     if (res.status === 424 && !mux_was_done) {
                         // this error will trigger a retry if the user is using that option
                         throw new Error('multiplexer not yet connected')
