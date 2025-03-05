@@ -1,4 +1,3 @@
-// var peer = Math.random().toString(36).substr(2)
 
 // ***************************
 // http
@@ -316,7 +315,7 @@ async function braid_fetch (url, params = {}) {
                     (params.headers.has('subscribe') &&
                         braid_fetch.subscription_counts?.[origin] >
                             (!mux_params ? 1 : (mux_params.after ?? 0))))) {
-                    res = await multiplex_fetch(url, params, mux_params?.via === 'POST')
+                    res = await multiplex_fetch(url, params, mux_params)
                 } else
                     res = await normal_fetch(url, params)
 
@@ -833,7 +832,7 @@ function parse_body (state) {
 
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
-async function multiplex_fetch(url, params, skip_multiplex_method) {
+async function multiplex_fetch(url, params, mux_params) {
     var multiplex_version = '1.0'
 
     var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
@@ -848,15 +847,22 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
         async () => {
             // make up a new multiplexer id (unless it is being overriden)
             var multiplexer = params.headers.get('multiplex-through')?.split('/')[3]
-                ?? Math.random().toString(36).slice(2)
+                ?? random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
 
             var requests = new Map()
             var mux_error = null
 
+            function cleanup(e) {
+                // the multiplexer stream has died.. let everyone know..
+                mux_error = e
+                delete multiplex_fetch.multiplexers[mux_key]
+                for (var f of requests.values()) f()
+            }
+
             var mux_promise = (async () => {
                 // attempt to establish a multiplexed connection
                 try {
-                    if (skip_multiplex_method) throw 'skip multiplex method'
+                    if (mux_params?.via === 'POST') throw 'skip multiplex method'
                     var r = await braid_fetch(`${origin}/${multiplexer}`, {
                         method: 'MULTIPLEX',
                         headers: {'Multiplex-Version': multiplex_version},
@@ -902,28 +908,15 @@ async function multiplex_fetch(url, params, skip_multiplex_method) {
                             })
                         } finally { try_deleting.delete(request) }
                     }
-                }, e => {
-                    // the multiplexer stream has died.. let everyone know..
-                    mux_error = e
-                    for (var f of requests.values()) f()
-                    delete multiplex_fetch.multiplexers[mux_key]
-                })
+                }, cleanup)
             })()
 
             // return a "fetch" for this multiplexer
             return async (url, params) => {
 
-                // if we already know the multiplexer is not working,
-                // then fallback to normal fetch
-                // (unless the user is specifically asking for multiplexing)
-                if ((await promise_done(mux_promise))
-                    && (await mux_promise) === false
-                    && !params.headers.get('multiplex-through'))
-                    return await normal_fetch(url, params)
-
                 // make up a new request id (unless it is being overriden)
                 var request = params.headers.get('multiplex-through')?.split('/')[4]
-                    ?? Math.random().toString(36).slice(2)
+                    ?? random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
 
                 // add the Multiplex-Through header without affecting the underlying params
                 var mux_headers = new Headers(params.headers)
@@ -1216,6 +1209,10 @@ async function promise_done(promise) {
     var pending = {}
     var ret = await Promise.race([promise, Promise.resolve(pending)])
     return ret !== pending
+}
+
+function random_base64url(n) {
+    return [...crypto.getRandomValues(new Uint8Array(n))].map(x => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[x % 64]).join('')
 }
 
 // ****************************
