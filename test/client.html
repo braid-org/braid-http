@@ -272,20 +272,24 @@ runTest(
         var a = new AbortController()
         var m = 'bad_mux_well_known_url'
         var s = Math.random().toString(36).slice(2)
-        try {
+        var count = 0
+        return new Promise(async done => {
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
                 multiplex: {via: 'POST'},
-                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-                retry: true
+                retry: true,
+                onFetch: (url, params) => {
+                    count++
+                    if (count === 2) done(count)
+                    params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
+                    m = Math.random().toString(36).slice(2)
+                }
             })
-        } catch (e) {
-            return e.message.slice(0, 'Could not establish multiplexed request'.length)
-        }
+        })
         return 'hm..'
     },
-    'Could not establish multiplexed request'
+    '2'
 )
 
 runTest(
@@ -878,11 +882,11 @@ runTest(
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
                 `});
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) + '..'}
+        } catch (e) { return '' + e}
         finally { a.abort() }
         return 'hm..'
     },
-    'Error: Could not establish multiplexed request..'
+    'Error: multiplexer not yet connected'
 );
 
 runTest(

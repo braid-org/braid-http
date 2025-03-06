@@ -919,13 +919,13 @@ async function multiplex_fetch(url, params, mux_params) {
                         // fallback to normal fetch if multiplexed connection fails
                         console.error(`Could not establish multiplexer.\n`
                                       + `Got error: ${e}.\nFalling back to normal connection.`)
-                        return cleanup(e, true)
+                        cleanup(e, true)
+                        return false
                     }
                 }
 
                 // parse the multiplexed stream,
                 // and send messages to the appropriate requests
-                var try_deleting = new Set()
                 parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
                     if (requests.has(request)) requests.get(request)(bytes)
                     else try_deleting_request(request)
@@ -934,6 +934,12 @@ async function multiplex_fetch(url, params, mux_params) {
 
             // return a "fetch" for this multiplexer
             return async (url, params) => {
+
+                // if we already know the multiplexer is not working,
+                // then fallback to normal fetch
+                // (unless the user is specifically asking for multiplexing)
+                if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-through'))
+                    return await normal_fetch(url, params)
 
                 // make up a new request id (unless it is being overriden)
                 var request = params.headers.get('multiplex-through')?.split('/')[4]
@@ -982,8 +988,6 @@ async function multiplex_fetch(url, params, mux_params) {
 
                 // do the underlying fetch
                 try {
-                    var mux_was_done = await promise_done(mux_promise)
-
                     var res = await normal_fetch(url, params)
 
                     if (res.status === 409) {
@@ -991,7 +995,7 @@ async function multiplex_fetch(url, params, mux_params) {
                         if (e.error === 'Request already multiplexed') throw new Error(e.error)
                     }
 
-                    if (res.status === 424 && !mux_was_done) {
+                    if (res.status === 424) {
                         // this error will trigger a retry if the user is using that option
                         throw new Error('multiplexer not yet connected')
                     }
