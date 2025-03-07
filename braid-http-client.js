@@ -830,6 +830,69 @@ function parse_body (state) {
     }
 }
 
+
+// The "extra_headers" field is returned to the client on any *update* or
+// *patch* to include any headers that we've received, but don't have braid
+// semantics for.
+//
+// This function creates that hash from a headers object, by filtering out all
+// known headers.
+function extra_headers (headers) {
+    // Clone headers
+    var result = Object.assign({}, headers)
+
+    // Remove the non-extra parts
+    var known_headers = ['version', 'parents', 'patches',
+                         'content-length', 'content-range', ':status']
+    for (var i = 0; i < known_headers.length; i++)
+        delete result[known_headers[i]]
+
+    // Return undefined if we deleted them all
+    if (Object.keys(result).length === 0)
+        return undefined
+
+    return result
+}
+
+function get_binary_length(x) {
+    return  x instanceof ArrayBuffer ? x.byteLength :
+            x instanceof Uint8Array ? x.length :
+            x instanceof Blob ? x.size : undefined
+}
+
+function deep_copy(x) {
+    if (x === null || typeof x !== 'object') return x
+    if (Array.isArray(x)) return x.map(x => deep_copy(x))
+    if (Object.prototype.toString.call(x) === '[object Object]')
+        return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
+    return x
+}
+
+function ascii_ify(s) {
+    return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+}
+
+function create_abort_error(msg) {
+    var e = new Error(msg)
+    e.name = 'AbortError'
+    return e
+}
+
+async function promise_done(promise) {
+    var pending = {}
+    var ret = await Promise.race([promise, Promise.resolve(pending)])
+    return ret !== pending
+}
+
+function random_base64url(n) {
+    return [...crypto.getRandomValues(new Uint8Array(n))].map(x => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[x % 64]).join('')
+}
+
+
+// ****************************
+// Multiplexing
+// ****************************
+
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
 async function multiplex_fetch(url, params, mux_params) {
@@ -894,7 +957,8 @@ async function multiplex_fetch(url, params, mux_params) {
                     })
                     if (r.status === 409) {
                         var e = await r.json()
-                        if (e.error === 'Multiplexer already exists') return cleanup(new Error(e.error))
+                        if (e.error === 'Multiplexer already exists')
+                            return cleanup(new Error(e.error))
                     }
                     if (!r.ok || r.headers.get('Multiplex-Version') !== multiplex_version)
                         throw 'bad'
@@ -908,7 +972,8 @@ async function multiplex_fetch(url, params, mux_params) {
                                                retry: true})
                         if (r.status === 409) {
                             var e = await r.json()
-                            if (e.error === 'Multiplexer already exists') return cleanup(new Error(e.error))
+                            if (e.error === 'Multiplexer already exists')
+                                return cleanup(new Error(e.error))
                         }
                         if (!r.ok) throw new Error('status not ok: ' + r.status)
                         if (r.headers.get('Multiplex-Version') !== multiplex_version)
@@ -938,7 +1003,9 @@ async function multiplex_fetch(url, params, mux_params) {
                 // if we already know the multiplexer is not working,
                 // then fallback to normal fetch
                 // (unless the user is specifically asking for multiplexing)
-                if ((await promise_done(mux_promise)) && (await mux_promise) === false && !params.headers.get('multiplex-through'))
+                if ((await promise_done(mux_promise))
+                    && (await mux_promise) === false
+                    && !params.headers.get('multiplex-through'))
                     return await normal_fetch(url, params)
 
                 // make up a new request id (unless it is being overriden)
@@ -1173,62 +1240,6 @@ function concat_buffers(buffers) {
     return x
 }
 
-// The "extra_headers" field is returned to the client on any *update* or
-// *patch* to include any headers that we've received, but don't have braid
-// semantics for.
-//
-// This function creates that hash from a headers object, by filtering out all
-// known headers.
-function extra_headers (headers) {
-    // Clone headers
-    var result = Object.assign({}, headers)
-
-    // Remove the non-extra parts
-    var known_headers = ['version', 'parents', 'patches',
-                         'content-length', 'content-range', ':status']
-    for (var i = 0; i < known_headers.length; i++)
-        delete result[known_headers[i]]
-
-    // Return undefined if we deleted them all
-    if (Object.keys(result).length === 0)
-        return undefined
-
-    return result
-}
-
-function get_binary_length(x) {
-    return  x instanceof ArrayBuffer ? x.byteLength :
-            x instanceof Uint8Array ? x.length :
-            x instanceof Blob ? x.size : undefined
-}
-
-function deep_copy(x) {
-    if (x === null || typeof x !== 'object') return x
-    if (Array.isArray(x)) return x.map(x => deep_copy(x))
-    if (Object.prototype.toString.call(x) === '[object Object]')
-        return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
-    return x
-}
-
-function ascii_ify(s) {
-    return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
-}
-
-function create_abort_error(msg) {
-    var e = new Error(msg)
-    e.name = 'AbortError'
-    return e
-}
-
-async function promise_done(promise) {
-    var pending = {}
-    var ret = await Promise.race([promise, Promise.resolve(pending)])
-    return ret !== pending
-}
-
-function random_base64url(n) {
-    return [...crypto.getRandomValues(new Uint8Array(n))].map(x => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[x % 64]).join('')
-}
 
 // ****************************
 // Exports
