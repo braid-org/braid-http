@@ -315,7 +315,7 @@ async function braid_fetch (url, params = {}) {
                     (params.headers.has('subscribe') &&
                         braid_fetch.subscription_counts?.[origin] >
                             (!mux_params ? 1 : (mux_params.after ?? 0))))) {
-                    res = await multiplex_fetch(url, params, mux_params)
+                    res = await multiplex_fetch(url, params, mux_params, underlying_aborter)
                 } else
                     res = await normal_fetch(url, params)
 
@@ -895,7 +895,7 @@ function random_base64url(n) {
 
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
-async function multiplex_fetch(url, params, mux_params) {
+async function multiplex_fetch(url, params, mux_params, aborter) {
     var multiplex_version = '1.0'
 
     var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
@@ -1039,8 +1039,10 @@ async function multiplex_fetch(url, params, mux_params) {
 
                 // tell the multiplexer to send bytes for this request to us
                 requests.set(request, bytes => {
-                    if (!bytes) buffers.push(bytes)
-                    else if (!mux_error) buffers.push(bytes)
+                    if (!bytes) {
+                        buffers.push(bytes)
+                        if (mux_error || request_error) aborter.abort()
+                    } else if (!mux_error) buffers.push(bytes)
                     bytes_available()
                 })
 
@@ -1133,7 +1135,10 @@ async function multiplex_fetch(url, params, mux_params) {
                             try {
                                 await process_buffers(() => {
                                     var b = buffers.shift()
-                                    if (!b) return true
+                                    if (!b) {
+                                        if (mux_error || request_error) controller.error(mux_error || request_error)
+                                        return true
+                                    }
                                     controller.enqueue(b)
                                 })
                             } finally { controller.close() }
@@ -1152,7 +1157,7 @@ async function multiplex_fetch(url, params, mux_params) {
                 } catch (e) {
                     // if we had an error, be sure to unregister ourselves
                     unset(e)
-                    throw e
+                    throw mux_error || e
                 }
             }
         })()
