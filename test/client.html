@@ -170,6 +170,14 @@ braid_fetch.enable_multiplex = {}
 runTest(
     "Basic MULTIPLEX method test.",
     async () => {
+        await fetch('/eval', {
+            method: 'POST',
+            body: `
+                braidify.enable_multiplex = true
+                res.end('ok')
+            `
+        })
+
         var m = Math.random().toString(36).slice(2)
         var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         var {done, value} = await r.body.getReader().read()
@@ -177,6 +185,8 @@ runTest(
     },
     true
 )
+
+waitForTests(() => {})
 
 runTest(
     "Test multiplexer timing out because of no requests.",
