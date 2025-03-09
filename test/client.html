@@ -179,6 +179,45 @@ runTest(
 )
 
 runTest(
+    "Test multiplexer timing out because of no requests.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: {not_used_timeout: 1000},
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            retry: true
+        })
+        var t1 = !!multiplex_fetch.multiplexers[m]
+        a.abort()
+        await new Promise(done => setTimeout(done, 800))
+        var t2 = !!multiplex_fetch.multiplexers[m]
+
+        var a = new AbortController()
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: {not_used_timeout: 1000},
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            retry: true
+        })
+        a.abort()
+        await new Promise(done => setTimeout(done, 800))
+        var t3 = !!multiplex_fetch.multiplexers[m]
+
+        await new Promise(done => setTimeout(done, 400))
+        var t4 = !!multiplex_fetch.multiplexers[m]
+
+        return `t1=${t1}, t2=${t2}, t3=${t3}, t4=${t4}`
+    },
+    `t1=true, t2=true, t3=true, t4=false`
+)
+
+runTest(
     "Test retrying MULTIPLEX if duplicate id (with new id).",
     async () => {
         var a = new AbortController()

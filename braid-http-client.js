@@ -916,6 +916,8 @@ async function multiplex_fetch(url, params, mux_params, aborter) {
             var requests = new Map()
             var mux_error = null
             var try_deleting = new Set()
+            var not_used_timeout = null
+            var mux_aborter = new AbortController()
 
             function cleanup(e, stay_dead) {
                 // the multiplexer stream has died.. let everyone know..
@@ -952,6 +954,7 @@ async function multiplex_fetch(url, params, mux_params, aborter) {
                 try {
                     if (mux_params?.via === 'POST') throw 'skip multiplex method'
                     var r = await braid_fetch(`${origin}/${multiplexer}`, {
+                        signal: mux_aborter.signal,
                         method: 'MULTIPLEX',
                         headers: {'Multiplex-Version': multiplex_version},
                         retry: true
@@ -969,6 +972,7 @@ async function multiplex_fetch(url, params, mux_params, aborter) {
                     try {
                         r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`,
                                               {method: 'POST',
+                                               signal: mux_aborter.signal,
                                                headers: {'Multiplex-Version': multiplex_version},
                                                retry: true})
                         if (r.status === 409) {
@@ -1048,9 +1052,11 @@ async function multiplex_fetch(url, params, mux_params, aborter) {
                 })
 
                 // prepare a function that we'll call to cleanly tear things down
+                clearTimeout(not_used_timeout)
                 var unset = async e => {
                     unset = () => {}
                     requests.delete(request)
+                    if (!requests.size) not_used_timeout = setTimeout(() => mux_aborter.abort(), mux_params?.not_used_timeout ?? 1000 * 20)
                     request_error = e
                     bytes_available()
                     await try_deleting_request(request)
