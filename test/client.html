@@ -192,19 +192,61 @@ runTest(
         })
         delete multiplex_fetch.multiplexers[m]
         s = Math.random().toString(36).slice(2)
+        var st = Date.now()
+        var retried = false
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
             retry: true,
             onFetch: (url, params) => {
-                if (m) params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
-                else params.headers.delete('Multiplex-Through')
-                m = null
+                if (m) {
+                    params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
+                    m = null
+                } else {
+                    params.headers.delete('Multiplex-Through')
+                    retried = true
+                }
             }
         })
-        return '' + !!r.is_multiplexed
+        return `is_mux=${!!r.is_multiplexed}, retried=${retried}, fast=${Date.now() < st + 300}`
     },
-    'true'
+    'is_mux=true, retried=true, fast=true'
+)
+
+runTest(
+    "Test retrying MULTIPLEX-POST if duplicate id (with new id).",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            retry: true
+        })
+        delete multiplex_fetch.multiplexers[m]
+        s = Math.random().toString(36).slice(2)
+        var st = Date.now()
+        var retried = false
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            retry: true,
+            multiplex: {via: 'POST'},
+            onFetch: (url, params) => {
+                if (m) {
+                    params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
+                    m = null
+                } else {
+                    params.headers.delete('Multiplex-Through')
+                    retried = true
+                }
+            }
+        })
+        return `is_mux=${!!r.is_multiplexed}, retried=${retried}, fast=${Date.now() < st + 300}`
+    },
+    'is_mux=true, retried=true, fast=true'
 )
 
 runTest(
@@ -232,6 +274,7 @@ runTest(
 
         var a = new AbortController()
         var count = 0
+        var st = Date.now()
         await fetch('/json', {
             signal: a.signal,
             subscribe: true,
@@ -243,9 +286,9 @@ runTest(
             }
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return 'count: ' + count
+        return 'count: ' + count + ', fast=' + (Date.now() < st + 300)
     },
-    'count: 2'
+    'count: 2, fast=true'
 )
 
 runTest(
@@ -254,6 +297,7 @@ runTest(
         var a = new AbortController()
         var m = 'bad_mux_method'
         var s = Math.random().toString(36).slice(2)
+        var st = Date.now()
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
@@ -261,9 +305,9 @@ runTest(
             retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return '' + !!r.is_multiplexed
+        return 'is_mux=' + !!r.is_multiplexed + ', fast=' + (Date.now() < st + 300)
     },
-    'true'
+    'is_mux=true, fast=true'
 )
 
 runTest(
@@ -321,15 +365,18 @@ runTest(
 
         if (!r2.is_multiplexed) throw new Error('not multiplexed')
 
-        let ret = await new Promise(done => r2.subscribe(u => {
-            u.body = u.body_text
-            done(JSON.stringify(u))
-        }))
+        return await new Promise(async (outter_done, outter_fail) => {
+            let ret = await new Promise(done => r2.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify(u))
+            }, e => {
+                if (e.name === 'AbortError') outter_done(ret)
+                else outter_fail(e)
+            }))
 
-        a1.abort()
-        a2.abort()
-
-        return ret
+            a1.abort()
+            a2.abort()
+        })
     },
     JSON.stringify(test_update)
 )
@@ -539,29 +586,38 @@ runTest(
 runTest(
     "Test closing multiplexer with retry",
     async () => {
-        return await new Promise(async done => {
+        var ret = ''
+        await new Promise(async done => {
             var count = 0
             var a = new AbortController()
             var m = Math.random().toString(36).slice(2)
             var s = Math.random().toString(36).slice(2)
+            var aborter = null
             var r = await fetch('/json', {
                 signal: a.signal,
                 subscribe: true,
                 headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-                retry: { onRes: () => count++ }
+                retry: { onRes: () => count++ },
+                onFetch: (url, params, _aborter) => {
+                    aborter = _aborter
+                }
             })
             if (!r.is_multiplexed) throw new Error('not multiplexed')
             r.subscribe(u => {
-                if (count === 2) {
+                if (count === 2 && !ret) {
                     u.body = u.body_text
-                    done(JSON.stringify(u))
-                    a.abort()
+                    ret = JSON.stringify(u)
+                    aborter.abort()
                 }
-            }, e => {})
+            }, e => {
+                ret += ', ' + e.message
+                done()
+            })
             await og_fetch('/kill_mux', {headers: {mux: m}})
         })
+        return ret
     },
-    JSON.stringify(test_update)
+    JSON.stringify(test_update) + ', request aborted'
 )
 
 runTest(
@@ -704,7 +760,7 @@ runTest(
         } catch (e) { return e.message }
         return 'hm..'
     },
-    'multiplexer not yet connected'
+    'multiplexer not connected'
 );
 
 runTest(
@@ -761,6 +817,30 @@ runTest(
             var r = await fetch('/500', {
                 signal: a.signal,
                 headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+                retry: true
+            })
+        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
+        return 'hm..'
+    },
+    'Error: Could not establish multiplexed request'
+);
+
+runTest(
+    "Test failing to establish multiplexed request because of version.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        try {
+            var r = await fetch('/eval_pre_braidify', {
+                method: 'POST',
+                signal: a.signal,
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+                retry: true,
+                body: `
+                    res.writeHead(293, {'Multiplex-Version': 'wrong'})
+                    res.end('ok')
+                `
             })
         } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
         return 'hm..'
@@ -773,7 +853,7 @@ runTest(
     async () => {
         return await new Promise(async done => {
             window.addEventListener('unhandledrejection', function (event) {
-                if (event.reason.message === 'Could not cancel multiplexed request: Error: giving up because of http status: 404') done('saw the error we wanted')
+                if (event.reason.message === 'Could not cancel multiplexed request: Error: status not ok: 500') done('saw the error we wanted')
             })
 
             var m = Math.random().toString(36).slice(2)
@@ -850,7 +930,7 @@ runTest(
                 done(JSON.stringify(u))
 
             }, e => {
-                done('' + e)
+                done('' + e.message)
 
             })
 
@@ -886,7 +966,7 @@ runTest(
         finally { a.abort() }
         return 'hm..'
     },
-    'Error: multiplexer not yet connected'
+    'Error: multiplexer not connected'
 );
 
 runTest(
@@ -1546,7 +1626,7 @@ runTest(
         x[1].headers = Object.fromEntries([...x[1].headers])
         return JSON.stringify(x)
     },
-    '["/json",{"headers":{"parents":"\\"test\\""},"cache":"no-cache","signal":{}}]'
+    '["/json",{"headers":{"parents":"\\"test\\""},"cache":"no-cache","signal":{}},{}]'
 )
 
 runTest(
@@ -2211,33 +2291,25 @@ runTest(
             res.subscribe((u) => {}, done)
         })
     },
-    'Parse error in headers: ""hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n""'
+    'Error: Parse error in headers: ""hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n""'
 )
 
 runTest(
     "Should not retry on HTTP 400",
     async () => {
-        try {
-            await fetch("/400", { retry: true })
-            throw new Error("Should have thrown an error")
-        } catch (e) {
-            return e.message
-        }
+        var r = await fetch("/400", { retry: true })
+        return r.status
     },
-    "giving up because of http status: 400"
+    "400"
 )
 
 runTest(
     "Should not retry on HTTP 401 (access denied)",
     async () => {
-        try {
-            await fetch("/401", { retry: true })
-            throw new Error("Should have thrown an error")
-        } catch (e) {
-            return e.message
-        }
+        var r = await fetch("/401", { retry: true })
+        return r.status
     },
-    "giving up because of http status: 401 (access denied)"
+    "401"
 )
 
 runTest(
@@ -2262,6 +2334,21 @@ runTest(
         setTimeout(() => a.abort(), 30)
         try {
             await fetch("/keep_open", { retry: true, signal: a.signal })
+            throw new Error("Should have been aborted")
+        } catch (e) {
+            return e.name
+        }
+    },
+    "AbortError"
+)
+
+runTest(
+    "Should not retry if already aborted",
+    async () => {
+        let a = new AbortController()
+        a.abort()
+        try {
+            await fetch("/keep_open", { signal: a.signal })
             throw new Error("Should have been aborted")
         } catch (e) {
             return e.name
