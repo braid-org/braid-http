@@ -189,6 +189,32 @@ runTest(
 waitForTests(() => {})
 
 runTest(
+    "Test that when DELETE gets 404 for multiplexer, it kills the multiplexer",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
+        })
+
+        await fetch('/eval_pre_braidify', {
+            method: 'POST',
+            body: `braidify.multiplexers.delete(${JSON.stringify(m)})`
+        })
+
+        a.abort()
+
+        await new Promise(done => setTimeout(done, 300))
+
+        return '' + !!multiplex_fetch.multiplexers[m]
+    },
+    `false`
+)
+
+runTest(
     "Test that multiplex request sets cache-control: no-store.",
     async () => {
         var a = new AbortController()

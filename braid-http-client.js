@@ -947,11 +947,22 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         if (!try_deleting.has(request)) {
             try_deleting.add(request)
             try {
+                var mux_was_done = await promise_done(mux_promise)
+
                 var r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
                     method: 'DELETE',
                     headers: { 'Multiplex-Version': multiplex_version },
                     retry: true
                 })
+
+                // if we know the multiplexer was created,
+                // but it isn't there now,
+                // and our client doesn't realize it,
+                // then shut it down ourselves
+                if (r.status === 404 && r.headers.get('Bad-Multiplexer')
+                    && mux_was_done && !mux_error) {
+                    cleanup_multiplexer(new Error('multiplexer detected to be closed'))
+                }
 
                 if (!r.ok) throw new Error('status not ok: ' + r.status)
                 if (r.headers.get('Multiplex-Version') !== multiplex_version)

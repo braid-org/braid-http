@@ -93,7 +93,7 @@ require('http2').createSecureServer({
         })
 
         if (req.url.startsWith('/eval_pre_braidify') && req.method === 'POST')
-            if ((await eval_func()) !== 'keep going') return
+            if ((await eval_func()) !== 'keep going') return res.end('ok')
 
         // Braidifies our server
         braidify(req, res)
