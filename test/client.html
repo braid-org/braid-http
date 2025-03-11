@@ -189,6 +189,33 @@ runTest(
 waitForTests(() => {})
 
 runTest(
+    "Test that multiplex request sets cache-control: no-store.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/json', {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
+        })
+
+        var s2 = Math.random().toString(36).slice(2)
+        var r2 = await og_fetch('/json', {
+            subscribe: true,
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}`,
+                'Multiplex-Version': multiplex_version                
+            }
+        })
+        console.log(`r2 status = ${r2.status}`)
+        return r2.headers.get('cache-control')
+    },
+    `no-store`
+)
+
+runTest(
     "Test multiplexer timing out because of no requests.",
     async () => {
         var a = new AbortController()

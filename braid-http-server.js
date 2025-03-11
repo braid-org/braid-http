@@ -374,6 +374,7 @@ function braidify (req, res, next) {
                     ':status': 293,
                     'Multiplex-Through': req.headers['multiplex-through'],
                     'Multiplex-Version': multiplex_version,
+                    'Cache-Control': 'no-store',
                     ...Object.fromEntries(cors_headers)
                 })
                 og_stream.write('Ok.')
@@ -382,6 +383,7 @@ function braidify (req, res, next) {
                 og_socket.write('HTTP/1.1 293 Responded via multiplexer\r\n')
                 og_socket.write(`Multiplex-Through: ${req.headers['multiplex-through']}\r\n`)
                 og_socket.write(`Multiplex-Version: ${multiplex_version}\r\n`)
+                og_socket.write(`Cache-Control: no-store\r\n`)
                 cors_headers.forEach(([key, value]) =>
                     og_socket.write(`${key}: ${value}\r\n`))
                 og_socket.write('\r\n')
