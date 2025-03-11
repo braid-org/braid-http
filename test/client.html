@@ -246,18 +246,19 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true,
-            onFetch: (url, params) => {
-                if (m) {
-                    params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
-                    m = null
-                } else {
-                    params.headers.delete('Multiplex-Through')
-                    retried = true
+            multiplex: {
+                onFetch: (url, params) => {
+                    if (m) {
+                        m = null
+                    } else {
+                        retried = true
+                    }
                 }
             }
         })
-        return `is_mux=${!!r.is_multiplexed}, retried=${retried}, fast=${Date.now() < st + 300}`
+        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 300}`
     },
     'is_mux=true, retried=true, fast=true'
 )
@@ -281,19 +282,20 @@ runTest(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true,
-            multiplex: {via: 'POST'},
-            onFetch: (url, params) => {
-                if (m) {
-                    params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
-                    m = null
-                } else {
-                    params.headers.delete('Multiplex-Through')
-                    retried = true
+            multiplex: {
+                via: 'POST',
+                onFetch: (url, params) => {
+                    if (m) {
+                        m = null
+                    } else {
+                        retried = true
+                    }
                 }
             }
         })
-        return `is_mux=${!!r.is_multiplexed}, retried=${retried}, fast=${Date.now() < st + 300}`
+        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 300}`
     },
     'is_mux=true, retried=true, fast=true'
 )
@@ -314,30 +316,27 @@ runTest(
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
+        var through = `/.well-known/multiplexer/${m}/${s}`
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+            headers: { 'Multiplex-Through': through },
             retry: true
         })
 
         var a = new AbortController()
-        var count = 0
         var st = Date.now()
-        await fetch('/json', {
+        var r2 = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
+            headers: { 'Multiplex-Through': through },
             retry: true,
-            onFetch: (url, params) => {
-                count++
-                params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
-                s = Math.random().toString(36).slice(2)
-            }
         })
+        console.log(`r2.multiplexed_through = ${r2.multiplexed_through}`)
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return 'count: ' + count + ', fast=' + (Date.now() < st + 300)
+        return 'same_request: ' + (r2.multiplexed_through === through) + ', fast=' + (Date.now() < st + 300)
     },
-    'count: 2, fast=true'
+    'same_request: false, fast=true'
 )
 
 runTest(
@@ -354,7 +353,7 @@ runTest(
             retry: true
         })
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return 'is_mux=' + !!r.is_multiplexed + ', fast=' + (Date.now() < st + 300)
+        return 'is_mux=' + !!r.multiplexed_through + ', fast=' + (Date.now() < st + 300)
     },
     'is_mux=true, fast=true'
 )
@@ -412,7 +411,7 @@ runTest(
             subscribe: true,
         })
 
-        if (!r2.is_multiplexed) throw new Error('not multiplexed')
+        if (!r2.multiplexed_through) throw new Error('not multiplexed')
 
         return await new Promise(async (outter_done, outter_fail) => {
             let ret = await new Promise(done => r2.subscribe(u => {
@@ -446,7 +445,7 @@ runTest(
                     retry: true
                 })
 
-                if (!r.is_multiplexed) return res.end('not multiplexer!?')
+                if (!r.multiplexed_through) return res.end('not multiplexer!?')
 
                 r.subscribe(u => {
                     u.body = u.body_text
@@ -507,7 +506,7 @@ runTest(
                 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`
             }
         })
-        if (!r.is_multiplexed) throw new Error('not multiplexed')
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
                 u.body = u.body_text
@@ -531,7 +530,7 @@ runTest(
             subscribe: true,
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
-        if (!r.is_multiplexed) throw new Error('not multiplexed')
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
 
@@ -564,7 +563,7 @@ runTest(
             multiplex: true,
         })
 
-        if (!r2.is_multiplexed) throw new Error('not multiplexed')
+        if (!r2.multiplexed_through) throw new Error('not multiplexed')
 
         var x = await new Promise(done => {
             r2.subscribe(u => {
@@ -594,7 +593,7 @@ runTest(
                 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`
             }
         })
-        if (!r.is_multiplexed) throw new Error('not multiplexed')
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
         var x = await new Promise(async done => {
             r.subscribe(u => {
             }, e => done('multiplexer ended'))
@@ -651,7 +650,7 @@ runTest(
                     aborter = _aborter
                 }
             })
-            if (!r.is_multiplexed) throw new Error('not multiplexed')
+            if (!r.multiplexed_through) throw new Error('not multiplexed')
             r.subscribe(u => {
                 if (count === 2 && !ret) {
                     u.body = u.body_text
@@ -753,7 +752,7 @@ runTest(
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true
         })
-        if (!r.is_multiplexed) throw new Error('not multiplexed')
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
         a.abort()
         return 'multiplexed!'
     },
@@ -809,7 +808,7 @@ runTest(
         } catch (e) { return e.message }
         return 'hm..'
     },
-    'multiplexer not connected'
+    'multiplexer failed'
 );
 
 runTest(
@@ -956,7 +955,7 @@ runTest(
             multiplex: true
         })
         setTimeout(() => a.abort(), 0)
-        return '' + !!r2.is_multiplexed
+        return '' + !!r2.multiplexed_through
     },
     'true'
 );
@@ -1002,20 +1001,28 @@ runTest(
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}` },
         })
 
-        try {
-            var r = await fetch('/eval_pre_braidify', {
+        return await new Promise((done, fail) => {
+            var count = 0
+            fetch('/eval_pre_braidify', {
                 method: 'POST',
                 signal: a.signal,
                 headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
+                multiplex: {
+                    onFetch: () => {
+                        count++
+                        if (count == 2) {
+                            done('we got the error we expected')
+                            a.abort()
+                        }
+                    }
+                },
                 body: `
                     braidify.multiplexers.delete(${JSON.stringify(m)})
                     'keep going'
                 `});
-        } catch (e) { return '' + e}
-        finally { a.abort() }
-        return 'hm..'
+        })
     },
-    'Error: multiplexer not connected'
+    'we got the error we expected'
 );
 
 runTest(

@@ -270,10 +270,6 @@ async function braid_fetch (url, params = {}) {
                     !cb_running                // if an error is thrown in the callback,
                                                // then it may not be good to reconnect, and generate more errors
 
-                // some errors can be fixed by changing something, and retrying right away,
-                // for instance, for a duplicate multiplexer request id
-                if (e.dont_wait) waitTime = 0
-
                 if (retry && !original_signal?.aborted) {
                     // retry after some time..
                     console.log(`retrying in ${waitTime}s: ${url} after error: ${e}`)
@@ -319,7 +315,7 @@ async function braid_fetch (url, params = {}) {
                     (params.headers.has('subscribe') &&
                         braid_fetch.subscription_counts?.[origin] >
                             (!mux_params ? 1 : (mux_params.after ?? 0))))) {
-                    res = await multiplex_fetch(url, params, mux_params, underlying_aborter)
+                    res = await multiplex_fetch(url, params, mux_params)
                 } else
                     res = await normal_fetch(url, params)
 
@@ -896,7 +892,7 @@ function random_base64url(n) {
 
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
-async function multiplex_fetch(url, params, mux_params, aborter) {
+async function multiplex_fetch(url, params, mux_params) {
     var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
 
     // the mux_key is the same as the origin, unless it is being overriden
@@ -905,20 +901,33 @@ async function multiplex_fetch(url, params, mux_params, aborter) {
 
     // create a new multiplexer if it doesn't exist for this origin
     if (!multiplex_fetch.multiplexers)          multiplex_fetch.multiplexers = {}
-    if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] =
-        create_multiplexer(origin, mux_key, params, mux_params, aborter)
 
-    // call the special fetch function for the multiplexer
-    return await (await multiplex_fetch.multiplexers[mux_key])(url, params)
+    // this for-loop allows us to retry right away,
+    // in case of duplicate ids
+    for (let attempt = 1; ; attempt++) {
+        await new Promise(done => setTimeout(done, attempt >= 3 ? 1000 : 0))
+
+        if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] =
+            create_multiplexer(origin, mux_key, params, mux_params, attempt)
+
+        // call the special fetch function for the multiplexer
+        try {
+            return await (await multiplex_fetch.multiplexers[mux_key])(url, params, mux_params, attempt)
+        } catch (e) {
+            if (e === 'retry') continue
+            throw e
+        }
+    }
 }
 
 // returns a function with a fetch-like interface that transparently multiplexes the fetch
-async function create_multiplexer(origin, mux_key, params, mux_params, aborter) {
+async function create_multiplexer(origin, mux_key, params, mux_params, attempt) {
     var multiplex_version = '1.0'
 
     // make up a new multiplexer id (unless it is being overriden)
-    var multiplexer = params.headers.get('multiplex-through')?.split('/')[3]
-        ?? random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
+    var multiplexer = (attempt === 1 &&
+        params.headers.get('multiplex-through')?.split('/')[3])
+        || random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
 
     var requests = new Map()
     var mux_error = null
@@ -926,8 +935,9 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
     var not_used_timeout = null
     var mux_aborter = new AbortController()
 
-    function cleanup(e, stay_dead) {
+    function cleanup_multiplexer(e, stay_dead) {
         // the multiplexer stream has died.. let everyone know..
+        mux_aborter.abort()
         mux_error = e
         if (!stay_dead) delete multiplex_fetch.multiplexers[mux_key]
         for (var f of requests.values()) f()
@@ -969,7 +979,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
             if (r.status === 409) {
                 var e = await r.json()
                 if (e.error === 'Multiplexer already exists')
-                    return cleanup(create_error(e.error, {dont_wait: true}))
+                    return cleanup_multiplexer('retry')
             }
             if (!r.ok || r.headers.get('Multiplex-Version') !== multiplex_version)
                 throw 'bad'
@@ -985,7 +995,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
                 if (r.status === 409) {
                     var e = await r.json()
                     if (e.error === 'Multiplexer already exists')
-                        return cleanup(create_error(e.error, {dont_wait: true}))
+                        return cleanup_multiplexer('retry')
                 }
                 if (!r.ok) throw new Error('status not ok: ' + r.status)
                 if (r.headers.get('Multiplex-Version') !== multiplex_version)
@@ -996,7 +1006,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
                 // fallback to normal fetch if multiplexed connection fails
                 console.error(`Could not establish multiplexer.\n`
                                 + `Got error: ${e}.\nFalling back to normal connection.`)
-                cleanup(e, true)
+                cleanup_multiplexer('retry', true)
                 return false
             }
         }
@@ -1006,29 +1016,38 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
         parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
             if (requests.has(request)) requests.get(request)(bytes)
             else try_deleting_request(request)
-        }, e => cleanup(e))
+        }, e => cleanup_multiplexer(e))
     })()
 
     // return a "fetch" for this multiplexer
-    return async (url, params) => {
+    return async (url, params, mux_params, attempt) => {
 
         // if we already know the multiplexer is not working,
         // then fallback to normal fetch
-        // (unless the user is specifically asking for multiplexing)
-        if ((await promise_done(mux_promise))
-            && (await mux_promise) === false
-            && !params.headers.get('multiplex-through'))
+        if ((await promise_done(mux_promise)) && (await mux_promise) === false) {
+            // if the user is specifically asking for multiplexing,
+            // throw an error instead
+            if (params.headers.get('multiplex-through')) throw new Error('multiplexer failed')
+
             return await normal_fetch(url, params)
+        }
 
         // make up a new request id (unless it is being overriden)
-        var request = params.headers.get('multiplex-through')?.split('/')[4]
-            ?? random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
+        var request = (attempt === 1
+            && params.headers.get('multiplex-through')?.split('/')[4])
+            || random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
 
         // add the Multiplex-Through header without affecting the underlying params
         var mux_headers = new Headers(params.headers)
         mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request}`)
         mux_headers.set('Multiplex-Version', multiplex_version)
-        params = {...params, headers: mux_headers}
+
+        // also create our own aborter in case we need to abort ourselves
+        var aborter = new AbortController()
+        params.signal?.addEventListener('abort', () => aborter.abort())
+
+        // now create a new params with the new headers and abort signal
+        params = {...params, headers: mux_headers, signal: aborter.signal}
 
         // setup a way to receive incoming data from the multiplexer
         var buffers = []
@@ -1066,11 +1085,16 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
             if (!requests.size) not_used_timeout = setTimeout(() => mux_aborter.abort(), mux_params?.not_used_timeout ?? 1000 * 20)
             request_error = e
             bytes_available()
-            await try_deleting_request(request)
+            if (e !== 'retry') await try_deleting_request(request)
         }
 
         // do the underlying fetch
         try {
+            var mux_was_done = await promise_done(mux_promise)
+
+            // callback for testing
+            mux_params?.onFetch?.(url, params)
+
             var res = await normal_fetch(url, params)
 
             if (res.status === 409) {
@@ -1078,7 +1102,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
                 if (e.error === 'Request already multiplexed') {
                     // the id is already in use,
                     // so we want to retry right away with a different id
-                    throw create_error(e.error, {dont_wait: true})
+                    throw "retry"
                 }
             }
 
@@ -1087,7 +1111,18 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
                 // could be we arrived before the multiplexer,
                 // or after it was shutdown;
                 // in either case we want to retry right away
-                throw create_error('multiplexer not connected', {dont_wait: true})
+
+                // but before we do,
+                // if we know the multiplexer was created,
+                // but it isn't there now,
+                // and our client doesn't realize it,
+                // then shut it down ourselves before retrying,
+                // so when we retry,
+                // a new multiplexer is created
+                if (mux_was_done && !mux_error)
+                    cleanup_multiplexer(new Error('multiplexer detected to be closed'))
+
+                throw "retry"
             }
 
             // if the response says it's ok,
@@ -1172,14 +1207,14 @@ async function create_multiplexer(origin, mux_key, params, mux_params, aborter) 
 
             // add a convenience property for the user to know if
             // this response is being multiplexed
-            res.is_multiplexed = true
+            res.multiplexed_through = params.headers.get('multiplex-through')
 
             // return the fake response object
             return res
         } catch (e) {
             // if we had an error, be sure to unregister ourselves
             unset(e)
-            throw mux_error || e
+            throw (e === 'retry' && e) || mux_error || e
         }
     }
 }
