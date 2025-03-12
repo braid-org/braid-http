@@ -74,6 +74,7 @@ let test_update = {
     status: "200"
 }
 let delay = 0
+var port = 9000
 
 function createTestRow(testName, expected) {
     const row = document.createElement("tr")
@@ -453,13 +454,13 @@ runTest(
     "Test that multiplexer code handles a full url (rather than relative one).",
     async () => {
         var a1 = new AbortController()
-        var r1 = await fetch('https://localhost:9000/json', {
+        var r1 = await fetch(`https://localhost:${port}/json`, {
             signal: a1.signal,
             subscribe: true,
         })
 
         var a2 = new AbortController()
-        var r2 = await fetch('https://localhost:9000/json', {
+        var r2 = await fetch(`https://localhost:${port}/json`, {
             signal: a2.signal,
             subscribe: true,
         })
@@ -1128,6 +1129,88 @@ runTest(
 )
 
 waitForTests(() => braid_fetch.enable_multiplex = false)
+
+addSectionHeader("Express Middleware Tests")
+
+runTest(
+    "Test braidify as Express middleware with subscription",
+    async () => {
+        let a = new AbortController()
+        let updates = []
+        
+        // Note: Using port+1 for the Express server
+        let res = await fetch(`https://localhost:${port + 1}/middleware-test`, {
+            subscribe: true,
+            signal: a.signal,
+            multiplex: {via: 'POST'}
+        })
+        
+        await new Promise(resolve => {
+            res.subscribe(
+                update => {
+                    if (update.body != null) update.body = update.body_text
+                    updates.push(update.body)
+                    resolve()
+                }
+            )
+        })
+        
+        a.abort()
+        return updates[0]
+    },
+    'Braidify works as Express middleware!'
+)
+
+runTest(
+    "Test braidify as Express middleware without subscription",
+    async () => {
+        let res = await fetch(`https://localhost:${port + 1}/middleware-test`)
+        let data = await res.json()
+        return data.message
+    },
+    "Braidify works as Express middleware!"
+)
+
+addSectionHeader("Wrapper Function Tests")
+
+runTest(
+    "Test braidify as wrapper function with subscription",
+    async () => {
+        let a = new AbortController()
+        let updates = []
+        
+        // Using port+2 for the wrapper function server
+        let res = await fetch(`https://localhost:${port + 2}/wrapper-test`, {
+            subscribe: true,
+            signal: a.signal
+        })
+        
+        await new Promise(resolve => {
+            res.subscribe(
+                update => {
+                    if (update.body != null) update.body = update.body_text
+                    let parsed = JSON.parse(update.body)
+                    updates.push(parsed.message)
+                    if (updates.length >= 2) resolve()
+                }
+            )
+        })
+        
+        a.abort()
+        return updates.join(" → ")
+    },
+    'Braidify works as a wrapper function! → This is an update!'
+)
+
+runTest(
+    "Test braidify as wrapper function without subscription",
+    async () => {
+        let res = await fetch(`https://localhost:${port + 2}/wrapper-test`)
+        let data = await res.json()
+        return data.message
+    },
+    "Braidify works as a wrapper function!"
+)
 
 addSectionHeader("Server sending binary data with sendUpdate")
 

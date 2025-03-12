@@ -985,7 +985,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 signal: mux_aborter.signal,
                 method: 'MULTIPLEX',
                 headers: {'Multiplex-Version': multiplex_version},
-                retry: true
+                retry: true,
+                multiplex: false
             })
             if (r.status === 409) {
                 var e = await r.json()
@@ -1002,7 +1003,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                                         {method: 'POST',
                                         signal: mux_aborter.signal,
                                         headers: {'Multiplex-Version': multiplex_version},
-                                        retry: true})
+                                        retry: true,
+                                        multiplex: false})
                 if (r.status === 409) {
                     var e = await r.json()
                     if (e.error === 'Multiplexer already exists')

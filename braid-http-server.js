@@ -221,6 +221,12 @@ function parse_content_range (range_string) {
 }
 
 function braidify (req, res, next) {
+    if (typeof req === 'function') {
+        var handler = req
+        return (req, res, next) =>
+            braidify(req, res, () => handler(req, res, next))
+    }
+
     // console.log('\n## Braidifying', req.method, req.url, req.headers.peer)
 
     // First, declare that we support Patches and JSON ranges.

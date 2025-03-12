@@ -365,3 +365,115 @@ function allow_self_signed_certs() {
         configurable: false
     })
 }
+
+// Add a minimal Express server to test middleware functionality with HTTPS
+const express_app = require("express")()
+
+express_app.use((req, res, next) => {
+    // Only allow connections from localhost
+    if (req.socket.remoteAddress !== '127.0.0.1'
+        && req.socket.remoteAddress !== '::1'
+        && req.socket.remoteAddress !== '::ffff:127.0.0.1'
+    ) {
+        console.log(`connection attempt from: ${req.socket.remoteAddress}`)
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end('Forbidden: Only localhost connections are allowed')
+        return
+    }
+
+    // Add CORS
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    if (req.method === 'OPTIONS') return res.end()
+
+    next()
+})
+
+// Test the middleware pattern
+express_app.use(braidify)
+
+// Simple test endpoint
+express_app.get("/middleware-test", (req, res) => {
+    console.log('Express-Request:', req.url, req.method)
+
+    // If braidify worked as middleware, these functions should be available
+    if (typeof res.startSubscription === "function" && typeof res.sendUpdate === "function") {
+        if (req.subscribe) {
+            res.startSubscription()
+            res.sendUpdate({
+                version: ["middleware-works"],
+                body: "Braidify works as Express middleware!",
+            })
+        } else {
+            res.json({ success: true, message: "Braidify works as Express middleware!" })
+        }
+    } else {
+        res.status(500).end('not ok')
+    }
+})
+
+// Start the Express server with HTTPS
+https.createServer({
+    key: require('fs').readFileSync('./test/localhost-privkey.pem'),
+    cert: require('fs').readFileSync('./test/localhost-cert.pem')
+}, express_app).listen(port + 1, () => {
+    console.log(`Express middleware test server listening on https://localhost:${port + 1}`)
+})
+
+// Create a server using braidify as a wrapper around the handler
+https.createServer({
+    key: require('fs').readFileSync('./test/localhost-privkey.pem'),
+    cert: require('fs').readFileSync('./test/localhost-cert.pem')
+}, braidify((req, res) => {
+    console.log('Wrapped-Handler-Request:', req.url, req.method)
+    
+    // Only allow connections from localhost
+    if (req.socket.remoteAddress !== '127.0.0.1'
+        && req.socket.remoteAddress !== '::1'
+        && req.socket.remoteAddress !== '::ffff:127.0.0.1'
+    ) {
+        console.log(`connection attempt from: ${req.socket.remoteAddress}`)
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden: Only localhost connections are allowed');
+        return;
+    }
+
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    if (req.method === 'OPTIONS') return res.end()
+
+    // Simple test endpoint
+    if (req.url === '/wrapper-test' && req.method === 'GET') {
+        res.setHeader('content-type', 'application/json')
+        
+        // If the client requested a subscription, let's honor it!
+        if (req.subscribe)
+            res.startSubscription()
+
+        // Send the current version
+        res.sendUpdate({
+            version: ['wrapper-test-version'],
+            body: JSON.stringify({ message: "Braidify works as a wrapper function!" })
+        })
+
+        // End the response, if this isn't a subscription
+        if (!req.subscribe) {
+            res.end()
+        } else {
+            // Send a delayed update for subscription
+            setTimeout(() => {
+                res.sendUpdate({
+                    version: ['wrapper-test-update'],
+                    body: JSON.stringify({ message: "This is an update!" })
+                })
+            }, 200)
+        }
+    } else {
+        res.writeHead(404)
+        res.end('Not found')
+    }
+})).listen(port + 2, () => {
+    console.log(`Wrapper function test server listening on https://localhost:${port + 2}`)
+})
