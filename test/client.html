@@ -190,6 +190,61 @@ runTest(
 waitForTests(() => {})
 
 runTest(
+    "Test multiplexing with Express middleware endpoint",
+    async () => {
+        var a = new AbortController()
+        var r = await fetch(`https://localhost:${port + 1}/middleware-test`, {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: {via: 'POST'},
+            retry: true
+        })
+
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
+        var result = await new Promise(async done => {
+            r.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify({
+                    multiplexed: !!r.multiplexed_through,
+                    message: u.body
+                }))
+            })
+        })
+        a.abort()
+        return result
+    },
+    '{"multiplexed":true,"message":"Braidify works as Express middleware!"}'
+)
+
+runTest(
+    "Test multiplexing with wrapper function endpoint",
+    async () => {
+        var a = new AbortController()
+        var r = await fetch(`https://localhost:${port + 2}/wrapper-test`, {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: {via: 'POST'},
+            retry: true
+        })
+        if (!r.multiplexed_through) throw new Error('not multiplexed')
+        var result = await new Promise(async done => {
+            r.subscribe(u => {
+                u.body = u.body_text
+                var parsed = JSON.parse(u.body)
+                done(JSON.stringify({
+                    multiplexed: !!r.multiplexed_through,
+                    message: parsed.message,
+                    version: u.version[0]
+                }))
+            })
+        })
+        a.abort()
+        return result
+    },
+    '{"multiplexed":true,"message":"Braidify works as a wrapper function!","version":"wrapper-test-version"}'
+)
+
+runTest(
     "Test that when DELETE gets 404 for multiplexer, it kills the multiplexer",
     async () => {
         var a = new AbortController()

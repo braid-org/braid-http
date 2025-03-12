@@ -251,16 +251,23 @@ function braidify (req, res, next) {
     // Multiplexer stuff
     var multiplex_version = '1.0'
     if ((braidify.enable_multiplex ?? true) &&
-        (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')) &&
-        req.headers['multiplex-version'] === multiplex_version) {
-
-        // let the caller know we're handling things
-        req.is_multiplexer = res.is_multiplexer = true
+        (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/'))) {
 
         // free the cors
         res.setHeader("Access-Control-Allow-Origin", "*")
         res.setHeader("Access-Control-Allow-Methods", "*")
         res.setHeader("Access-Control-Allow-Headers", "*")
+        res.setHeader("Access-Control-Expose-Headers", "*")
+        if (req.method === 'OPTIONS') return res.end()
+
+        // check the multiplexing protocol version
+        if (req.headers['multiplex-version'] !== multiplex_version) {
+            res.writeHead(400, 'Bad Multiplexer Version')
+            return res.end()
+        }
+
+        // let the caller know we're handling things
+        req.is_multiplexer = res.is_multiplexer = true
 
         // parse the multiplexer id and request id from the url
         var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
@@ -293,7 +300,7 @@ function braidify (req, res, next) {
             res.writeHead(200, 'OK', {
                 'Multiplex-Version': multiplex_version,
                 'Incremental': '?1',
-                'Cache-Control': 'no-cache',
+                'Cache-Control': 'no-store',
                 'X-Accel-Buffering': 'no',
                 ...req.httpVersion !== '2.0' && {'Connection': 'keep-alive'}
             })
@@ -373,7 +380,7 @@ function braidify (req, res, next) {
 
             // copy any CORS headers from the user
             var cors_headers = Object.entries(res2.getHeaders()).
-                filter(x => braidify.cors_headers.has(x.key))
+                filter(x => braidify.cors_headers.has(x[0]))
 
             if (og_stream) {
                 og_stream.respond({
@@ -439,6 +446,10 @@ function braidify (req, res, next) {
         // when our fake response is done,
         // we want to send a special message to the multiplexer saying so
         res2.on('finish', () => m.res.write(`close response ${request}\r\n`))
+
+        // copy over any headers which have already been set on res to res2
+        for (let x of Object.entries(res.getHeaders()))
+            res2.setHeader(...x)
 
         // we want access to "res" to be forwarded to our fake "res2",
         // so that it goes into the multiplexer

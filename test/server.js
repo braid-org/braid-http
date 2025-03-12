@@ -381,17 +381,21 @@ express_app.use((req, res, next) => {
         return
     }
 
-    // Add CORS
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "*")
-    res.setHeader("Access-Control-Allow-Headers", "*")
-    if (req.method === 'OPTIONS') return res.end()
-
     next()
 })
 
 // Test the middleware pattern
 express_app.use(braidify)
+
+// Add CORS
+express_app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    res.setHeader("Access-Control-Expose-Headers", "*")
+    if (req.method === 'OPTIONS') return res.end('')
+    next()
+})
 
 // Simple test endpoint
 express_app.get("/middleware-test", (req, res) => {
@@ -418,7 +422,7 @@ https.createServer({
     key: require('fs').readFileSync('./test/localhost-privkey.pem'),
     cert: require('fs').readFileSync('./test/localhost-cert.pem')
 }, express_app).listen(port + 1, () => {
-    console.log(`Express middleware test server listening on https://localhost:${port + 1}`)
+    console.log(`Express middleware test server running`)
 })
 
 // Create a server using braidify as a wrapper around the handler
@@ -442,6 +446,7 @@ https.createServer({
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "*")
     res.setHeader("Access-Control-Allow-Headers", "*")
+    res.setHeader("Access-Control-Expose-Headers", "*")
     if (req.method === 'OPTIONS') return res.end()
 
     // Simple test endpoint
@@ -475,5 +480,5 @@ https.createServer({
         res.end('Not found')
     }
 })).listen(port + 2, () => {
-    console.log(`Wrapper function test server listening on https://localhost:${port + 2}`)
+    console.log(`Wrapper function test server running`)
 })
