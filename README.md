@@ -3,9 +3,11 @@
 This polyfill library implements the [Braid-HTTP v04
 protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt),
 with [HTTP Multiresponse](https://braid.org/meeting-89), and [Multiplexing
-v1.0](https://braid.org/protocol/multiplexing).  It provides browsers with a
-`braid_fetch()` drop-in replacement for the `fetch()` API, and offers nodejs
-an `http` plugin, enabling simple Braid communication.
+v1.0](https://braid.org/protocol/multiplexing).
+
+In Browsers, it provides a drop-in replacement for `fetch()` that adds Braid
+features to it.  In nodejs, it adds features to the `http` (and https, and
+http2) modules.
 
 Developed in [braid.org](https://braid.org).
 
