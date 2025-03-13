@@ -949,7 +949,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         if (!try_deleting.has(request)) {
             try_deleting.add(request)
             try {
-                var mux_was_done = await promise_done(mux_promise)
+                var mux_was_done = await promise_done(mux_created_promise)
 
                 var r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}/${request}`, {
                     method: 'DELETE',
@@ -979,7 +979,10 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         }
     }
 
-    var mux_promise = (async () => {
+    // This promise resolves when the create_multiplexer request responds.
+    //  - its value is undefined if successfully created
+    //  - its value is false if creation failed
+    var mux_created_promise = (async () => {
         // attempt to establish a multiplexed connection
         try {
             if (mux_params?.via === 'POST') throw 'skip multiplex method'
@@ -1039,7 +1042,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
         // if we already know the multiplexer is not working,
         // then fallback to normal fetch
-        if ((await promise_done(mux_promise)) && (await mux_promise) === false) {
+        if ((await promise_done(mux_created_promise)) && (await mux_created_promise) === false) {
             // if the user is specifically asking for multiplexing,
             // throw an error instead
             if (params.headers.get('multiplex-through')) throw new Error('multiplexer failed')
@@ -1105,7 +1108,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
         // do the underlying fetch
         try {
-            var mux_was_done = await promise_done(mux_promise)
+            var mux_was_done = await promise_done(mux_created_promise)
 
             // callback for testing
             mux_params?.onFetch?.(url, params)
