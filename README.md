@@ -1,17 +1,18 @@
 # Braid-HTTP
 
 This [ponyfill](https://ponyfill.com/) library extends the HTTP
-implementations of Browsers and Nodejs with Braid-HTTP—transforming them from
-*state transfer* to *state synchronization* implementations.
-
-It implements the [Braid-HTTP
-v04](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt)
-spec, with the additional [HTTP Multiresponse](https://braid.org/meeting-89) and
-[Multiplexing v1.0](https://braid.org/protocol/multiplexing) extensions.
+implementations of Browsers and Nodejs with Braid-HTTP; transforming them from
+*state transfer* to *state synchronization* systems.
 
 These features are provided in an elegant, backwards-compatible way:
 - Browsers: get a drop-in replacement for `fetch()`
 - Nodejs: get a route handler that adds abilities to the `http`, `https`, and `http2` modules
+
+It conforms to the [Braid-HTTP
+v04](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt)
+specification, with the additional [HTTP
+Multiresponse](https://braid.org/meeting-89) and [Multiplexing
+v1.0](https://braid.org/protocol/multiplexing) extensions.
 
 Developed in [braid.org](https://braid.org).
 
