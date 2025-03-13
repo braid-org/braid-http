@@ -5,9 +5,9 @@ protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpb
 with [HTTP Multiresponse](https://braid.org/meeting-89), and [Multiplexing
 v1.0](https://braid.org/protocol/multiplexing).
 
-In Browsers, it provides a drop-in replacement for `fetch()` that adds Braid
-features to it.  In nodejs, it adds features to the `http` (and https, and
-http2) modules.
+In *browsers*, it provides a drop-in replacement for `fetch()` that has all
+the cool Braid abilities.  In *nodejs*, it adds Braidliness to the `http` (and
+https, and http2) modules.
 
 Developed in [braid.org](https://braid.org).
 
