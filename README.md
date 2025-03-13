@@ -170,7 +170,7 @@ require('http').createServer(
             version: ['greg'],
             body: JSON.stringify({greg: 'greg'})
         })
-    }
+    })
 ).listen(9935)
 ```
 
@@ -291,4 +291,4 @@ response connection dies, and thus you cannot attach a `.catch()` handler to
 automatically reconnect.  (See
 [issue #980](https://github.com/node-fetch/node-fetch/issues/980) and
 [#753](https://github.com/node-fetch/node-fetch/issues/753).)  We recommend
-using the `http` library (below) for requests on nodejs instead.
+using the `http` client on nodejs instead.
