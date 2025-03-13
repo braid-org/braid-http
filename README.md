@@ -1,6 +1,11 @@
 # Braid-HTTP
 
-This polyfill library implements the [Braid-HTTP v04 protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt), modified slightly to follow the HTTP Multiresponse concept discussed at [braid.org/meeting-89](https://braid.org/meeting-89). It provides browsers with a `braid_fetch()` drop-in replacement for the `fetch()` API, and offers nodejs an `http` plugin, enabling simple Braid communication.
+This polyfill library implements the [Braid-HTTP v04
+protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt),
+with [HTTP Multiresponse](https://braid.org/meeting-89), and [Multiplexing
+v1.0](https://braid.org/protocol/multiplexing).  It provides browsers with a
+`braid_fetch()` drop-in replacement for the `fetch()` API, and offers nodejs
+an `http` plugin, enabling simple Braid communication.
 
 Developed in [braid.org](https://braid.org).
 
@@ -143,18 +148,17 @@ var braidify = require('braid-http').http_server
 import {http_server as braidify} from 'braid-http'
 
 require('http').createServer(
-    (req, res) => {
-        // Add braid stuff to req and res
-        braidify(req, res)
+    braidify((req, res) => {
+        // Now braid stuff is available on req and res
 
-        // Now use it
+        // So you can easily handle subscriptions
         if (req.subscribe)
             res.startSubscription({ onClose: _=> null })
             // startSubscription automatically sets statusCode = 209
         else
             res.statusCode = 200
 
-        // Send the current version
+        // And send updates over a subscription
         res.sendUpdate({
             version: ['greg'],
             body: JSON.stringify({greg: 'greg'})
@@ -165,8 +169,8 @@ require('http').createServer(
 
 ### Example Nodejs server with `require('express')`
 
-With `express`, you can simply call `app.use(braidify)` to get braid features
-added to every request and response.
+Or if you're using `express`, you can just call `app.use(braidify)` to get
+braid features added to every request and response.
 
 ```javascript
 var braidify = require('braid-http').http_server

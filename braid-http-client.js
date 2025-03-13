@@ -900,14 +900,16 @@ async function multiplex_fetch(url, params, mux_params) {
     var mux_key = params.headers.get('multiplex-through')?.split('/')[3] ?? origin
 
     // create a new multiplexer if it doesn't exist for this origin
-    if (!multiplex_fetch.multiplexers)          multiplex_fetch.multiplexers = {}
+    if (!multiplex_fetch.multiplexers)
+        multiplex_fetch.multiplexers = {}
 
     // this for-loop allows us to retry right away,
     // in case of duplicate ids
     for (let attempt = 1; ; attempt++) {
         await new Promise(done => setTimeout(done, attempt >= 3 ? 1000 : 0))
 
-        if (!multiplex_fetch.multiplexers[mux_key]) multiplex_fetch.multiplexers[mux_key] =
+        // Create a multiplexer if it does not exist yet
+        multiplex_fetch.multiplexers[mux_key] ||=
             create_multiplexer(origin, mux_key, params, mux_params, attempt)
 
         // call the special fetch function for the multiplexer
