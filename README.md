@@ -5,7 +5,7 @@ protocol](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpb
 with [HTTP Multiresponse](https://braid.org/meeting-89), and [Multiplexing
 v1.0](https://braid.org/protocol/multiplexing).
 
-It extends both Browsers and Nodejs with Braid-HTTP abilities:
+It extends both Browsers and Nodejs with *state synchronization* abilities:
 
 - Browsers: provides a drop-in replacement for `fetch()` with state synchronization abilities added.
 - Nodejs: adds state synchronization abilities to the `http` (and https, and http2) modules.
