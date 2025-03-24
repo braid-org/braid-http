@@ -1,14 +1,8 @@
-To run the braidjs chat demo:
+To run the braid-http chat demo:
 
-    git clone https://github.com/braid-work/braidjs.git
-    cd braidjs/demos/chat
-    npm install express spdy parse-headers
+    git clone https://github.com/braid-org/braid-http.git
+    cd braid-http/demos/chat
+    npm install
     node server.js
 
-Then open braidjs/demos/client.html in your browser.  It won't work yet
-because it doesn't trust the self-signed certificate.  To get around this,
-open https://localhost:3009/ in your browser, and then:
-
-  - In Chrome, type the magic phrase "thisisunsafe" into the page
-  - In Firefox, click "advanced" and "accept and continue"
-  - In Safari, click through the warnings to "proceed anyway"
+Then open https://localhost:3009/ in your browser — note that it is https, so you **cannot** simply type "localhost:3009" into the address bar. When the page tries to load, you'll need to click through the warnings to actually open the page, often starting with clicking "advanced".

@@ -82,7 +82,7 @@
               // Or a complete version:
               else
                   // Beware the server doesn't send these yet.
-                  chat = JSON.parse(update.body)
+                  chat = JSON.parse(update.body_text)
 
               render_root()
           },
@@ -107,7 +107,7 @@
   //             // Or a complete version:
   //             else
   //                 // Beware the server doesn't send these yet.
-  //                 chat = JSON.parse(update.body)
+  //                 chat = JSON.parse(update.body_text)
 
   //             render_root()
   //         }
@@ -122,10 +122,10 @@
           // There are only two types of patches we could receive
           if (patch.range === '')
               // The entire chat in one patch
-              return JSON.parse(patch.content)
+              return JSON.parse(patch.content_text)
           else
               // A single new message, appended to the end
-              object.push(JSON.parse(patch.content))
+              object.push(JSON.parse(patch.content_text))
       return object
   }
 

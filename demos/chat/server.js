@@ -53,7 +53,7 @@ app.put('/chat', async (req, res) => {
     assert(patches[0].range === '[-0:-0]')
     assert(patches[0].unit === 'json')
 
-    resources['/chat'].push(JSON.parse(patches[0].content))
+    resources['/chat'].push(JSON.parse(patches[0].content_text))
 
     // Now send the data to all subscribers
     for (var k in subscriptions) {
