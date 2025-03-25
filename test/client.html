@@ -3,6 +3,44 @@
     <style>
         body {
             font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .iframe-container-wrapper {
+            width: 100%;
+            background-color: #f9f9f9;
+            padding: 10px 0;
+            margin-bottom: 20px;
+        }
+        .iframe-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            padding: 0 10px;
+        }
+        .iframe-group {
+            display: flex;
+            width: 49.5%;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        .group-3008 {
+            background-color: #e3f2fd;
+        }
+        .group-3009 {
+            background-color: #f3e5f5;
+        }
+        .iframe-container iframe {
+            width: 48.5%;
+            height: 300px;
+            border: 1px solid #ddd;
+        }
+        .content-container {
             max-width: 1000px;
             margin: 0 auto;
             padding: 10px;
@@ -55,14 +93,30 @@
     </style>
 </head>
 <script src="/braid-http-client.js"></script>
-<div id="summaryContainer"></div>
-<table id="testTable">
-    <tr>
-        <th>Name</th>
-        <th>Your Server's Responses</th>
-        <th>Known Server Responses</th>
-    </tr>
-</table>
+
+<div class="iframe-container-wrapper">
+    <div class="iframe-container">
+        <div class="iframe-group group-3008">
+            <iframe src="https://localhost:3008/"></iframe>
+            <iframe src="https://localhost:3008/"></iframe>
+        </div>
+        <div class="iframe-group group-3009">
+            <iframe src="https://localhost:3009/"></iframe>
+            <iframe src="https://localhost:3009/"></iframe>
+        </div>
+    </div>
+</div>
+
+<div class="content-container">
+    <div id="summaryContainer"></div>
+    <table id="testTable">
+        <tr>
+            <th>Name</th>
+            <th>Your Server's Responses</th>
+            <th>Known Server Responses</th>
+        </tr>
+    </table>
+</div>
 <script type="module">
 
 var og_fetch = fetch

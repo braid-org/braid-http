@@ -117,7 +117,7 @@ window.statebus_ready = [() => {
                         if (update.patches)
                             t.return(apply_patches(update.patches, old))
                         else
-                            t.return({key: key, val: bus.escape_to_nelson(JSON.parse(update.body))})
+                            t.return({key: key, val: bus.escape_to_nelson(JSON.parse(update.body_text))})
                     },
                     e => setTimeout(subscribe, 1000)
                 )
@@ -162,10 +162,10 @@ function apply_patches (patches, object) {
         // There are only two types of patches we could receive
         if (patch.range === '')
             // The entire blog in one patch
-            return {val: bus.escape_to_nelson(JSON.parse(patch.content))}
+            return {val: bus.escape_to_nelson(JSON.parse(patch.content_text))}
         else
             // A single new message, appended to the end
-            object.val.push(bus.escape_to_nelson(JSON.parse(patch.content)))
+            object.val.push(bus.escape_to_nelson(JSON.parse(patch.content_text)))
     return object
 }
 </script>

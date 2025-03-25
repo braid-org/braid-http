@@ -66,7 +66,7 @@ app.put('/blog', async (req, res) => {
     // assert(patches.length === 1)
     // assert(patches[0].range === '[-0:-0]')
 
-    resources['/blog'].push(JSON.parse(patches[0].content))
+    resources['/blog'].push(JSON.parse(patches[0].content_text))
 
     for (var k in subscriptions) {
         var [peer, url] = JSON.parse(k)
@@ -84,16 +84,16 @@ app.put('/post/:id', async (req, res) => {
     var update = await req.parseUpdate()
 
     console.log('Setting', req.url, 'with', update)
-    assert(typeof update.body === 'string')
+    assert(typeof update.body_text === 'string')
 
-    resources[req.url] = JSON.parse(update.body)
+    resources[req.url] = JSON.parse(update.body_text)
 
     for (var k in subscriptions) {
         var [peer, url] = JSON.parse(k)
         if (peer !== req.headers.peer && url === req.url)
             subscriptions[k].sendUpdate({
                 version: curr_version(),
-                body: update.body
+                body: update.body_text
             })
     }
 
@@ -114,7 +114,6 @@ function log_request (req, res, next) {
 function free_the_cors (req, res, next) {
     res.setHeader('Range-Request-Allow-Methods', 'PATCH, PUT')
     res.setHeader('Range-Request-Allow-Units', 'json')
-    res.setHeader("Patches", "OK")
     var free_the_cors = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "OPTIONS, HEAD, GET, PUT, UNSUBSCRIBE",
@@ -140,4 +139,4 @@ var server = require('http2').createSecureServer(
 )
 // server.setTimeout(0, x => console.log('Server timeout!', x))
 // console.log('Server timeouts:', server.timeout, server.keepAliveTimeout)
-server.listen(3009, _=> console.log('listening on port 3009...'))
+server.listen(3008, _=> console.log('listening on port 3008...'))
