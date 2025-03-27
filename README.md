@@ -139,6 +139,8 @@ for await (var update of subscription_iterator) {
 
 ## Using it in Nodejs
 
+You need node version > 20 
+
 ### Example Nodejs server with `require('http')`
 
 Braidify adds these fields and methods to requests and responses:
