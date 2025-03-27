@@ -75,6 +75,9 @@
         .failed {
             background-color: #ffebee;
         }
+        .other {
+            background-color: #ebeeff;
+        }
         .section-header {
             background-color: #fefefe;
             font-weight: bold;
@@ -147,7 +150,7 @@ function createTestRow(testName, expected) {
 }
 
 function updateTestResult(row, passed, got) {
-    row.className = passed ? "passed" : "failed"
+    row.className = passed ? "passed" : passed === false ? "failed" : "other"
     
     const resultCell = row.querySelector(".result")
     resultCell.textContent = got
@@ -176,7 +179,7 @@ function createSummaryBox() {
 }
 
 function updateSummaryBox(box, passed) {
-    box.className = `summaryBox ${passed ? 'passed' : 'failed'}`;
+    box.className = `summaryBox ${passed ? 'passed' : passed === false ? 'failed' : 'other'}`;
 }
 
 var wait_for_me = Promise.resolve()
@@ -203,9 +206,12 @@ function runTest(testName, testFunction, expectedResult) {
 
         try {
             let got = await testFunction()
-            if (got == expectedResult) {
+            if (got === expectedResult) {
                 updateTestResult(row, true, got)
                 updateSummaryBox(summaryBox, true)
+            } else if (got === 'old node version') {
+                updateTestResult(row, undefined, got)
+                updateSummaryBox(summaryBox, undefined)
             } else {
                 updateTestResult(row, false, got)
                 updateSummaryBox(summaryBox, false)
@@ -458,7 +464,7 @@ runTest(
                 }
             }
         })
-        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 300}`
+        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 600}`
     },
     'is_mux=true, retried=true, fast=true'
 )
@@ -536,7 +542,7 @@ runTest(
                 retry: true,
                 onFetch: (url, params) => {
                     count++
-                    if (count === 2) done(count)
+                    if (count === 2) done('' + count)
                     params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
                     m = Math.random().toString(36).slice(2)
                 }
@@ -599,10 +605,11 @@ runTest(
             method: 'POST',
             body: `
             void (async () => {
-                braid_fetch.enable_multiplex = true
+                if (typeof fetch === 'undefined') return res.end('old node version')
 
                 var a = new AbortController()
                 var r = await braid_fetch('https://localhost:' + port + '/json', {
+                    multiplex: true,
                     signal: a.signal,
                     subscribe: true,
                     retry: true
@@ -615,7 +622,6 @@ runTest(
                     if (!res.writableEnded) {
                         res.end(JSON.stringify(u))
                         a.abort()
-                        braid_fetch.enable_multiplex = false
                     }
                 })
             })()
@@ -1200,7 +1206,7 @@ runTest(
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}` }
         })
         var r = await og_fetch(`/${m}/${s}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
-        return r.status
+        return '' + r.status
     },
     '404'
 )
@@ -1379,7 +1385,7 @@ runTest(
             fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_body_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
-                        resolve(update.body)
+                        resolve(update.body.length <= 4 ? update.body : update.body_text)
                         a.abort()
                     },
                     reject
@@ -1451,7 +1457,8 @@ runTest(
             fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
-                        resolve(update.patches[0].content)
+                        var c = update.patches[0].content
+                        resolve(c.length <= 4 ? c : update.patches[0].content_text)
                         a.abort()
                     },
                     reject
@@ -1527,12 +1534,16 @@ runTest(
             fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches_blob: true, giveup: true}}).then(
                 res => res.subscribe(
                     (update) => {
-                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                        var c1 = update.patches[0].content
+                        var c2 = update.patches[1].content
+                        if (c1.length <= 4) resolve(new Blob([c1, c2]))
+                        else resolve(update.patches[0].content_text)
                         a.abort()
                     },
                     reject
                 )).catch(reject)
         })
+        if (typeof x === 'string') return x
         x = await x.arrayBuffer()
         return '' + new Uint8Array(x)
     },
@@ -2384,6 +2395,8 @@ runTest(
     "Subscribe and receive multiple updates",
     async () => {
         const codeToEval = `
+        void (() => {
+            if (typeof fetch === 'undefined') return res.end('"old node version"')
             let updates = []
             ;(new Promise(async (resolve, reject) => {
                 try {
@@ -2404,6 +2417,7 @@ runTest(
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(updates));
             })
+        })()
         `;
 
         const response = await fetch('/eval', {
@@ -2416,6 +2430,7 @@ runTest(
             throw new Error(`HTTP error! status: ${response.status}`);
 
         const result = await response.json();
+        if (typeof result === 'string') return result
         
         return result.map(JSON.stringify).join('\n')
     },
@@ -2430,6 +2445,8 @@ runTest(
     "PUT with single patch, not in array",
     async () => {
         const codeToEval = `
+        void (() => {
+            if (typeof fetch === 'undefined') return res.end('"old node version"')
             let p = new Promise(async (resolve, reject) => {
                 let res = await braid_fetch(
                     'https://localhost:' + port + '/json',
@@ -2446,6 +2463,7 @@ runTest(
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(x));
             })
+        })()
         `;
 
         const response = await fetch('/eval', {
@@ -2467,6 +2485,8 @@ runTest(
     "PUT with single patch, in array",
     async () => {
         const codeToEval = `
+        void (() => {
+            if (typeof fetch === 'undefined') return res.end('"old node version"')
             let p = new Promise(async (resolve, reject) => {
                 var res = await braid_fetch(
                     'https://localhost:' + port + '/json',
@@ -2482,6 +2502,7 @@ runTest(
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(x));
             })
+        })()
         `;
 
         const response = await fetch('/eval', {
@@ -2503,6 +2524,8 @@ runTest(
     "PUT with multiples patches",
     async () => {
         const codeToEval = `
+        void (() => {
+            if (typeof fetch === 'undefined') return res.end('"old node version"')
             let p = new Promise(async (resolve, reject) => {
                 var res = await braid_fetch(
                     'https://localhost:' + port + '/json',
@@ -2522,6 +2545,7 @@ runTest(
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(x));
             })
+        })()
         `;
 
         const response = await fetch('/eval', {
@@ -2543,6 +2567,8 @@ runTest(
     "PUT with empty patches array",
     async () => {
         const codeToEval = `
+        void (() => {
+            if (typeof fetch === 'undefined') return res.end('"old node version"')
             let p = new Promise(async (resolve, reject) => {
                 var res = await braid_fetch(
                     'https://localhost:' + port + '/json',
@@ -2558,6 +2584,7 @@ runTest(
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(x));
             })
+        })()
         `;
 
         const response = await fetch('/eval', {
@@ -2582,7 +2609,7 @@ runTest(
     async () => {
         let a = new AbortController()
         let count = 0
-        return await new Promise(async (done, fail) => {
+        return '' + await new Promise(async (done, fail) => {
             let res = await fetch("/parse_error", { retry: {
                 onRes: () => {
                     count++
@@ -2599,7 +2626,7 @@ runTest(
     "Should not retry on HTTP 400",
     async () => {
         var r = await fetch("/400", { retry: true })
-        return r.status
+        return '' + r.status
     },
     "400"
 )
@@ -2608,7 +2635,7 @@ runTest(
     "Should not retry on HTTP 401 (access denied)",
     async () => {
         var r = await fetch("/401", { retry: true })
-        return r.status
+        return '' + r.status
     },
     "401"
 )

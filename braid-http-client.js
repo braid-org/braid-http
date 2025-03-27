@@ -122,7 +122,7 @@ var normal_fetch,
 
 if (is_nodejs) {
     // Nodejs
-    normal_fetch = fetch
+    normal_fetch = typeof fetch !== 'undefined' && fetch
 } else {
     // Web Browser
     normal_fetch = window.fetch
@@ -860,7 +860,7 @@ function get_binary_length(x) {
 function deep_copy(x) {
     if (x === null || typeof x !== 'object') return x
     if (Array.isArray(x)) return x.map(x => deep_copy(x))
-    if (Object.prototype.toString.call(x) === '[object Object]')
+    if (x.constructor === Object)
         return Object.fromEntries(Object.entries(x).map(([k, x]) => [k, deep_copy(x)]))
     return x
 }
@@ -882,7 +882,11 @@ async function promise_done(promise) {
 }
 
 function random_base64url(n) {
-    return [...crypto.getRandomValues(new Uint8Array(n))].map(x => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[x % 64]).join('')
+    var buf = new Uint8Array(n)
+    var crypt = (typeof crypto !== 'undefined') ? crypto : require('crypto')
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    return [...(crypt.webcrypto ?? crypt).getRandomValues(buf)].
+        map(x => chars[x % 64]).join('')
 }
 
 

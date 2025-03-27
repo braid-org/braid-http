@@ -4,7 +4,7 @@ var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
 var braid_fetch = require('../braid-http-client.js').fetch
 
-allow_self_signed_certs()
+if (typeof fetch !== 'undefined') allow_self_signed_certs()
 
 let port = 9000
 let test_update = {
@@ -147,11 +147,15 @@ require('http2').createSecureServer({
                 parents: ['oldie'],
                 body: new Uint8Array([0, 1, 2, 3])
             })
-            if (req.headers.send_binary_body_blob) await res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                body: new Blob([new Uint8Array([0, 1, 2, 3])])
-            })
+            if (req.headers.send_binary_body_blob) {
+                await res.sendUpdate({
+                    version: ['test'],
+                    parents: ['oldie'],
+                    body: typeof Blob !== 'undefined' ?
+                        new Blob([new Uint8Array([0, 1, 2, 3])]) :
+                        'old node version'
+                })
+            }
             if (req.headers.send_binary_body_buffer) res.sendUpdate({
                 version: ['test'],
                 parents: ['oldie'],
@@ -169,11 +173,13 @@ require('http2').createSecureServer({
                 parents: ['oldie'],
                 patch: {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}
             })
-            if (req.headers.send_binary_patch_blob) await res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patch: {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([0, 1, 2, 3])])}
-            })
+            if (req.headers.send_binary_patch_blob) {
+                await res.sendUpdate({
+                    version: ['test'],
+                    parents: ['oldie'],
+                    patch: {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([0, 1, 2, 3])]) : 'old node version'}
+                })
+            }
             if (req.headers.send_binary_patch_buffer) await res.sendUpdate({
                 version: ['test'],
                 parents: ['oldie'],
@@ -201,8 +207,8 @@ require('http2').createSecureServer({
                 version: ['test'],
                 parents: ['oldie'],
                 patches: [
-                    {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([0, 1, 2, 3])])},
-                    {unit: 'text', range: '[0:0]', content: new Blob([new Uint8Array([10, 11, 12, 13])])}
+                    {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([0, 1, 2, 3])]) : 'old node version'},
+                    {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([10, 11, 12, 13])]) : 'old node version'}
                 ]
             })
             if (req.headers.send_binary_patches_buffer) await res.sendUpdate({

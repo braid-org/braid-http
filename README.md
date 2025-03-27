@@ -37,7 +37,7 @@ npm install braid-http
 
 ```javascript
 // Import with require()
-require('braid-http').fetch       // A polyfill for require('node-fetch')
+require('braid-http').fetch       // A polyfill for fetch
 require('braid-http').http_client // A polyfill for require('http') clients
 require('braid-http').http_server // A polyfill for require('http') servers
 
@@ -285,10 +285,3 @@ fetch('https://localhost:3009/chat',
           x => console.log('Got ', x)
       )
 ```
-
-Note: the current version of `node-fetch` doesn't properly throw errors when a
-response connection dies, and thus you cannot attach a `.catch()` handler to
-automatically reconnect.  (See
-[issue #980](https://github.com/node-fetch/node-fetch/issues/980) and
-[#753](https://github.com/node-fetch/node-fetch/issues/753).)  We recommend
-using the `http` client on nodejs instead.

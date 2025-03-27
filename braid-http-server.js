@@ -348,12 +348,14 @@ function braidify (req, res, next) {
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
         if (!m) {
+            req.is_multiplexer = res.is_multiplexer = true
             res.writeHead(424, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
             return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
         // if this request-id already exists, respond with an error
         if (m.requests.has(request)) {
+            req.is_multiplexer = res.is_multiplexer = true
             res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
             return res.end(JSON.stringify({
                 error: 'Request already multiplexed',
@@ -621,7 +623,7 @@ async function send_update(res, data, url, peer) {
     // Validate body format
     if (body !== undefined) {
         assert(typeof body === 'string' || get_binary_length(body) != null)
-        if (body instanceof Blob) body = await body.arrayBuffer()
+        if (typeof Blob !== 'undefined' && body instanceof Blob) body = await body.arrayBuffer()
     }
 
     // Validate patches format
@@ -638,7 +640,8 @@ async function send_update(res, data, url, peer) {
             assert('content' in p)
             assert(typeof p.content === 'string'
                    || get_binary_length(p.content) != null)
-            if (p.content instanceof Blob) p.content = await p.content.arrayBuffer()
+            if (typeof Blob !== 'undefined' && p.content instanceof Blob)
+                p.content = await p.content.arrayBuffer()
         }
     }
 
@@ -708,7 +711,7 @@ async function send_update(res, data, url, peer) {
 function get_binary_length(x) {
     return  x instanceof ArrayBuffer ? x.byteLength :
             x instanceof Uint8Array ? x.length :
-            x instanceof Blob ? x.size :
+            typeof Blob !== 'undefined' && x instanceof Blob ? x.size :
             x instanceof Buffer ? x.length : undefined
 }
 
