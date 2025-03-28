@@ -882,11 +882,11 @@ async function promise_done(promise) {
 }
 
 function random_base64url(n) {
-    var buf = new Uint8Array(n)
-    var crypt = (typeof crypto !== 'undefined') ? crypto : require('crypto')
     var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-    return [...(crypt.webcrypto ?? crypt).getRandomValues(buf)].
-        map(x => chars[x % 64]).join('')
+    var result = ''
+    for (let i = 0; i < n; i++)
+        result += chars[Math.floor(Math.random() * 64)]
+    return result
 }
 
 
