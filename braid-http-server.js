@@ -561,7 +561,12 @@ function braidify (req, res, next) {
             res.on('finish',  x => disconnected('finish'))
             req.on('abort',   x => disconnected('abort'))
 
-            // Heartbeats
+            // Start sending heartbeats to the client every N seconds if
+            // they've been requested.  Heartbeats help a client know if a
+            // connection is still alive, and can also signal to
+            // intermediaries to keep a connection open, because sometimes
+            // intermediaries will time-out a connection after a period of no
+            // activity.
             if (req.headers['heartbeats']) {
                 let heartbeats = parseFloat(req.headers['heartbeats'])
                 if (isFinite(heartbeats)) {
@@ -570,8 +575,12 @@ function braidify (req, res, next) {
                     res.on('close', () => closed = true)
                     loop()
                     function loop() {
-                        if (res.writableEnded || closed) return
-                        res.write("\r\n")
+                        // We only send heartbeats:
+                        //  - After the headers have been sent
+                        //  - Before the stream has closed
+                        if (res.headersSent && !res.writableEnded && !closed)
+                            res.write("\r\n")
+
                         setTimeout(loop, 1000 * heartbeats)
                     }
                 }
