@@ -243,8 +243,6 @@ require('http').createServer(app).listen(8583)
 ```
 
 
-```javascript
-
 ### Example Nodejs client with `require('http')`
 
 ```javascript
