@@ -139,15 +139,27 @@ for await (var update of subscription_iterator) {
 
 ## Using it in Nodejs
 
-### Example Nodejs server with `require('http')`
+You can braidify your nodejs server with:
 
-Braidify adds these fields and methods to requests and responses:
+```
+var braidify = require('braid-http').http_server
+```
+
+Braidify adds these new abilities to requests and responses:
+
 - `req.subscribe`
 - `req.startSubscription({onClose: cb})`
 - `await req.parseUpdate()`
 - `res.sendUpdate()`
 
-Use it like this:
+You can call it in two ways:
+
+1. `braidify((req, res) => ...)` wraps your HTTP request handler, and gives it
+   perfectly braidified requests and responses.
+2. `braidify(req, res, next)` will add arguments to your existing requests and
+   responses.  You can use this as express middleware.
+
+### Example Nodejs server with the built-in HTTP module
 
 ```javascript
 var braidify = require('braid-http').http_server
@@ -174,7 +186,23 @@ require('http').createServer(
 ).listen(9935)
 ```
 
-### Example Nodejs server with `require('express')`
+You can also use `braidify` within a request handler like this:
+
+```javascript
+require('http').createServer(
+    (req, res) => {
+        braidify(req, res); if (req.is_multiplexer) return
+        // Now braid stuff is available on req and res
+
+        // ...
+    })
+).listen(9935)
+```
+
+The `is_multiplexer` test in this form is only necessary if multiplexing is
+enabled.
+
+### Example Nodejs server with Express
 
 Or if you're using `express`, you can just call `app.use(braidify)` to get
 braid features added to every request and response.
@@ -215,6 +243,7 @@ require('http').createServer(app).listen(8583)
 ```
 
 
+```javascript
 
 ### Example Nodejs client with `require('http')`
 
@@ -284,4 +313,52 @@ fetch('https://localhost:3009/chat',
       {subscribe: true}).andThen(
           x => console.log('Got ', x)
       )
+```
+
+## Configuring Multiplexing
+
+You shouldn't need to, but can, configure which requests the library will
+[multiplex](https://braid.org/protocol/multiplexing).  You can configure
+multiplexing on both the client and the server.  They both need multiplexing
+enabled for it to happen.
+
+### Client
+
+A client can globally disable multiplexing on `braid_fetch()` with:
+
+```javascript
+braid_fetch.enable_multiplex = false
+```
+
+It can enable multiplexing for all GET requests with:
+
+```javascript
+braid_fetch.enable_multiplex = true
+```
+
+It can also set it to multiplex after `N` connections to an origin with:
+
+```javascript
+braid_fetch.enable_multiplex = {after: N}
+```
+
+The default value is `{after: 1}`.
+
+A client can override this global setting per-request by passing the same
+value into `braid_fetch(url, {multiplex: <value>})`, such as with:
+
+```javascript
+braid_fetch('/example', {multiplex: true, subscription: true})
+braid_fetch('/example', {multiplex: false, subscription: true})
+// or
+braid_fetch('/example', {multiplex: {after: 1}, subscription: true})
+```
+
+### Server
+
+Configure mutliplexing with:
+
+```javascript
+var braidify = require('braid-http').http-server
+nbraidify.enable_multiplex = true   // or false
 ```
