@@ -123,6 +123,7 @@ var normal_fetch,
 if (is_nodejs) {
     // Nodejs
     normal_fetch = typeof fetch !== 'undefined' && fetch
+    braid_fetch.enable_multiplex = false
 } else {
     // Web Browser
     normal_fetch = window.fetch
