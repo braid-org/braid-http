@@ -1977,6 +1977,17 @@ runTest(
 addSectionHeader("Heartbeat Tests")
 
 runTest(
+    "Verify heartbeats don't prevent user writing headers",
+    async () => {
+        let a = new AbortController()
+        var res = await fetch('/json', {subscribe: true, multiplex: false, heartbeats: 0.5, signal: a.signal})
+        a.abort()
+        return 'post-sub-header: ' + res.headers.get('post-sub-header')
+    },
+    'post-sub-header: yup'
+)
+
+runTest(
     "Verify heartbeat reception",
     async () => {
         let a = new AbortController()

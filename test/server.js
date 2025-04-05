@@ -122,6 +122,9 @@ require('http2').createSecureServer({
             // If the client requested a subscription, let's honor it!
             if (req.subscribe)
                 res.startSubscription()
+            
+            // test writing header after startSubscription
+            res.setHeader('post-sub-header', 'yup')
 
             // Send the current version
             if (!req.headers.skip_first) res.sendUpdate(test_update)
