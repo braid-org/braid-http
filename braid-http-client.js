@@ -977,7 +977,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                                     + ', expected ' + multiplex_version)
             } catch (e) {
                 e = new Error(`Could not cancel multiplexed request: ${e}`)
-                console.error('' + e)
+                // console.error('' + e)
                 throw e
             } finally { try_deleting.delete(request) }
         }
@@ -1026,8 +1026,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                                     + ', expected ' + multiplex_version)
             } catch (e) {
                 // fallback to normal fetch if multiplexed connection fails
-                console.error(`Could not establish multiplexer.\n`
-                                + `Got error: ${e}.\nFalling back to normal connection.`)
+                // console.error(`Could not establish multiplexer.\n`
+                //                 + `Got error: ${e}.\nFalling back to normal connection.`)
                 cleanup_multiplexer('retry', true)
                 return false
             }
@@ -1189,7 +1189,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 // how did it go?
                 if (x.result === 'error') {
                     // if we got an error, give up
-                    console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
+                    // console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
                     throw new Error('error parsing headers')
                 } else if (x.result === 'waiting') {
                     if (request_ended)
