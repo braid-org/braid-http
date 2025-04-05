@@ -1234,13 +1234,14 @@ runTest(
         })
         return await new Promise(done => {
             r.subscribe(u => {
-                u.body = u.body_text
-                done(JSON.stringify(u))
-                a.abort()
+                if (u.version[0] === 'another!') {
+                    done('another!')
+                    a.abort()
+                }
             })
         })
     },
-    JSON.stringify(test_update)
+    'another!'
 )
 
 waitForTests(() => braid_fetch.enable_multiplex = false)

@@ -1092,10 +1092,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
         // tell the multiplexer to send bytes for this request to us
         requests.set(request, bytes => {
-            if (!bytes) {
-                buffers.push(bytes)
-                if (mux_error || request_error) aborter.abort()
-            } else if (!mux_error) buffers.push(bytes)
+            if (!bytes) buffers.push(bytes)
+            else if (!mux_error) buffers.push(bytes)
             bytes_available()
         })
 

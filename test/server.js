@@ -107,6 +107,7 @@ require('http2').createSecureServer({
             braidify.multiplexers?.get(req.headers.mux)?.res.end('AAAAA')
             return res.end(`ok`)
         }
+        if (is_mux) res.end('hm..')
 
         // We'll serve Braid at the /json route!
         if (req.url === '/json' && req.method === 'GET') {
