@@ -339,12 +339,10 @@ require('http2').createSecureServer({
                 res.end(buffer);
             }
         } else if (req.url === '/noheartbeat') {
-            res.writeHead(209, {
-                'Content-Type': 'text/plain',
-                Connection: 'keep-alive',
-                Heartbeats: req.headers['heartbeats']
-            })
-            res.write('hi')
+            res.setHeader('Heartbeats', req.headers['heartbeats'])
+            delete req.headers['heartbeats']
+            res.startSubscription()
+            res.sendUpdate(test_update)
             return
         } else if (req.url === '/parse_error') {
             res.startSubscription()

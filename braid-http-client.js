@@ -232,7 +232,6 @@ async function braid_fetch (url, params = {}) {
     var res = null
     var subscription_cb = null
     var subscription_error = null
-    var cb_running = false
 
     // Multiplexing book-keeping;
     // basically, if the user tries to make two or more subscriptions to the same origin,
@@ -267,9 +266,7 @@ async function braid_fetch (url, params = {}) {
                 // see if we should retry..
                 var retry = params.retry &&    // only try to reconnect if the user has chosen to
                     e.name !== "AbortError" && // don't retry if the user has chosen to abort
-                    !e.dont_retry &&           // some errors are unlikely to be fixed by retrying
-                    !cb_running                // if an error is thrown in the callback,
-                                               // then it may not be good to reconnect, and generate more errors
+                    !e.dont_retry              // some errors are unlikely to be fixed by retrying
 
                 if (retry && !original_signal?.aborted) {
                     // retry after some time..
@@ -367,9 +364,15 @@ async function braid_fetch (url, params = {}) {
                                     throw create_error('already aborted', {name: 'AbortError'})
 
                                 // Yay!  We got a new version!  Tell the callback!
-                                cb_running = true
-                                await cb(result)
-                                cb_running = false
+                                try {
+                                    await cb(result)
+                                } catch (e) {
+                                    // This error is happening in the users code,
+                                    // so retrying the connection
+                                    // will probably still fail
+                                    e.dont_retry = true
+                                    throw e
+                                }
                             } else
                                 // This error handling code runs if the connection
                                 // closes, or if there is unparseable stuff in the

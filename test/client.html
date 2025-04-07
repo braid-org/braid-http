@@ -1796,6 +1796,32 @@ runTest(
 )
 
 runTest(
+    "Verify heartbeat error in cb doesn't stop retry",
+    async () => {
+        return await new Promise((resolve, reject) => {
+            let a = new AbortController()
+            var count = 0
+            fetch('/noheartbeat', {subscribe: true, multiplex: false, signal: a.signal, heartbeats: 0.5, retry: {
+                onRes: () => {
+                    count++
+                    if (count == 2) {
+                        resolve('did retry!')
+                        a.abort()
+                    }
+                }
+            }}).then(
+                res => res.subscribe(
+                    async update => {
+                        await new Promise(done => setTimeout(done, 5000))
+                    },
+                    e => resolve(e.message)
+                )).catch(reject)
+        })
+    },
+    'did retry!'
+)
+
+runTest(
     "Verify error in async cb stops retry",
     async () => {
         return await new Promise((resolve, reject) => {
