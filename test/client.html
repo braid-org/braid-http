@@ -2021,6 +2021,20 @@ runTest(
 )
 
 runTest(
+    "Test heartbeat error",
+    async () => {
+        let res_count = 0
+        let a = new AbortController()
+        let x = '' + await new Promise(resolve => {
+            fetch('/noheartbeat', {heartbeats: 0.5, signal: a.signal}).then(res => res.subscribe(() => {}, resolve)).catch(resolve)
+        })
+        a.abort()
+        return x
+    },
+    'Error: heartbeat not seen in 3.60s'
+)
+
+runTest(
     "Restart connection on missed heartbeats",
     async () => {
         let res_count = 0
