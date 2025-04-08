@@ -1138,6 +1138,7 @@ runTest(
             method: 'POST',
             subscribe: true,
             body: `
+                res.statusCode = 209
                 res.write('\\r\\n\\r\\n\\r\\nHTP 555\\r\\n\\r\\n\\r\\n')
             `
         })
@@ -1775,6 +1776,24 @@ runTest(
 )
 
 addSectionHeader("Misc")
+
+runTest(
+    "Test calling subscribe on a non-subscription.",
+    async () => {
+        return await new Promise(async (resolve, reject) => {
+            var res = await fetch('/eval', {
+                method: 'POST',
+                body: `res.end('ok')`
+            })
+            try {
+                res.subscribe(() => {})
+            } catch (e) {
+                resolve('' + e)
+            }
+        })
+    },
+    'Error: Got unexpected subscription status code: 200. Expected 209.'
+)
 
 runTest(
     "Verify error in cb stops retry",

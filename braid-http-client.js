@@ -344,8 +344,9 @@ async function braid_fetch (url, params = {}) {
                         }
                     }
 
-                    if (!res.ok)
-                        throw new Error('Request returned not ok status:', res.status)
+                    if (res.status !== 209) {
+                        throw new Error(`Got unexpected subscription status code: ${res.status}. Expected 209.`)
+                    }
 
                     if (res.bodyUsed)
                         // TODO: check if this needs a return
