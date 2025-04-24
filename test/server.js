@@ -437,7 +437,7 @@ https.createServer({
 https.createServer({
     key: require('fs').readFileSync('./test/localhost-privkey.pem'),
     cert: require('fs').readFileSync('./test/localhost-cert.pem')
-}, braidify((req, res) => {
+}, braidify(async (req, res) => {
     console.log('Wrapped-Handler-Request:', req.url, req.method)
     
     // Only allow connections from localhost
@@ -483,6 +483,17 @@ https.createServer({
                 })
             }, 200)
         }
+    } else if (req.url === '/eval') {
+        var body = ''
+        req.on('data', chunk => body += chunk.toString())
+        req.on('end', () => {
+            try {
+                eval(body)
+            } catch (error) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' })
+                res.end(`Error: ${error.message}`)
+            }
+        })
     } else {
         res.writeHead(404)
         res.end('Not found')

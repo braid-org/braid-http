@@ -443,9 +443,13 @@ async function braid_fetch (url, params = {}) {
                         case 429: // Too Many Requests
 
                         case 502: // Bad Gateway
+                        case 503: // Service Unavailable
                         case 504: // Gateway Timeout
                             give_up = false
                     }
+                    if (res.statusText.match(/Missing Parents/i) ||
+                        res.headers.get('retry-after') !== null)
+                        give_up = false
                     if (give_up) {
                         if (subscription_cb) subscription_error?.(new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`))
                     } else if (!res.ok) throw new Error(`status not ok: ${res.status}`)

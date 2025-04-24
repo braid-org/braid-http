@@ -2676,6 +2676,94 @@ runTest(
 addSectionHeader("Retry Tests")
 
 runTest(
+    "Verify that we retry on 503",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            let a = new AbortController()            
+            fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                multiplex: false,
+                body: `
+                    res.statusCode = 503
+                    res.end('ok')
+                `,
+                onFetch: () => {
+                    console.log('got here!!!!')
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: true
+            })
+        })
+    },
+    'retried!'
+)
+
+runTest(
+    "Verify that we retry on 400 Missing Parents",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            let a = new AbortController()
+            fetch(`https://localhost:${port + 2}/eval`, {
+                method: 'POST',
+                signal: a.signal,
+                multiplex: false,
+                body: `
+                    res.writeHead(510, 'Missing Parents', { 'Content-Type': 'text/plain' })
+                    res.end('ok!')
+                `,
+                onFetch: () => {
+                    console.log('got here!!!!')
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: true
+            })
+        })
+    },
+    'retried!'
+)
+
+runTest(
+    "Verify that we retry when Retry-After is set",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            let a = new AbortController()            
+            fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                multiplex: false,
+                body: `
+                    res.statusCode = 500
+                    res.setHeader('Retry-After', '')
+                    res.end('ok')
+                `,
+                onFetch: () => {
+                    console.log('got here!!!!')
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: true
+            })
+        })
+    },
+    'retried!'
+)
+
+runTest(
     "Verify that unparsable headers do not result in retrying connection.",
     async () => {
         let a = new AbortController()
