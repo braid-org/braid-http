@@ -2676,6 +2676,74 @@ runTest(
 addSectionHeader("Retry Tests")
 
 runTest(
+    "Verify that retry.retryRes gets heeded when true.",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            let a = new AbortController()            
+            setTimeout(() => {
+                done('did not retry!')
+                a.abort()
+            }, 4000)
+            fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                multiplex: false,
+                body: `
+                    res.statusCode = 500
+                    res.end('ok')
+                `,
+                onFetch: () => {
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: {
+                    retryRes: (res) => true
+                }
+            })
+        })
+    },
+    'retried!'
+)
+
+runTest(
+    "Verify that retry.retryRes gets heeded when false.",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            let a = new AbortController()
+            setTimeout(() => {
+                done('did not retry!')
+                a.abort()
+            }, 4000)
+            fetch('/eval', {
+                method: 'POST',
+                signal: a.signal,
+                multiplex: false,
+                body: `
+                    res.statusCode = 425
+                    res.end('ok')
+                `,
+                onFetch: () => {
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: {
+                    retryRes: (res) => false
+                }
+            })
+        })
+    },
+    'did not retry!'
+)
+
+runTest(
     "Verify that we retry on 503",
     async () => {
         return await new Promise(done => {

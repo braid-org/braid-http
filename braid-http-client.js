@@ -435,21 +435,27 @@ async function braid_fetch (url, params = {}) {
                     }
                 }
 
-                if (params.retry) {
-                    let give_up = res.status >= 400 && res.status < 600
-                    switch (res.status) {
-                        case 408: // Request Timeout
-                        case 425: // Too Early
-                        case 429: // Too Many Requests
+                if (params.retry && !res.ok) {
+                    var give_up
+                    if (params.retry.retryRes) {
+                        give_up = !params.retry.retryRes(res)
+                    } else {
+                        give_up = res.status >= 400 && res.status < 600
 
-                        case 502: // Bad Gateway
-                        case 503: // Service Unavailable
-                        case 504: // Gateway Timeout
+                        switch (res.status) {
+                            case 408: // Request Timeout
+                            case 425: // Too Early
+                            case 429: // Too Many Requests
+
+                            case 502: // Bad Gateway
+                            case 503: // Service Unavailable
+                            case 504: // Gateway Timeout
+                                give_up = false
+                        }
+                        if (res.statusText.match(/Missing Parents/i) ||
+                            res.headers.get('retry-after') !== null)
                             give_up = false
                     }
-                    if (res.statusText.match(/Missing Parents/i) ||
-                        res.headers.get('retry-after') !== null)
-                        give_up = false
                     if (give_up) {
                         if (subscription_cb) subscription_error?.(new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`))
                     } else if (!res.ok) throw new Error(`status not ok: ${res.status}`)
