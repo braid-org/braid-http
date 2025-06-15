@@ -132,6 +132,8 @@ if (is_nodejs) {
     // window.fetch = braid_fetch
 }
 
+braid_fetch.set_fetch = f => normal_fetch = f
+
 async function braid_fetch (url, params = {}) {
     params = deep_copy(params) // Copy params, because we'll mutate it
 

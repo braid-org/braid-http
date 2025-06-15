@@ -1778,6 +1778,36 @@ runTest(
 addSectionHeader("Misc")
 
 runTest(
+    "Test set_fetch",
+    async () => {
+        var flag_A = false
+        fetch.set_fetch((...args) => {
+            flag_A = true
+            return og_fetch(...args)
+        })
+
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+            void (async () => {
+                if (typeof fetch === 'undefined') return res.end('old node version')
+
+                var flag_B = false
+                braid_fetch.set_fetch((...args) => {
+                    flag_B = true
+                    return fetch(...args)
+                })
+                await braid_fetch('https://localhost:' + port + '/json')
+                res.end('flag_B = ' + flag_B)
+            })()
+            `
+        })
+        return `flag_A = ${flag_A}, ` + await r.text()
+    },
+    'flag_A = true, flag_B = true'
+)
+
+runTest(
     "Test calling subscribe on a non-subscription.",
     async () => {
         return await new Promise(async (resolve, reject) => {
