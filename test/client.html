@@ -3201,4 +3201,132 @@ runTest(
     '' + new Array(256).fill(0).map((x, i) => i)
 )
 
+addSectionHeader('Encoding Block Tests')
+
+runTest(
+    "Basic encoding block test",
+    async () => {
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                res.statusCode = 209
+                res.write('Encoding: dt\\r\\nLength: 5\\r\\nhello')
+            `
+        })
+        return await new Promise(done => {
+            r.subscribe(u => {
+                done(u.body_text)
+            })
+        })
+    },
+    'hello'
+)
+
+runTest(
+    "Test multiple block types in stream",
+    async () => {
+        var stream1 = `
+
+
+HTTP 200 OK\r
+Yo: hi\r
+Content-Length: 2
+
+yo
+
+encoding: d`
+
+        var stream2 = `t
+length: 5\r
+HELLO
+
+
+HTTP 300 OK\r
+Content-Length: 3
+
+abc
+
+        `
+
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                void (async () => {
+                    res.statusCode = 209
+                    res.write(${JSON.stringify(stream1)})
+                    await new Promise(done => setTimeout(done, 200))
+                    res.write(${JSON.stringify(stream2)})
+                })()
+            `
+        })
+        var result = ''
+        return await new Promise(done => {
+            r.subscribe(u => {
+                if (u.status === '200') {
+                    result += u.body_text
+                } else if (!u.status) {
+                    result += u.body_text
+                } else if (u.status === '300') {
+                    result += u.body_text
+                    done(result)
+                }
+            })
+        })
+    },
+    'yoHELLOabc'
+)
+
+runTest(
+    "Test malformed encoding block",
+    async () => {
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                res.statusCode = 209
+                res.write('Encoing: dt\\r\\nLength: 5\\r\\nhello')
+            `
+        })
+        return await new Promise(done => {
+            r.subscribe(u => {}, e => done(e.message.slice(0, 'Parse error in encoding block'.length)))
+        })
+    },
+    'Parse error in encoding block'
+)
+
+runTest(
+    "Test that Patches with a Length header still works",
+    async () => {
+        var stream = `
+
+
+HTTP 200 OK\r
+Length: 1\r
+Patches: 1\r
+
+Version: "me-0"
+Parents: "mom-0"
+Content-Range: "[0:0]"
+Content-Length: 8
+
+my patch`
+
+        var r = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                void (async () => {
+                    res.statusCode = 209
+                    res.write(${JSON.stringify(stream)})
+                })()
+            `
+        })
+        return await new Promise(done => {
+            r.subscribe(u => {
+                done(u.patches[0].content_text)
+            })
+        })
+    },
+    'my patch'
+)
+
+
 </script>
