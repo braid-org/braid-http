@@ -439,7 +439,10 @@ async function braid_fetch (url, params = {}) {
 
                 if (params.retry && !res.ok) {
                     var give_up
-                    if (params.retry.retryRes) {
+                    if (typeof params.retry === 'function') {
+                        give_up = !params.retry(res)
+                    } else if (params.retry.retryRes) {
+                        // deprecated in favor of setting retry to a function
                         give_up = !params.retry.retryRes(res)
                     } else {
                         give_up = res.status >= 400 && res.status < 600
