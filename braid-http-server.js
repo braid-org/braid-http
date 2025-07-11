@@ -597,7 +597,7 @@ function braidify (req, res, next) {
 }
 
 async function send_update(res, data, url, peer) {
-    var {version, parents, patches, patch, body, status} = data
+    var {version, parents, patches, patch, body, status, encoding} = data
 
     if (status) {
         assert(typeof status === 'number', 'sendUpdate: status must be a number')
@@ -613,7 +613,7 @@ async function send_update(res, data, url, peer) {
             res.setHeader(key, val)
     }
     function write_body (body) {
-        if (res.isSubscription) res.write('\r\n')
+        if (res.isSubscription && !encoding) res.write('\r\n')
         write_binary(res, body)
     }
 
@@ -662,7 +662,7 @@ async function send_update(res, data, url, peer) {
         status === 200 ? 'OK'
         : 404 ? 'Not Found'
         : 'Unknown'
-    if (res.isSubscription) res.write(`HTTP ${status} ${reason}\r\n`)
+    if (res.isSubscription && !encoding) res.write(`HTTP ${status} ${reason}\r\n`)
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(data)) {
@@ -698,7 +698,7 @@ async function send_update(res, data, url, peer) {
         let binary = typeof body === 'string' ? new TextEncoder().encode(body) : body,
             length = get_binary_length(binary)
         assert(length !== undefined && length !== 'undefined')
-        set_header('Content-Length', length)
+        set_header(encoding ? 'Length' : 'Content-Length', length)
         write_body(binary)
     } else
         write_patches(res, patches)

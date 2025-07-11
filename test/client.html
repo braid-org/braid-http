@@ -3209,8 +3209,11 @@ runTest(
         var r = await fetch('/eval', {
             method: 'POST',
             body: `
-                res.statusCode = 209
-                res.write('Encoding: dt\\r\\nLength: 5\\r\\nhello')
+                res.startSubscription()
+                res.sendUpdate({
+                    encoding: 'dt',
+                    body: 'hello'
+                })
             `
         })
         return await new Promise(done => {
