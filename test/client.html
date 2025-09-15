@@ -1778,6 +1778,38 @@ runTest(
 addSectionHeader("Misc")
 
 runTest(
+    "Test that startSubscription can detect closure.",
+    async () => {
+        var a = new AbortController()
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var r = await fetch('/eval', {
+            method: 'POST',
+            signal: a.signal,
+            body: `
+                res.setHeader('test', '42')
+                res.startSubscription({
+                    onClose: () => {
+                        _${m} = 42
+                    }
+                })
+                res.write('\\r\\n')
+            `});
+        if (r.headers.get('test') !== '42') throw new Error('sad')
+        a.abort()
+        await new Promise(done => setTimeout(done, 100))
+        var r2 = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                res.end('' + _${m})
+            `});
+        var x = await r2.text()
+        return x
+    },
+    '42'
+);
+
+runTest(
     "Test set_fetch",
     async () => {
         var flag_A = false
