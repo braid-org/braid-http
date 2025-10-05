@@ -360,3 +360,26 @@ Configure mutliplexing with:
 var braidify = require('braid-http').http-server
 nbraidify.enable_multiplex = true   // or false
 ```
+
+## Test Procedure
+
+Using 3 terminals, in first terminal start the demo chat server:
+
+```
+cd demos/chat
+node server.js
+```
+
+in second terminal start the demo blog server:
+```
+cd demos/blog
+node server.js
+```
+
+and in third and final terminal, start the test server:
+```
+node test/server.js
+```
+
+now open https://localhost:9000, and make sure all the boxes turn green, and try out the demo chat and blog, sending a message in each.
+

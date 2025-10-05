@@ -1,4 +1,4 @@
-var braidify = require('../braid-http-server.js')
+var {braidify, free_cors} = require('../braid-http-server.js')
 var sendfile = (f, req, res) => res.end(require('fs').readFileSync(require('path').join(__dirname, f)))
 var http = require('../braid-http-client.js').http(require('http'))
 var https = require('../braid-http-client.js').http(require('https'))
@@ -397,10 +397,7 @@ express_app.use(braidify)
 
 // Add CORS
 express_app.use((req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "*")
-    res.setHeader("Access-Control-Allow-Headers", "*")
-    res.setHeader("Access-Control-Expose-Headers", "*")
+    free_cors(res)
     if (req.method === 'OPTIONS') return res.end('')
     next()
 })
@@ -451,10 +448,7 @@ https.createServer({
         return;
     }
 
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "*")
-    res.setHeader("Access-Control-Allow-Headers", "*")
-    res.setHeader("Access-Control-Expose-Headers", "*")
+    free_cors(res)
     if (req.method === 'OPTIONS') return res.end()
 
     // Simple test endpoint

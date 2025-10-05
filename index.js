@@ -8,5 +8,6 @@ var client = require('./braid-http-client'),
 module.exports = {
     fetch: client.fetch,
     http_client: client.http,
-    http_server: server
+    http_server: server.braidify,
+    free_cors: server.free_cors
 }

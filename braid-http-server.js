@@ -253,11 +253,7 @@ function braidify (req, res, next) {
     if ((braidify.enable_multiplex ?? true) &&
         (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/'))) {
 
-        // free the cors
-        res.setHeader("Access-Control-Allow-Origin", "*")
-        res.setHeader("Access-Control-Allow-Methods", "*")
-        res.setHeader("Access-Control-Allow-Headers", "*")
-        res.setHeader("Access-Control-Expose-Headers", "*")
+        free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
         // check the multiplexing protocol version
@@ -733,4 +729,14 @@ function ascii_ify(s) {
     return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
-module.exports = braidify
+function free_cors(res) {
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    res.setHeader("Access-Control-Expose-Headers", "*")
+}
+
+module.exports = {
+    braidify,
+    free_cors
+}

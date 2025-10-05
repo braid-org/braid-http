@@ -23,7 +23,7 @@ var rhash = (req) => JSON.stringify([req.headers.peer, req.url])
 
 
 // Create our HTTP bindings!
-var braidify = require('../../index.js').http_server
+var {http_server: braidify, free_cors} = require('../../index.js')
 var app = require('http2-express-bridge')(require('express'))
 
 // Middleware
@@ -114,12 +114,8 @@ function log_request (req, res, next) {
 function free_the_cors (req, res, next) {
     res.setHeader('Range-Request-Allow-Methods', 'PATCH, PUT')
     res.setHeader('Range-Request-Allow-Units', 'json')
-    var free_the_cors = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "OPTIONS, HEAD, GET, PUT, UNSUBSCRIBE",
-        "Access-Control-Allow-Headers": "subscribe, peer, version, parents, merge-type, content-type, patches, cache-control"
-    }
-    Object.entries(free_the_cors).forEach(x => res.setHeader(x[0], x[1]))
+
+    free_cors(res)
     if (req.method === 'OPTIONS') {
         res.writeHead(200)
         res.end()

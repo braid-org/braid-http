@@ -9,7 +9,8 @@ import braid_server from './braid-http-server.js'
 
 var fetch = braid_client.fetch,
     http_client = braid_client.http,
-    http_server = braid_server
+    http_server = braid_server.braidify,
+    free_cors = braid_server.free_cors
 
-export { fetch, http_client, http_server }
-export default { fetch, http_client, http_server }
+export { fetch, http_client, http_server, free_cors }
+export default { fetch, http_client, http_server, free_cors }
