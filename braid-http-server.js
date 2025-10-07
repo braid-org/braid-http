@@ -246,6 +246,7 @@ function braidify (req, res, next) {
     // Define convenience variables
     req.version   = version
     req.parents   = parents
+    req.peer      = peer
     req.subscribe = subscribe
 
     // Multiplexer stuff

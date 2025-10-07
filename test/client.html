@@ -1922,6 +1922,18 @@ runTest(
 )
 
 runTest(
+    "Verify that server sets peer on response object",
+    async () => {
+        return await (await fetch("/eval", {
+            method: 'POST',
+            peer: 'test-peer-123',
+            body: `res.end(req.peer)`
+        })).text()
+    },
+    'test-peer-123'
+)
+
+runTest(
     "Verify that client writes ASCII versions",
     async () => {
         return await (await fetch("/eval", {
