@@ -557,16 +557,23 @@ var subscription_parser = (cb) => ({
                 for (var k in update)
                     if (update[k] === undefined) delete update[k]
 
+                var body_text_cache = null
                 Object.defineProperty(update, 'body_text', {
                     get: function () {
-                        if (this.body != null)
-                            return new TextDecoder('utf-8').decode(this.body.buffer)
+                        if (body_text_cache !== null) return body_text_cache
+                        return body_text_cache = this.body != null ?
+                            new TextDecoder('utf-8').decode(this.body.buffer) : undefined
                     }
                 })
 
                 for (let p of update.patches ?? []) {
+                    let content_text_cache = null
                     Object.defineProperty(p, 'content_text', {
-                        get: () => new TextDecoder('utf-8').decode(p.content)
+                        get: () => {
+                            if (content_text_cache !== null) return content_text_cache
+                            return content_text_cache =
+                                new TextDecoder('utf-8').decode(p.content)
+                        }
                     })
                 }
 

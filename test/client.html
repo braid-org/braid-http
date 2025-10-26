@@ -66,6 +66,9 @@
         th {
             background-color: #f2f2f2;
         }
+        .queued {
+            background-color: #e0e0e0;
+        }
         .running {
             background-color: #fffde7;
         }
@@ -171,15 +174,19 @@ function addSectionHeader(headerText) {
 
 let summaryContainer = document.getElementById('summaryContainer');
 
-function createSummaryBox() {
+function createSummaryBox(isQueued = false) {
     const box = document.createElement('div');
-    box.className = 'summaryBox running';
+    box.className = `summaryBox ${isQueued ? 'queued' : 'running'}`;
     summaryContainer.appendChild(box);
     return box;
 }
 
 function updateSummaryBox(box, passed) {
     box.className = `summaryBox ${passed ? 'passed' : passed === false ? 'failed' : 'other'}`;
+}
+
+function setSummaryBoxRunning(box) {
+    box.className = 'summaryBox running';
 }
 
 var wait_for_me = Promise.resolve()
@@ -191,18 +198,23 @@ function waitForTests(cb) {
 }
 
 function runTest(testName, testFunction, expectedResult) {
+    // Create the summary box immediately as "queued"
+    const summaryBox = createSummaryBox(true);
+    
     wait_list.push((async () => {
         let func = addSectionHeader.my_func
         addSectionHeader.my_func = null
 
         await wait_for_me
 
+        // Now the test is actually running, update box from grey to yellow
+        setSummaryBoxRunning(summaryBox);
+
         delay += 70
 
         await new Promise(done => setTimeout(done, delay))
         func?.()
         const row = createTestRow(testName, expectedResult)
-        const summaryBox = createSummaryBox()
 
         try {
             let got = await testFunction()
@@ -1690,6 +1702,25 @@ runTest(
 )
 
 runTest(
+    "Verify that content_text can be accessed after overriding content",
+    async () => {
+        let a = new AbortController()
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        update.patches[0].content = update.patches[0].content_text
+                        resolve(update.patches[0].content_text)
+                        a.abort()
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    '1'
+)
+
+runTest(
     "Verify server-side bodies are binary",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1753,6 +1784,27 @@ runTest(
         })
     },
     '{"a":5}'
+)
+
+runTest(
+    "Verify that body_text can be accessed after overriding body",
+    async () => {
+        return '' + await new Promise((resolve, reject) => {
+            fetch('/json', {subscribe: true, multiplex: false, headers: {skip_first: true}}).then(
+                res => res.subscribe(
+                    (update) => {
+                        try {
+                            update.body_text
+                            resolve(update.body_text)
+                        } catch (e) {
+                            reject(e)
+                        }
+                    },
+                    reject
+                )).catch(reject)
+        })
+    },
+    'undefined'
 )
 
 runTest(
@@ -3374,6 +3426,5 @@ my patch`
     },
     'my patch'
 )
-
 
 </script>
