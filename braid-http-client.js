@@ -471,6 +471,11 @@ async function braid_fetch (url, params = {}) {
                 params?.retry?.onRes?.(res)
                 waitTime = 1
 
+                // parse version if it exists
+                var version_header = res.headers.get('version') || res.headers.get('current-version')
+                if (version_header)
+                    try { res.version = JSON.parse('[' + version_header + ']') } catch (e) { console.log('error parsing version: ' + version_header) }
+
                 done(res)
             } catch (e) { on_error(e) }
         }
@@ -643,7 +648,7 @@ function parse_update (state) {
 }
 
 // Parsing helpers
-function parse_headers (input, check_for_encoding_blocks) {
+function parse_headers (input, check_for_encoding_blocks, dont_parse_special_headers) {
 
     // Find the start of the headers
     var start = 0
@@ -738,12 +743,14 @@ function parse_headers (input, check_for_encoding_blocks) {
         }
 
     // Success!  Let's parse special headers
-    if ('version' in headers)
-        headers.version = JSON.parse('['+headers.version+']')
-    if ('parents' in headers)
-        headers.parents = JSON.parse('['+headers.parents+']')
-    if ('patches' in headers)
-        headers.patches = JSON.parse(headers.patches)
+    if (!dont_parse_special_headers) {
+        if ('version' in headers)
+            headers.version = JSON.parse('['+headers.version+']')
+        if ('parents' in headers)
+            headers.parents = JSON.parse('['+headers.parents+']')
+        if ('patches' in headers)
+            headers.patches = JSON.parse(headers.patches)
+    }
 
     // Update the input
     input = input.slice(end)
@@ -1126,6 +1133,9 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         var request = (attempt === 1
             && params.headers.get('multiplex-through')?.split('/')[4])
             || random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
+        
+        // make sure this request id is not already in use
+        if (requests.has(request)) throw "retry"
 
         // add the Multiplex-Through header without affecting the underlying params
         var mux_headers = new Headers(params.headers)
@@ -1178,6 +1188,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
         // do the underlying fetch
         try {
+            if (attempt > 1) await mux_created_promise
+
             var mux_was_done = await promise_done(mux_created_promise)
 
             // callback for testing
@@ -1252,7 +1264,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 if (request_ended) buffers.push(null)
 
                 // try parsing what we got so far as headers..
-                var x = parse_headers(headers_buffer)
+                var x = parse_headers(headers_buffer, false, true)
 
                 // how did it go?
                 if (x.result === 'error') {
@@ -1394,6 +1406,7 @@ function concat_buffers(buffers) {
 if (typeof module !== 'undefined' && module.exports)
     module.exports = {
         fetch: braid_fetch,
+        multiplex_fetch,
         http: braidify_http,
         subscription_parser,
         parse_update,

@@ -253,6 +253,7 @@ function braidify (req, res, next) {
     var multiplex_version = '1.0'
     if ((braidify.enable_multiplex ?? true) &&
         (req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/'))) {
+        req.is_multiplexer = res.is_multiplexer = true
 
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
@@ -262,9 +263,6 @@ function braidify (req, res, next) {
             res.writeHead(400, 'Bad Multiplexer Version')
             return res.end()
         }
-
-        // let the caller know we're handling things
-        req.is_multiplexer = res.is_multiplexer = true
 
         // parse the multiplexer id and request id from the url
         var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)

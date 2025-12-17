@@ -48,10 +48,11 @@ import {fetch, http_client, http_server} from 'braid-http'
 ## Using it in Browsers
 
 This library adds a `{subscribe: true}` option to `fetch()`, and lets you
-access the result of a subscription with two new fields on the fetch response:
+access the result of a subscription with these new fields on the fetch response:
 
 - `response.subscribe( update => ... )`
 - `response.subscription`: an iterator that can be used with `for await`
+- `response.version`: the parsed version from the response headers (if present)
 
 ### Example Subscription with Promises
 
@@ -363,23 +364,43 @@ nbraidify.enable_multiplex = true   // or false
 
 ## Test Procedure
 
-Using 3 terminals, in first terminal start the demo chat server:
+Run tests from the command line:
+
+```
+node test/test.js
+```
+
+Or run tests in a browser by starting the test server:
+
+```
+node test/test.js --browser
+```
+
+Then open https://localhost:9000 and make sure all the boxes turn green.
+
+You can also filter tests by name:
+
+```
+node test/test.js --filter="version"
+```
+
+For the complete browser test (including demos), use 3 terminals. In the first terminal start the demo chat server:
 
 ```
 cd demos/chat
 node server.js
 ```
 
-in second terminal start the demo blog server:
+In the second terminal start the demo blog server:
 ```
 cd demos/blog
 node server.js
 ```
 
-and in third and final terminal, start the test server:
+And in the third terminal, start the test server:
 ```
-node test/server.js
+node test/test.js --browser
 ```
 
-now open https://localhost:9000, and make sure all the boxes turn green, and try out the demo chat and blog, sending a message in each.
+Now open https://localhost:9000, make sure all the boxes turn green, and try out the demo chat and blog, sending a message in each.
 
