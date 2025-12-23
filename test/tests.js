@@ -2151,6 +2151,29 @@ runTest(
     "didn't restart"
 )
 
+runTest(
+    "Verify heartbeat_cb is called on heartbeats",
+    async () => {
+        let a = new AbortController()
+        let heartbeat_count = 0
+        let x = await new Promise((resolve, reject) => {
+            fetch('/json', {
+                subscribe: true,
+                multiplex: false,
+                heartbeats: 0.3,
+                signal: a.signal,
+                heartbeat_cb: () => {
+                    heartbeat_count++
+                    if (heartbeat_count >= 3) resolve(`heartbeat_cb called ${heartbeat_count} times`)
+                }
+            }).then(res => res.subscribe(() => {}, reject)).catch(reject)
+        })
+        a.abort()
+        return x
+    },
+    'heartbeat_cb called 3 times'
+)
+
 addSectionHeader("Read Tests")
 
 runTest(
