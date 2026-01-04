@@ -670,6 +670,10 @@ async function runConsoleTests() {
         get: () => braid_fetch.enable_multiplex,
         set: (v) => { braid_fetch.enable_multiplex = v }
     })
+    Object.defineProperty(wrappedBraidFetch, 'reconnect_delay_ms', {
+        get: () => braid_fetch.reconnect_delay_ms,
+        set: (v) => { braid_fetch.reconnect_delay_ms = v }
+    })
 
     // multiplex_fetch is imported from braid-http-client.js
 

@@ -2174,6 +2174,120 @@ runTest(
     'heartbeat_cb called 3 times'
 )
 
+runTest(
+    "Test reconnect_delay_ms default path",
+    async () => {
+        await braid_fetch.reconnect_delay_test_chain
+        braid_fetch.reconnect_delay_test_chain = (async () => {
+            // Ensure reconnect_delay_ms is not set
+            delete braid_fetch.reconnect_delay_ms
+            let a = new AbortController()
+            let res_count = 0
+            let start_time = null
+            let x = await new Promise((resolve, reject) => {
+                // Use retry function that returns true to force retry on 500
+                fetch('/500', {signal: a.signal, retry: (res) => {
+                    res_count++
+                    if (res_count === 1) {
+                        start_time = Date.now()
+                    } else if (res_count > 1) {
+                        let elapsed = Date.now() - start_time
+                        // Default is Math.min(retry_count + 1, 3) * 1000 = 1000ms for retry_count=0
+                        // Allow 800-1500ms range
+                        if (elapsed >= 800 && elapsed <= 1500) {
+                            resolve('default path ok')
+                        } else {
+                            resolve(`default path TIMING ERROR: elapsed=${elapsed}ms (expected ~1000ms)`)
+                        }
+                        a.abort()
+                        return false
+                    }
+                    return true
+                }}).catch(() => {})
+            })
+            return x
+        })()
+        return await braid_fetch.reconnect_delay_test_chain
+    },
+    'default path ok'
+)
+
+runTest(
+    "Test reconnect_delay_ms as number",
+    async () => {
+        await braid_fetch.reconnect_delay_test_chain
+        braid_fetch.reconnect_delay_test_chain = (async () => {
+            braid_fetch.reconnect_delay_ms = 200
+            let a = new AbortController()
+            let res_count = 0
+            let start_time = null
+            let x = await new Promise((resolve, reject) => {
+                fetch('/500', {signal: a.signal, retry: (res) => {
+                    res_count++
+                    if (res_count === 1) {
+                        start_time = Date.now()
+                    } else if (res_count > 1) {
+                        let elapsed = Date.now() - start_time
+                        // Should be ~200ms, allow 100-400ms range
+                        if (elapsed >= 100 && elapsed <= 400) {
+                            resolve('number path ok')
+                        } else {
+                            resolve(`number path TIMING ERROR: elapsed=${elapsed}ms (expected ~200ms)`)
+                        }
+                        a.abort()
+                        return false
+                    }
+                    return true
+                }}).catch(() => {})
+            })
+            delete braid_fetch.reconnect_delay_ms
+            return x
+        })()
+        return await braid_fetch.reconnect_delay_test_chain
+    },
+    'number path ok'
+)
+
+runTest(
+    "Test reconnect_delay_ms as function",
+    async () => {
+        await braid_fetch.reconnect_delay_test_chain
+        braid_fetch.reconnect_delay_test_chain = (async () => {
+            let received_retry_count = null
+            braid_fetch.reconnect_delay_ms = (retry_count) => {
+                received_retry_count = retry_count
+                return 150
+            }
+            let a = new AbortController()
+            let res_count = 0
+            let start_time = null
+            let x = await new Promise((resolve, reject) => {
+                fetch('/500', {signal: a.signal, retry: (res) => {
+                    res_count++
+                    if (res_count === 1) {
+                        start_time = Date.now()
+                    } else if (res_count > 1) {
+                        let elapsed = Date.now() - start_time
+                        // Should be ~150ms, allow 50-350ms range
+                        if (elapsed >= 50 && elapsed <= 350 && received_retry_count === 0) {
+                            resolve('function path ok')
+                        } else {
+                            resolve(`function path ERROR: elapsed=${elapsed}ms, retry_count=${received_retry_count}`)
+                        }
+                        a.abort()
+                        return false
+                    }
+                    return true
+                }}).catch(() => {})
+            })
+            delete braid_fetch.reconnect_delay_ms
+            return x
+        })()
+        return await braid_fetch.reconnect_delay_test_chain
+    },
+    'function path ok'
+)
+
 addSectionHeader("Read Tests")
 
 runTest(

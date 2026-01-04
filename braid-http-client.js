@@ -230,7 +230,7 @@ async function braid_fetch (url, params = {}) {
             () => underlying_aborter.abort()
         )
 
-    var waitTime = 1
+    var retry_count = 0
     var res = null
     var subscription_cb = null
     var subscription_error = null
@@ -272,9 +272,12 @@ async function braid_fetch (url, params = {}) {
 
                 if (retry && !original_signal?.aborted) {
                     // retry after some time..
-                    console.log(`retrying in ${waitTime}s: ${url} after error: ${e}`)
-                    setTimeout(connect, waitTime * 1000)
-                    waitTime = Math.min(waitTime + 1, 3)
+                    var delay_ms = typeof braid_fetch.reconnect_delay_ms === 'function'
+                        ? braid_fetch.reconnect_delay_ms(retry_count)
+                        : braid_fetch.reconnect_delay_ms ?? Math.min(retry_count + 1, 3) * 1000
+                    console.log(`retrying in ${delay_ms}ms: ${url} after error: ${e}`)
+                    setTimeout(connect, delay_ms)
+                    retry_count++
                 } else {
                     // if we would have retried except that original_signal?.aborted,
                     // then we want to return that as the error..
@@ -470,7 +473,7 @@ async function braid_fetch (url, params = {}) {
                 if (subscription_cb && res.ok) start_subscription(subscription_cb, subscription_error)
 
                 params?.retry?.onRes?.(res)
-                waitTime = 1
+                retry_count = 0
 
                 // parse version if it exists
                 var version_header = res.headers.get('version') || res.headers.get('current-version')
