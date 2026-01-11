@@ -2291,6 +2291,23 @@ runTest(
 addSectionHeader("Read Tests")
 
 runTest(
+    "Subscribe with empty Subscribe header value",
+    async () => {
+        let a = new AbortController()
+        // Use og_fetch with empty Subscribe header to test server accepts it
+        let res = await og_fetch('/json', {
+            signal: a.signal,
+            headers: { 'Subscribe': '' }
+        })
+        // If server accepts empty subscribe header, we should get 209 status
+        let status = res.status
+        a.abort()
+        return `status: ${status}`
+    },
+    'status: 209'
+)
+
+runTest(
     "Subscribe and receive multiple updates, using promise chaining",
     async () => {
         let updates = []

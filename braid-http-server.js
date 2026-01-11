@@ -240,7 +240,7 @@ function braidify (req, res, next) {
 
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
-    if (subscribe === 'true')
+    if (subscribe === '' || subscribe === 'true')
         subscribe = true
 
     // Define convenience variables
