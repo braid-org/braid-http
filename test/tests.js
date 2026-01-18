@@ -2308,6 +2308,29 @@ runTest(
 )
 
 runTest(
+    "Subscribe returns 209 with statusText 'Multiresponse' (HTTP/1.x only)",
+    async () => {
+        let a = new AbortController()
+        let res = await og_fetch('/json', {
+            signal: a.signal,
+            headers: { 'Subscribe': 'true' }
+        })
+        let status = res.status
+        let statusText = res.statusText
+        a.abort()
+        // HTTP/2 doesn't support status messages - statusText is always empty
+        // HTTP/1.x without explicit statusMessage returns 'unknown' for 209
+        // HTTP/1.x with our statusMessage returns 'Multiresponse'
+        if (status !== 209)
+            return `unexpected status: ${status}`
+        if (statusText === '' || statusText === 'Multiresponse')
+            return 'ok'
+        return `unexpected statusText: ${statusText}`
+    },
+    'ok'
+)
+
+runTest(
     "Subscribe and receive multiple updates, using promise chaining",
     async () => {
         let updates = []

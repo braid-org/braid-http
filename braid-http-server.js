@@ -519,6 +519,7 @@ function braidify (req, res, next) {
 
             // We have a subscription!
             res.statusCode = 209
+            res.statusMessage = 'Multiresponse'
             res.setHeader("subscribe", req.headers.subscribe ?? 'true')
             res.setHeader('cache-control', 'no-cache, no-transform, no-store')
 
