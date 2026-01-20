@@ -229,6 +229,9 @@ function braidify (req, res, next) {
 
     // console.log('\n## Braidifying', req.method, req.url, req.headers.peer)
 
+    // Prevent uncaught EPIPE crashes on client disconnect
+    res.on('error', (_e) => {})
+
     // First, declare that we support Patches and JSON ranges.
     res.setHeader('Range-Request-Allow-Methods', 'PATCH, PUT')
     res.setHeader('Range-Request-Allow-Units', 'json')
@@ -283,12 +286,15 @@ function braidify (req, res, next) {
 
             braidify.multiplexers.set(multiplexer, {requests: new Map(), res})
 
-            // when the response closes,
-            // let everyone know the multiplexer has died
-            res.on('close', () => {
-                for (var f of braidify.multiplexers.get(multiplexer).requests.values()) f()
+            // Clean up multiplexer on error or close
+            function cleanup() {
+                var m = braidify.multiplexers.get(multiplexer)
+                if (!m) return
+                for (var f of m.requests.values()) f()
                 braidify.multiplexers.delete(multiplexer)
-            })
+            }
+            res.on('error', cleanup)
+            res.on('close', cleanup)
 
             // keep the connection open,
             // so people can send multiplexed data to it
