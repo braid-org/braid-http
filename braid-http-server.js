@@ -470,7 +470,7 @@ function braidify (req, res, next) {
                 // empirically, on an http1 server,
                 // these cause res2 to close prematurely
                 || key === 'destroyed'
-                // || key === '_closed'   // Remove for now. Might have broke stuff.
+                || key === '_closed'
 
                 // adding these lines gets rid of some deprecation warnings.. keep?
                 || key === '_headers'
