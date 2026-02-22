@@ -468,8 +468,9 @@ function braidify (req, res, next) {
                 key === '_events' || key === 'emit'
 
                 // empirically, on an http1 server,
-                // this causes res2 to close prematurely
+                // these cause res2 to close prematurely
                 || key === 'destroyed'
+                || key === '_closed'
 
                 // adding these lines gets rid of some deprecation warnings.. keep?
                 || key === '_headers'
