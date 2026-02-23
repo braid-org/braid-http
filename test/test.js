@@ -742,7 +742,12 @@ async function runConsoleTests() {
         }
 
         try {
-            const result = await testFunction()
+            const timeout_ms = 30000
+            const result = await Promise.race([
+                testFunction(),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error(`Test timed out after ${timeout_ms/1000}s`)), timeout_ms))
+            ])
             if (result == expectedResult) {
                 passedTests++
                 console.log(`✓ ${testName}`)
