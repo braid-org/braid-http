@@ -432,6 +432,7 @@ function braidify (req, res, next) {
             }
         }
         var mw = new MultiplexedWritable(m, request)
+        mw.on('error', () => {})  // EPIPE when client disconnects mid-stream
 
         // then we create a fake server response,
         // that pipes data to our fake socket
