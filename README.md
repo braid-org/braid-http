@@ -110,6 +110,29 @@ fetch('https://braid.org/chat', {subscribe: true, retry: true, parents: () => {
 )
 ```
 
+You can monitor the subscription's connection status with `onSubscriptionStatus`:
+
+```javascript
+fetch('https://braid.org/chat', {
+    subscribe: true,
+    retry: true,
+    onSubscriptionStatus: ({online, error, status, statusText}) => {
+        if (online)
+            console.log('Connected!')
+        else
+            console.log('Disconnected:', error)
+    }
+}).then(
+    res => res.subscribe(
+        (update) => { console.log('Got update!', update) }
+    )
+)
+```
+
+The callback receives an object with only the fields relevant to the event:
+- `{online: true}` — the subscription is connected
+- `{online: false, error}` — the subscription went offline, with the error/reason for disconnection
+
 ### Example Subscription with Async/Await
 
 ```javascript

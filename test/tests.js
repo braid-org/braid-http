@@ -3506,6 +3506,283 @@ my patch`
     'my patch'
 )
 
+addSectionHeader("onSubscriptionStatus Tests")
+
+runTest(
+    "onSubscriptionStatus not called on initial connection",
+    async () => {
+        var a = new AbortController()
+        var events = []
+        var res = await fetch('/json', {
+            subscribe: true,
+            multiplex: false,
+            signal: a.signal,
+            onSubscriptionStatus: (s) => events.push(s)
+        })
+        await new Promise(done => {
+            res.subscribe(() => setTimeout(done, 100))
+        })
+        a.abort()
+        return `events=${events.length}`
+    },
+    'events=0'
+)
+
+runTest(
+    "onSubscriptionStatus fires online:true on reconnect",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var first_event = null
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                if (!first_event) {
+                    first_event = s
+                    waiter?.()
+                }
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => done(`online=${first_event.online}`)
+            if (first_event) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out'), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'online=true'
+)
+
+runTest(
+    "onSubscriptionStatus online:true has no extra fields",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var first_event = null
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                if (!first_event) {
+                    first_event = s
+                    waiter?.()
+                }
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => done(JSON.stringify(first_event))
+            if (first_event) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out'), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    '{"online":true}'
+)
+
+runTest(
+    "onSubscriptionStatus lifecycle: true, false, true",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var events = []
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                events.push(s.online)
+                if (events.length >= 3) waiter?.()
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => done(events.slice(0, 3).join(', '))
+            if (events.length >= 3) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out: ' + events.join(', ')), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'true, false, true'
+)
+
+runTest(
+    "onSubscriptionStatus offline event has error, no status",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var offline_event = null
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                if (!s.online && !offline_event) {
+                    offline_event = s
+                    waiter?.()
+                }
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => {
+                var has_error = offline_event.error !== undefined
+                var no_status = offline_event.status === undefined
+                done(`has_error=${has_error}, no_status=${no_status}`)
+            }
+            if (offline_event) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out'), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'has_error=true, no_status=true'
+)
+
+runTest(
+    "onSubscriptionStatus offline error is descriptive",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var offline_event = null
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                if (!s.online && !offline_event) {
+                    offline_event = s
+                    waiter?.()
+                }
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => done('' + offline_event.error)
+            if (offline_event) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out'), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'Connection closed'
+)
+
+runTest(
+    "onSubscriptionStatus cycles through 5 transitions",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var events = []
+        var waiter = null
+        var res = await fetch('/json', {
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            headers: { giveup: true },
+            onSubscriptionStatus: (s) => {
+                events.push(s.online)
+                if (events.length >= 5) waiter?.()
+            }
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => done(events.slice(0, 5).join(', '))
+            if (events.length >= 5) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out: ' + events.join(', ')), 10000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'true, false, true, false, true'
+)
+
+runTest(
+    "onSubscriptionStatus offline from parse error has descriptive error",
+    async () => {
+        braid_fetch.reconnect_delay_ms = 150
+        var a = new AbortController()
+        var test_id = Math.random().toString(36).slice(2)
+        var events = []
+        var waiter = null
+        var res = await fetch('/eval', {
+            method: 'POST',
+            subscribe: true,
+            retry: true,
+            multiplex: false,
+            signal: a.signal,
+            onSubscriptionStatus: (s) => {
+                events.push(s)
+                if (!s.online && events.length >= 2) waiter?.()
+            },
+            body: `
+                global._oss_${test_id} = (global._oss_${test_id} || 0) + 1
+                var n = global._oss_${test_id}
+                res.startSubscription()
+                res.sendUpdate({version: ['v' + n], body: 'hi'})
+                if (n === 1) setTimeout(() => res.end(), 200)
+                else if (n === 2) setTimeout(() => res.write('bad_header_no_colon\\r\\n\\r\\n'), 200)
+            `
+        })
+        var result = await new Promise((done, fail) => {
+            waiter = () => {
+                var online_first = events[0].online
+                var offline_second = !events[1].online
+                var is_parse_error = ('' + events[1].error).includes('Parse error')
+                done(`${online_first}, ${offline_second}, ${is_parse_error}`)
+            }
+            if (events.length >= 2 && !events[1].online) waiter()
+            res.subscribe(() => {}, () => {})
+            setTimeout(() => done('timed out: ' + JSON.stringify(events.map(e => ({online: e.online, error: '' + e.error})))), 5000)
+        })
+        a.abort()
+        delete braid_fetch.reconnect_delay_ms
+        return result
+    },
+    'true, true, true'
+)
+
+runTest(
+    "onSubscriptionStatus not called without subscribe",
+    async () => {
+        var events = []
+        await fetch('/json', {
+            onSubscriptionStatus: (s) => events.push(s)
+        })
+        return `events=${events.length}`
+    },
+    'events=0'
+)
+
 }
 
 // Export for both Node.js and browser

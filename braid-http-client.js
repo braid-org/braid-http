@@ -231,6 +231,7 @@ async function braid_fetch (url, params = {}) {
         )
 
     var retry_count = 0
+    var subscription_online = false
     var res = null
     var subscription_cb = null
     var subscription_error = null
@@ -264,6 +265,12 @@ async function braid_fetch (url, params = {}) {
                 // The fetch is probably down already, but there are some other errors that could have happened,
                 // and in those cases, we want to make sure to close the fetch
                 underlying_aborter?.abort()
+
+                // Notify subscription went offline
+                if (params.onSubscriptionStatus && subscription_online) {
+                    subscription_online = false
+                    params.onSubscriptionStatus({online: false, error: e})
+                }
 
                 // see if we should retry..
                 var retry = params.retry &&    // only try to reconnect if the user has chosen to
@@ -466,11 +473,20 @@ async function braid_fetch (url, params = {}) {
                             give_up = false
                     }
                     if (give_up) {
+                        if (params.onSubscriptionStatus && subscription_online) {
+                            subscription_online = false
+                            params.onSubscriptionStatus({online: false, error: new Error(`giving up because of http status: ${res.status}`)})
+                        }
                         if (subscription_cb) subscription_error?.(new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`))
                     } else if (!res.ok) throw new Error(`status not ok: ${res.status}`)
                 }
 
                 if (subscription_cb && res.ok) start_subscription(subscription_cb, subscription_error)
+
+                if (subscription_cb && res.ok && params.onSubscriptionStatus) {
+                    subscription_online = true
+                    params.onSubscriptionStatus({online: true})
+                }
 
                 params?.retry?.onRes?.(res)
                 retry_count = 0
