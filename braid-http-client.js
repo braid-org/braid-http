@@ -1046,6 +1046,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
     async function try_deleting_request(request) {
         if (!try_deleting.has(request)) {
+            // If the multiplexer is already known to be dead, skip the DELETE
+            if (mux_error) return
             try_deleting.add(request)
             try {
                 var mux_was_done = await promise_done(mux_created_promise)
@@ -1084,7 +1086,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
     var mux_created_promise = (async () => {
         // attempt to establish a multiplexed connection
         try {
-            if (mux_params?.via === 'POST') throw 'skip multiplex method'
+            if (mux_params?.via === 'POST'
+                || multiplex_fetch.post_only?.has(origin)) throw 'skip multiplex method'
             var r = await braid_fetch(`${origin}/${multiplexer}`, {
                 signal: mux_aborter.signal,
                 method: 'MULTIPLEX',
@@ -1101,7 +1104,9 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 throw 'bad'
         } catch (e) {
             // some servers don't like custom methods,
-            // so let's try with a well-known url
+            // so let's try with a well-known url;
+            // remember this so we skip MULTIPLEX next time
+            ;(multiplex_fetch.post_only ||= new Set()).add(origin)
             try {
                 r = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`,
                                         {method: 'POST',
@@ -1173,6 +1178,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         var buffers = []
         var bytes_available = () => {}
         var request_error = null
+        var established = false
 
         // this utility calls the callback whenever new data is available to process
         async function process_buffers(cb) {
@@ -1203,7 +1209,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             if (!requests.size) not_used_timeout = setTimeout(() => mux_aborter.abort(), mux_params?.not_used_timeout ?? 1000 * 20)
             request_error = e
             bytes_available()
-            if (e !== 'retry') await try_deleting_request(request)
+            if (e !== 'retry' && established) await try_deleting_request(request).catch(e => {})
         }
 
         // do the underlying fetch
@@ -1262,6 +1268,10 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                                     + ', got unknown version: '
                                     + res.headers.get('Multiplex-Version'),
                                     { dont_retry: true })
+
+            // The server acknowledged this request — mark it so we
+            // know to send a DELETE if we need to tear it down later
+            established = true
 
             // we want to present the illusion that the connection is still open,
             // and therefor closable with "abort",
