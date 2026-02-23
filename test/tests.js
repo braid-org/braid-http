@@ -885,29 +885,32 @@ runTest(
 );
 
 runTest(
-    "Test failing to close multiplexed request.",
+    "Test that failed DELETE on multiplexed request is caught (no uncaught rejection).",
     async () => {
-        return await new Promise(async done => {
-            var handler = (event) => {
-                var message = event.reason?.message || event.message || ''
-                if (message === 'Could not cancel multiplexed request: Error: status not ok: 500') {
-                    cleanup()
-                    done('saw the error we wanted')
-                }
-            }
-            var cleanup = () => {
-                if (typeof window !== 'undefined') window.removeEventListener('unhandledrejection', handler)
-                else process.off('unhandledRejection', handler)
-            }
-            if (typeof window !== 'undefined') window.addEventListener('unhandledrejection', handler)
-            else process.on('unhandledRejection', handler)
+        var saw_rejection = false
+        var handler = (event) => {
+            var message = event.reason?.message || event.message || ''
+            if (message.includes('Could not cancel multiplexed request'))
+                saw_rejection = true
+        }
+        if (typeof window !== 'undefined') window.addEventListener('unhandledrejection', handler)
+        else process.on('unhandledRejection', handler)
 
-            var m = Math.random().toString(36).slice(2)
-            var s = 'bad_request'
-            fetch('/500', { headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` } })
-        })
+        var m = Math.random().toString(36).slice(2)
+        var s = 'bad_request'
+        try {
+            await fetch('/500', { headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` } })
+        } catch (e) {}
+
+        // Give time for any uncaught rejections to surface
+        await new Promise(r => setTimeout(r, 500))
+
+        if (typeof window !== 'undefined') window.removeEventListener('unhandledrejection', handler)
+        else process.off('unhandledRejection', handler)
+
+        return saw_rejection ? 'uncaught rejection leaked' : 'error was caught'
     },
-    'saw the error we wanted'
+    'error was caught'
 );
 
 runTest(

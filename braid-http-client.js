@@ -1223,6 +1223,11 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
             var res = await normal_fetch(url, params)
 
+            // The server received our request — if we need to tear it
+            // down later, send a DELETE. (Skip for network errors, where
+            // normal_fetch throws and we never reach here.)
+            established = true
+
             if (res.status === 409) {
                 var e = await res.json()
                 if (e.error === 'Request already multiplexed') {
@@ -1268,10 +1273,6 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                                     + ', got unknown version: '
                                     + res.headers.get('Multiplex-Version'),
                                     { dont_retry: true })
-
-            // The server acknowledged this request — mark it so we
-            // know to send a DELETE if we need to tear it down later
-            established = true
 
             // we want to present the illusion that the connection is still open,
             // and therefor closable with "abort",
