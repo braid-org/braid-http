@@ -1086,7 +1086,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
     var mux_created_promise = (async () => {
         // attempt to establish a multiplexed connection
         try {
-            if (mux_params?.via === 'POST'
+            // Disable MULTIPLEX method for now — go straight to POST
+            if (true || mux_params?.via === 'POST'
                 || multiplex_fetch.post_only?.has(origin)) throw 'skip multiplex method'
             var r = await braid_fetch(`${origin}/${multiplexer}`, {
                 signal: mux_aborter.signal,
@@ -1137,7 +1138,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         // and send messages to the appropriate requests
         parse_multiplex_stream(r.body.getReader(), async (request, bytes) => {
             if (requests.has(request)) requests.get(request)(bytes)
-            else try_deleting_request(request)
+            else try_deleting_request(request).catch(e => {})
         }, e => cleanup_multiplexer(e))
     })()
 
