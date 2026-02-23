@@ -1,9 +1,10 @@
 {
   "name": "braid-http",
-  "version": "1.3.94",
+  "version": "1.3.95",
   "description": "An implementation of Braid-HTTP for Node.js and Browsers",
   "scripts": {
-    "test": "node test/server.js"
+    "test": "node test/test.js",
+    "test:browser": "node test/test.js --browser"
   },
   "author": "Braid Working Group",
   "repository": "braid-org/braid-http",

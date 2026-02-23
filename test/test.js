@@ -798,11 +798,17 @@ async function runBrowserMode() {
     console.log(`Test server running on https://localhost:${port}`)
     console.log(`Express middleware test server running on port ${port + 1}`)
     console.log(`Wrapper function test server running on port ${port + 2}`)
-    console.log(`\nOpen https://localhost:${port}/ in your browser to run tests`)
-    if (filterArg) {
-        console.log(`Filter: ${filterArg}`)
-        console.log(`URL with filter: https://localhost:${port}/?filter=${encodeURIComponent(filterArg)}`)
-    }
+    var url = filterArg
+        ? `https://localhost:${port}/?filter=${encodeURIComponent(filterArg)}`
+        : `https://localhost:${port}/`
+    console.log(`\nOpening ${url} in your browser...`)
+    if (filterArg) console.log(`Filter: ${filterArg}`)
+
+    // Auto-open browser
+    var {exec} = require('child_process')
+    var cmd = process.platform === 'darwin' ? 'open'
+        : process.platform === 'win32' ? 'start' : 'xdg-open'
+    exec(`${cmd} "${url}"`)
 }
 
 // ============================================================================

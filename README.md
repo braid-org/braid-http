@@ -385,45 +385,23 @@ var braidify = require('braid-http').http-server
 nbraidify.enable_multiplex = true   // or false
 ```
 
-## Test Procedure
+## Testing
 
-Run tests from the command line:
-
-```
-node test/test.js
-```
-
-Or run tests in a browser by starting the test server:
+Run all tests from the command line:
 
 ```
-node test/test.js --browser
+npm test
 ```
 
-Then open https://localhost:9000 and make sure all the boxes turn green.
+Run tests in a browser (auto-opens):
+
+```
+npm run test:browser
+```
 
 You can also filter tests by name:
 
 ```
 node test/test.js --filter="version"
 ```
-
-For the complete browser test (including demos), use 3 terminals. In the first terminal start the demo chat server:
-
-```
-cd demos/chat
-node server.js
-```
-
-In the second terminal start the demo blog server:
-```
-cd demos/blog
-node server.js
-```
-
-And in the third terminal, start the test server:
-```
-node test/test.js --browser
-```
-
-Now open https://localhost:9000, make sure all the boxes turn green, and try out the demo chat and blog, sending a message in each.
 

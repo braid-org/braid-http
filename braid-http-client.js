@@ -483,7 +483,7 @@ async function braid_fetch (url, params = {}) {
 
                 if (subscription_cb && res.ok) start_subscription(subscription_cb, subscription_error)
 
-                if (subscription_cb && res.ok && params.onSubscriptionStatus) {
+                if (params.subscribe && params.onSubscriptionStatus && res.ok) {
                     subscription_online = true
                     params.onSubscriptionStatus({online: true})
                 }

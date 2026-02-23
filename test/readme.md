@@ -1,17 +1,29 @@
-# To Test Braid-HTTP
+# Testing Braid-HTTP
 
-Run the server with:
-
-```
-node server.js
-```
-
-### Test the server alone
-
-Run this at your command-line:
+Run all tests from the command line:
 
 ```
-$ curl -v -H Subscribe:true http://localhost:9000/json
+npm test
+```
+
+Run tests in a browser (auto-opens):
+
+```
+npm run test:browser
+```
+
+Filter tests by name:
+
+```
+node test/test.js --filter="version"
+```
+
+### Test the server by hand
+
+Start the browser test server with `npm run test:browser`, then curl a subscription:
+
+```
+$ curl -vk -H Subscribe:true https://localhost:9000/json
 ```
 
 You should see this:
@@ -24,7 +36,7 @@ You should see this:
 > User-Agent: curl/7.79.1
 > Accept: */*
 > Subscribe:true
-> 
+>
 * Mark bundle as not supporting multiuse
 < HTTP/1.1 209 unknown
 < Range-Request-Allow-Methods: PATCH, PUT
@@ -37,63 +49,18 @@ You should see this:
 < Connection: keep-alive
 < Keep-Alive: timeout=5
 < Transfer-Encoding: chunked
-< 
+<
 Version: "test"
 Parents: "oldie"
 Content-Length: 16
 
 {"this":"stuff"}
-
-Version: "test1"
-Parents: "oldie", "goodie"
-hash: 42
-:status: 115
-Content-Length: 1
-Content-Range: json [1]
-
-1
-
-Version: "test2"
-Content-Length: 1
-Content-Range: json [2]
-
-2
-
-Version: "test3"
-Patches: 2
-
-Content-Length: 1
-Content-Range: json [3]
-hash: 43
-
-3
-
-Content-Length: 1
-Content-Range: json [4]
-
-4
-
-Version: "another!"
-Content-Length: 3
-
-"!"
-
 ```
 ...and the connection should stay open until you hit `C-c`.
 
-
-### Test the client against the server
-
-Open a browser to:
-```
-http://localhost:9000/
-```
-
-The page will run a series of GET+subscribe and PUT tests, each of which will turn green if it succeed, and red if it failed.
-
 ### Debugging Advice
 
-If a test fails, it will show some expected output, and what it got instead; plug these into https://glittle.org/diff to see what's wrong.
+If a test fails, it will show expected vs actual output; plug these into https://glittle.org/diff to see what's wrong.
 
 You can capture a request in unix with `nc -l 9000 > test-request.txt` to listen to
 port 9000 while your browser initiates a request, and then capture a response

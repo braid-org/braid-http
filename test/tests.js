@@ -3509,7 +3509,7 @@ my patch`
 addSectionHeader("onSubscriptionStatus Tests")
 
 runTest(
-    "onSubscriptionStatus not called on initial connection",
+    "onSubscriptionStatus fires online:true on initial connection",
     async () => {
         var a = new AbortController()
         var events = []
@@ -3523,9 +3523,9 @@ runTest(
             res.subscribe(() => setTimeout(done, 100))
         })
         a.abort()
-        return `events=${events.length}`
+        return `events=${events.length},online=${events[0]?.online}`
     },
-    'events=0'
+    'events=1,online=true'
 )
 
 runTest(
@@ -3742,7 +3742,7 @@ runTest(
             signal: a.signal,
             onSubscriptionStatus: (s) => {
                 events.push(s)
-                if (!s.online && events.length >= 2) waiter?.()
+                if (!s.online && events.filter(e => !e.online).length >= 2) waiter?.()
             },
             body: `
                 global._oss_${test_id} = (global._oss_${test_id} || 0) + 1
@@ -3755,12 +3755,13 @@ runTest(
         })
         var result = await new Promise((done, fail) => {
             waiter = () => {
+                var offline_events = events.filter(e => !e.online)
                 var online_first = events[0].online
-                var offline_second = !events[1].online
-                var is_parse_error = ('' + events[1].error).includes('Parse error')
-                done(`${online_first}, ${offline_second}, ${is_parse_error}`)
+                var has_two_offline = offline_events.length >= 2
+                var is_parse_error = ('' + offline_events[1].error).includes('Parse error')
+                done(`${online_first}, ${has_two_offline}, ${is_parse_error}`)
             }
-            if (events.length >= 2 && !events[1].online) waiter()
+            if (events.filter(e => !e.online).length >= 2) waiter()
             res.subscribe(() => {}, () => {})
             setTimeout(() => done('timed out: ' + JSON.stringify(events.map(e => ({online: e.online, error: '' + e.error})))), 5000)
         })
