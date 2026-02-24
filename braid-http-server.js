@@ -395,6 +395,9 @@ function braidify (req, res, next) {
         // find the multiplexer object (contains a response object)
         var m = braidify.multiplexers?.get(multiplexer)
         if (!m) {
+            // free cors to multiplexer errors
+            free_cors(res)
+            
             req.is_multiplexer = res.is_multiplexer = true
             res.writeHead(424, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
             return res.end(`multiplexer ${multiplexer} does not exist`)
@@ -402,6 +405,9 @@ function braidify (req, res, next) {
 
         // if this request-id already exists, respond with an error
         if (m.requests.has(request)) {
+            // free cors to multiplexer errors
+            free_cors(res)
+
             req.is_multiplexer = res.is_multiplexer = true
             res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
             return res.end(JSON.stringify({
