@@ -289,8 +289,15 @@ function braidify (req, res, next) {
 
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
-    if (subscribe === '' || subscribe === 'true')
-        subscribe = true
+    // If the subscribe header exists...
+    if ((subscribe === '' || subscribe)
+        // And this is a GET, because `Subscribe:` is only
+        // specified for GET thus far...
+        && req.method === 'GET')
+        // Then let's set 'subscribe' on.  We default to "true", but if the
+        // client actually specified a value other than empty string '', let's
+        // use that rich value.
+        subscribe = subscribe || true
 
     // Define convenience variables
     req.version   = version
