@@ -220,12 +220,58 @@ function parse_content_range (range_string) {
     return [unit, range]
 }
 
+
+// Guard against double-braidification.
+//
+// Libraries (like braid-text &braid-blob) call braidify on the same
+// request/response.  We can't let it run twice on the same request.  That can
+// cause e.g. duplicate multiplexer request-id errors (409).
+var braidify_version = require('./package.json').version
+var warned_about_braidify_dupe = false
+function warn_braidify_dupe (req) {
+    function version_bigger (a, b) {
+        var pa = a.split('.').map(Number)
+        var pb = b.split('.').map(Number)
+        for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+            if ((pa[i] || 0) > (pb[i] || 0)) return true
+            if ((pa[i] || 0) < (pb[i] || 0)) return false
+        }
+        return false
+    }
+
+    if (!warned_about_braidify_dupe) {
+        var installed = req._braidified
+        var major_mismatch = installed.split('.')[0] !== braidify_version.split('.')[0]
+        var dominated = version_bigger(braidify_version, installed)
+
+        if (major_mismatch || dominated)
+            console.warn('braid-http: braidify already applied (v' + installed
+                         + '), skipping v' + braidify_version
+                         + (major_mismatch
+                            ? ' — major version mismatch, things may break'
+                            : ' — installed version is older, may lack features'))
+
+        warned_about_braidify_dupe = true
+    }
+}
+
+
+// The main server function!
 function braidify (req, res, next) {
     if (typeof req === 'function') {
         var handler = req
         return (req, res, next) =>
             braidify(req, res, () => handler(req, res, next))
     }
+
+
+    // Guard against double-braidification.
+    if (req._braidified) {
+        warn_braidify_dupe(req)
+        return next?.()
+    }
+
+    req._braidified = braidify_version
 
     // console.log('\n## Braidifying', req.method, req.url, req.headers.peer)
 
