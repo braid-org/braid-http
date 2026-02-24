@@ -376,6 +376,14 @@ braid_fetch('/example', {multiplex: false, subscription: true})
 braid_fetch('/example', {multiplex: {after: 1}, subscription: true})
 ```
 
+Note that this library implements [optimistic multiplexing](https://braid.org/protocol/multiplexing#optimistic-creation), which is faster, but can print this harmless error message to your JS console:
+
+```
+GET /foo 424 (Multiplexer no exist; consider trying again)
+```
+
+You can ignore this message.
+
 ### Server
 
 Configure mutliplexing with:

@@ -406,7 +406,7 @@ function braidify (req, res, next) {
             free_cors(res)
             
             req.is_multiplexer = res.is_multiplexer = true
-            res.writeHead(424, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
+            res.writeHead(424, 'Multiplexer no exist; cosnsider trying again', {'Bad-Multiplexer': multiplexer})
             return res.end(`multiplexer ${multiplexer} does not exist`)
         }
 
