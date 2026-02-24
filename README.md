@@ -385,27 +385,6 @@ var braidify = require('braid-http').http-server
 nbraidify.enable_multiplex = true   // or false
 ```
 
-### How CORS works with Multiplexing
-
-When multiplexing is enabled, the library presents the illusion that
-everything is normal HTTP.  Behind the scenes, a request/response pair is
-made to `.well-known/multiplexer/<id>` to establish the multiplexer
-channel — CORS is opened on this request.  However, this request is hidden
-from client code (it happens inside `braid_fetch`) and the response is
-hidden from server code (it happens inside `braidify`).
-
-One might worry that a cross-origin GET without proper CORS could trick the
-server into piping its response through the multiplexer channel — and since
-CORS is opened on the multiplexer channel, the client could read data it
-shouldn't have access to.  This doesn't happen, because the browser sends a
-preflight OPTIONS request before the actual GET.  If the server doesn't
-return the proper CORS headers for that OPTIONS request, the browser never
-sends the GET, and no data flows through the multiplexer channel.
-
-Multiplexer error responses (e.g. 424 "Multiplexer no exist" or 409
-"Request already multiplexed") also include CORS headers, so that browsers
-can read the error details from cross-origin requests.
-
 ## Testing
 
 Run all tests from the command line:
