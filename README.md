@@ -402,6 +402,10 @@ preflight OPTIONS request before the actual GET.  If the server doesn't
 return the proper CORS headers for that OPTIONS request, the browser never
 sends the GET, and no data flows through the multiplexer channel.
 
+Multiplexer error responses (e.g. 424 "Multiplexer no exist" or 409
+"Request already multiplexed") also include CORS headers, so that browsers
+can read the error details from cross-origin requests.
+
 ## Testing
 
 Run all tests from the command line:
