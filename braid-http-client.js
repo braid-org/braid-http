@@ -1143,7 +1143,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
     })()
 
     // return a "fetch" for this multiplexer
-    return async (url, params, mux_params, attempt) => {
+    var f = async (url, params, mux_params, attempt) => {
 
         // if we already know the multiplexer is not working,
         // then fallback to normal fetch
@@ -1349,6 +1349,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             throw (e === 'retry' && e) || mux_error || e
         }
     }
+    f.cleanup = () => cleanup_multiplexer(new Error('manual cleanup'))
+    return f
 }
 
 // waits on reader for chunks like: 123 bytes for request ABC\r\n..123 bytes..

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Multiplex Buffering Stress Test</title>
+<style>
+body { font-family: monospace; margin: 2em; }
+h1 { font-size: 1.4em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #ccc; padding: 0.4em 1em; text-align: right; }
+th { background: #f0f0f0; }
+td.best { color: #070; font-weight: bold; }
+td.worst { color: #c00; }
+#progress { margin: 1em 0; color: #336; font-style: italic; }
+#log { white-space: pre; font-size: 0.8em; max-height: 30vh; overflow-y: auto;
+       border: 1px solid #ccc; padding: 0.5em; margin-top: 1em; background: #fafafa; }
+button { font-family: monospace; font-size: 1em; padding: 0.3em 1em;
+         margin-right: 0.5em; cursor: pointer; }
+label { margin-right: 1em; }
+</style>
+</head>
+<body>
+<h1>Multiplex Buffering Stress Test</h1>
+<p>Tests multiple <code>multiplex_wait</code> values to find the optimal buffering timeout.<br>
+Each trial forces a fresh multiplexer, reproducing the POST-vs-GET race condition.</p>
+
+<div>
+  <label>Wait values (ms): <input type="text" id="wait_input" value="1, 2, 4, 8" style="width:20em"></label>
+  <label>Trials per value: <input type="number" id="trials_input" value="50" min="5" max="1000" style="width:5em"></label>
+  <button onclick="run_all()">Run Test</button>
+  <button onclick="should_stop=true">Stop</button>
+</div>
+
+<div id="results"></div>
+<canvas id="timeline" width="900" height="250" style="border:1px solid #ccc; margin:1em 0; display:none"></canvas>
+<div id="progress"></div>
+<div id="log"></div>
+
+<script src="/braid-http-client.js"></script>
+<script>
+var should_stop = false
+var results_el = document.getElementById('results')
+var progress_el = document.getElementById('progress')
+var log_el = document.getElementById('log')
+
+// Timeout values to test (ms)
+function get_wait_values() {
+    return document.getElementById('wait_input').value
+        .split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
+}
+
+function log(msg) {
+    log_el.textContent += msg + '\n'
+    log_el.scrollTop = log_el.scrollHeight
+}
+
+async function server_fetch(path) {
+    var r = await fetch(path)
+    return await r.json()
+}
+
+async function run_trial() {
+    // Force fresh multiplexer by properly closing old ones
+    if (multiplex_fetch.multiplexers) {
+        for (var key of Object.keys(multiplex_fetch.multiplexers))
+            try { (await multiplex_fetch.multiplexers[key]).cleanup() } catch(e) {}
+        multiplex_fetch.multiplexers = {}
+    }
+
+    var t0 = performance.now()
+    var a = new AbortController()
+    var r = await braid_fetch('/test', {
+        signal: a.signal,
+        subscribe: true,
+        retry: false
+    })
+
+    // Wait for one update
+    await new Promise((resolve, reject) => {
+        r.subscribe(
+            update => resolve(update),
+            err => reject(err)
+        )
+        setTimeout(() => reject(new Error('timeout')), 10000)
+    })
+
+    a.abort()
+    return performance.now() - t0
+}
+
+function render_table(rows) {
+    if (!rows.length) return
+
+    // Find best values for highlighting
+    var min_424 = Math.min(...rows.map(r => r.rate_424))
+    var min_lat = Math.min(...rows.map(r => r.avg_latency))
+
+    var html = '<table>'
+    html += '<tr><th>multiplex_wait</th><th>424 rate</th><th>avg latency</th>'
+    html += '<th>p50 latency</th><th>p95 latency</th><th>trials</th></tr>'
+
+    for (var r of rows) {
+        var rate_cls = r.rate_424 === min_424 ? 'best' : (r.rate_424 > 10 ? 'worst' : '')
+        var lat_cls = r.avg_latency === min_lat ? 'best' : ''
+
+        html += '<tr>'
+        html += `<td>${r.wait}ms</td>`
+        html += `<td class="${rate_cls}">${r.rate_424.toFixed(1)}%</td>`
+        html += `<td class="${lat_cls}">${r.avg_latency.toFixed(0)}ms</td>`
+        html += `<td>${r.p50.toFixed(0)}ms</td>`
+        html += `<td>${r.p95.toFixed(0)}ms</td>`
+        html += `<td>${r.trials}</td>`
+        html += '</tr>'
+    }
+
+    html += '</table>'
+    results_el.innerHTML = html
+}
+
+var timeline_data = []   // {trial_index, wait, latency, had_424}
+
+function render_timeline(wait_values) {
+    var canvas = document.getElementById('timeline')
+    if (!timeline_data.length) { canvas.style.display = 'none'; return }
+    canvas.style.display = 'block'
+
+    var ctx = canvas.getContext('2d')
+    var W = canvas.width, H = canvas.height
+    var pad = { top: 20, right: 20, bottom: 30, left: 50 }
+    var pw = W - pad.left - pad.right
+    var ph = H - pad.top - pad.bottom
+
+    ctx.clearRect(0, 0, W, H)
+
+    // Compute scales
+    var max_lat = Math.max(...timeline_data.map(d => d.latency)) * 1.1
+    var n = timeline_data.length
+
+    // Colors per wait value
+    var hues = {}
+    wait_values.forEach((w, i) => hues[w] = `hsl(${(i * 360 / wait_values.length) | 0}, 70%, 50%)`)
+
+    // Draw axes
+    ctx.strokeStyle = '#999'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(pad.left, pad.top)
+    ctx.lineTo(pad.left, H - pad.bottom)
+    ctx.lineTo(W - pad.right, H - pad.bottom)
+    ctx.stroke()
+
+    // Y axis labels
+    ctx.fillStyle = '#666'
+    ctx.font = '10px monospace'
+    ctx.textAlign = 'right'
+    for (var ms = 0; ms <= max_lat; ms += Math.pow(10, Math.floor(Math.log10(max_lat || 1)))) {
+        var y = H - pad.bottom - (ms / max_lat) * ph
+        ctx.fillText(ms.toFixed(0) + 'ms', pad.left - 4, y + 3)
+        ctx.strokeStyle = '#eee'
+        ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke()
+    }
+
+    // X axis label
+    ctx.fillStyle = '#666'
+    ctx.textAlign = 'center'
+    ctx.fillText('trial #', W / 2, H - 4)
+
+    // Plot dots
+    for (var d of timeline_data) {
+        var x = pad.left + (d.trial_index / Math.max(1, n - 1)) * pw
+        var y = H - pad.bottom - (d.latency / max_lat) * ph
+        var r = 3
+
+        ctx.beginPath()
+        ctx.arc(x, y, r, 0, Math.PI * 2)
+        ctx.fillStyle = hues[d.wait] || '#999'
+        ctx.fill()
+
+        // Mark 424s with a red ring
+        if (d.had_424) {
+            ctx.beginPath()
+            ctx.arc(x, y, r + 2, 0, Math.PI * 2)
+            ctx.strokeStyle = '#c00'
+            ctx.lineWidth = 2
+            ctx.stroke()
+        }
+    }
+
+    // Legend
+    ctx.textAlign = 'left'
+    var lx = pad.left + 8
+    wait_values.forEach((w, i) => {
+        var ly = pad.top + 12 + i * 14
+        ctx.beginPath()
+        ctx.arc(lx, ly - 3, 3, 0, Math.PI * 2)
+        ctx.fillStyle = hues[w]
+        ctx.fill()
+        ctx.fillStyle = '#333'
+        ctx.font = '10px monospace'
+        ctx.fillText(w + 'ms', lx + 8, ly)
+    })
+    // 424 marker in legend
+    var ly = pad.top + 12 + wait_values.length * 14
+    ctx.beginPath()
+    ctx.arc(lx, ly - 3, 5, 0, Math.PI * 2)
+    ctx.strokeStyle = '#c00'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.fillStyle = '#333'
+    ctx.fillText('= 424', lx + 8, ly)
+}
+
+function percentile(arr, p) {
+    if (!arr.length) return 0
+    var sorted = arr.slice().sort((a, b) => a - b)
+    var i = Math.ceil(p / 100 * sorted.length) - 1
+    return sorted[Math.max(0, i)]
+}
+
+async function run_all() {
+    should_stop = false
+    var n = parseInt(document.getElementById('trials_input').value) || 50
+    var rows = []
+
+    braid_fetch.enable_multiplex = true
+    log_el.textContent = ''
+    timeline_data = []
+    log('Starting test: ' + n + ' trials per wait value\n')
+
+    var wait_values = get_wait_values()
+
+    // Build a schedule that interleaves wait values randomly
+    // so wifi quality changes don't correlate with specific values
+    var schedule = []
+    for (var i = 0; i < n; i++)
+        for (var w of wait_values)
+            schedule.push(w)
+    for (var i = schedule.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1))
+        var tmp = schedule[i]; schedule[i] = schedule[j]; schedule[j] = tmp
+    }
+
+    // Set up per-value tracking
+    var by_wait = {}
+    for (var w of wait_values) {
+        by_wait[w] = { latencies: [], server_424s: 0, server_total: 0 }
+        rows.push({
+            wait: w, rate_424: 0, avg_latency: 0,
+            p50: 0, p95: 0, trials: 0, server_424s: 0, server_total: 0
+        })
+    }
+
+    var total_trials = schedule.length
+    for (var si = 0; si < total_trials && !should_stop; si++) {
+        var wait = schedule[si]
+        var d = by_wait[wait]
+
+        await server_fetch('/config?wait=' + wait)
+        await server_fetch('/reset')
+
+        progress_el.textContent =
+            `trial ${si + 1}/${total_trials} — multiplex_wait = ${wait}ms`
+
+        var ok = false
+        for (var retry = 0; retry < 5 && !ok && !should_stop; retry++) {
+            try {
+                d.latencies.push(await run_trial())
+                ok = true
+            } catch (e) {
+                if (e.name !== 'AbortError')
+                    log('  error: ' + e.message + (retry < 4 ? ' (retrying)' : ''))
+                await server_fetch('/reset')
+            }
+        }
+
+        // Get server stats for this trial
+        var server_stats = await server_fetch('/stats')
+        var had_424 = server_stats.count_424 > 0
+        d.server_424s += server_stats.count_424
+        d.server_total += server_stats.total_mux_requests
+
+        // Record for timeline
+        if (d.latencies.length)
+            timeline_data.push({
+                trial_index: si,
+                wait: wait,
+                latency: d.latencies[d.latencies.length - 1],
+                had_424: had_424
+            })
+
+        // Update the row for this wait value
+        var row = rows[wait_values.indexOf(wait)]
+        row.server_424s = d.server_424s
+        row.server_total = d.server_total
+        row.rate_424 = d.server_total
+            ? 100 * d.server_424s / d.server_total : 0
+        row.trials = d.latencies.length
+        if (d.latencies.length) {
+            row.avg_latency = d.latencies.reduce((a, b) => a + b, 0) / d.latencies.length
+            row.p50 = percentile(d.latencies, 50)
+            row.p95 = percentile(d.latencies, 95)
+        }
+        render_table(rows)
+        render_timeline(wait_values)
+    }
+
+    // Log final summary for each wait value
+    for (var row of rows) {
+        log(`multiplex_wait = ${row.wait}ms:`)
+        log(`  424s: ${row.server_424s}/${row.server_total} (${row.rate_424.toFixed(1)}%)`)
+        log(`  latency: avg=${row.avg_latency.toFixed(0)}ms  p50=${row.p50.toFixed(0)}ms  p95=${row.p95.toFixed(0)}ms`)
+        log('')
+    }
+
+    progress_el.textContent = should_stop ? 'Stopped.' : 'Done.'
+
+    // Restore default
+    await server_fetch('/config?wait=10')
+}
+</script>
+</body>
+</html>

@@ -1059,6 +1059,161 @@ runTest(
 waitForTests(() => {})
 
 runTest(
+    "Test multiplex_wait suppresses 424 when POST arrives within window.",
+    async () => {
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+
+        // Send Multiplex-Through GET before multiplexer exists.
+        // Express server has next(), so multiplex_wait kicks in.
+        var get_promise = og_fetch(`https://localhost:${port+1}/middleware-test`, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+
+        // Short delay, then create the multiplexer
+        await new Promise(done => setTimeout(done, 5))
+        var post_r = await og_fetch(`https://localhost:${port+1}/.well-known/multiplexer/${m}`, {
+            method: 'POST',
+            headers: { 'Multiplex-Version': multiplex_version }
+        })
+
+        // GET should resolve with 293 (multiplexed), not 424
+        var r = await get_promise
+        return `get_status=${r.status}, post_ok=${post_r.ok}`
+    },
+    'get_status=293, post_ok=true'
+)
+
+runTest(
+    "Test multiplex_wait times out to 424 when POST never arrives.",
+    async () => {
+        // Set a short wait so the test doesn't take long
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 30; res.end('ok')`
+        })
+
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+
+        // Send Multiplex-Through GET for a multiplexer that never gets created
+        var r = await og_fetch(`https://localhost:${port+1}/middleware-test`, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+
+        // Restore default
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 10; res.end('ok')`
+        })
+
+        return `status=${r.status}, header=${r.headers.get('bad-multiplexer') === m}`
+    },
+    'status=424, header=true'
+)
+
+runTest(
+    "Test multiplex_wait=0 disables waiting (immediate 424).",
+    async () => {
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 0; res.end('ok')`
+        })
+
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var st = Date.now()
+
+        var r = await og_fetch(`https://localhost:${port+1}/middleware-test`, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+
+        var elapsed = Date.now() - st
+
+        // Restore default
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 10; res.end('ok')`
+        })
+
+        return `status=${r.status}, fast=${elapsed < 50}`
+    },
+    'status=424, fast=true'
+)
+
+runTest(
+    "Test multiple requests waiting for same multiplexer via multiplex_wait.",
+    async () => {
+        var m = Math.random().toString(36).slice(2)
+        var s1 = Math.random().toString(36).slice(2)
+        var s2 = Math.random().toString(36).slice(2)
+
+        // Send two Multiplex-Through GETs before multiplexer exists
+        var get1 = og_fetch(`https://localhost:${port+1}/middleware-test`, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s1}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+        var get2 = og_fetch(`https://localhost:${port+1}/middleware-test`, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+
+        // Short delay, then create the multiplexer
+        await new Promise(done => setTimeout(done, 5))
+        await og_fetch(`https://localhost:${port+1}/.well-known/multiplexer/${m}`, {
+            method: 'POST',
+            headers: { 'Multiplex-Version': multiplex_version }
+        })
+
+        var [r1, r2] = await Promise.all([get1, get2])
+        return `r1=${r1.status}, r2=${r2.status}`
+    },
+    'r1=293, r2=293'
+)
+
+runTest(
+    "Test multiplex_wait has no effect without next (main server).",
+    async () => {
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var st = Date.now()
+
+        // Main server calls braidify(req, res) without next,
+        // so multiplex_wait should not apply — immediate 424
+        var r = await og_fetch('/json', {
+            headers: {
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+
+        var elapsed = Date.now() - st
+        return `status=${r.status}, fast=${elapsed < 50}`
+    },
+    'status=424, fast=true'
+)
+
+waitForTests(() => {})
+
+runTest(
     "Test client asking for multiplexing, but server doesn't realize it.",
     async () => {
         await fetch('/eval', {

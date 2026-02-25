@@ -255,6 +255,39 @@ function warn_braidify_dupe (req) {
     }
 }
 
+// Like setTimeout, but can be aborted in a batch (via batch_id) and calls
+// on_abort on each timeout when aborted, instead of on_timeout.
+function abortable_set_timeout(batch_id, on_timeout, on_abort, timeout_ms) {
+    if (!braidify.pending_timeouts)
+        braidify.pending_timeouts = new Map()
+
+    var timers = braidify.pending_timeouts.get(batch_id)
+    if (!timers) {
+        timers = new Set()
+        braidify.pending_timeouts.set(batch_id, timers)
+    }
+
+    var timer = { on_abort: on_abort }
+    timer.timeout = setTimeout(function() {
+        timers.delete(timer)
+        if (!timers.size)
+            braidify.pending_timeouts.delete(batch_id)
+        on_timeout()
+    }, timeout_ms)
+
+    timers.add(timer)
+}
+// Aborts an abortable_timeout created above.
+function abort_timeouts(batch_id) {
+    var timers = braidify.pending_timeouts?.get(batch_id)
+    if (!timers) return
+    braidify.pending_timeouts.delete(batch_id)
+    for (var t of timers) {
+        clearTimeout(t.timeout)
+        t.on_abort()
+    }
+}
+
 
 // The main server function!
 function braidify (req, res, next) {
@@ -266,10 +299,16 @@ function braidify (req, res, next) {
 
 
     // Guard against double-braidification.
-    if (req._braidified) {
+    if (req._braidified && !req.reprocess_me) {
+        // If this was already braidified, then print a warning
         warn_braidify_dupe(req)
+        // and stop braidifying it any further
         return next?.()
     }
+    // But some potential 424 responses get delayed and reprocessed.
+    // So let's clear the reprocess_me flag on those, since we're doing it.
+    delete req.reprocess_me
+
 
     req._braidified = braidify_version
 
@@ -321,30 +360,30 @@ function braidify (req, res, next) {
         }
 
         // parse the multiplexer id and request id from the url
-        var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
+        var [multiplexer_id, request_id] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
 
         // if there's just a multiplexer, then we're creating a multiplexer..
-        if (!request) {
+        if (!request_id) {
             // maintain a Map of all the multiplexers
             if (!braidify.multiplexers) braidify.multiplexers = new Map()
 
             // if this multiplexer already exists, respond with an error
-            if (braidify.multiplexers.has(multiplexer)) {
+            if (braidify.multiplexers.has(multiplexer_id)) {
                 res.writeHead(409, 'Conflict', {'Content-Type': 'application/json'})
                 return res.end(JSON.stringify({
                     error: 'Multiplexer already exists',
-                    details: `Cannot create duplicate multiplexer with ID '${multiplexer}'`
+                    details: `Cannot create duplicate multiplexer with ID '${multiplexer_id}'`
                 }))
             }
 
-            braidify.multiplexers.set(multiplexer, {requests: new Map(), res})
+            braidify.multiplexers.set(multiplexer_id, {requests: new Map(), res})
 
             // Clean up multiplexer on error or close
             function cleanup() {
-                var m = braidify.multiplexers.get(multiplexer)
-                if (!m) return
-                for (var f of m.requests.values()) f()
-                braidify.multiplexers.delete(multiplexer)
+                var multiplexer = braidify.multiplexers.get(multiplexer_id)
+                if (!multiplexer) return
+                for (var f of multiplexer.requests.values()) f()
+                braidify.multiplexers.delete(multiplexer_id)
             }
             res.on('error', cleanup)
             res.on('close', cleanup)
@@ -361,27 +400,33 @@ function braidify (req, res, next) {
 
             // but write something.. won't interfere with multiplexer,
             // and helps flush the headers
-            return res.write(`\r\n`)
+            res.write(`\r\n`)
+
+            // Notify any requests that arrived before this multiplexer
+            // was created. Must happen after writeHead so the POST's
+            // response is ready before waiters write through it.
+            abort_timeouts(multiplexer_id)
+            return
         } else {
             // in this case, we're closing the given request
 
             // if the multiplexer doesn't exist, send an error
-            var m = braidify.multiplexers?.get(multiplexer)
-            if (!m) {
-                res.writeHead(404, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer})
-                return res.end(`multiplexer ${multiplexer} does not exist`)
+            var multiplexer = braidify.multiplexers?.get(multiplexer_id)
+            if (!multiplexer) {
+                res.writeHead(404, 'Multiplexer no exist', {'Bad-Multiplexer': multiplexer_id})
+                return res.end(`multiplexer ${multiplexer_id} does not exist`)
             }
 
             // if the request doesn't exist, send an error
-            let s = m.requests.get(request)
-            if (!s) {
-                res.writeHead(404, 'Multiplexed request not found', {'Bad-Request': request})
-                return res.end(`request ${request} does not exist`)
+            let request_finisher = multiplexer.requests.get(request_id)
+            if (!request_finisher) {
+                res.writeHead(404, 'Multiplexed request not found', {'Bad-Request': request_id})
+                return res.end(`request ${request_id} does not exist`)
             }
 
             // remove this request, and notify it
-            m.requests.delete(request)
-            s()
+            multiplexer.requests.delete(request_id)
+            request_finisher()
 
             // let the requester know we succeeded
             res.writeHead(200, 'OK', { 'Multiplex-Version': multiplex_version })
@@ -397,21 +442,44 @@ function braidify (req, res, next) {
         req.headers['multiplex-version'] === multiplex_version) {
 
         // parse the multiplexer id and request id from the header
-        var [multiplexer, request] = req.headers['multiplex-through'].split('/').slice(3)
+        var [multiplexer_id, request_id] = req.headers['multiplex-through'].split('/').slice(3)
 
         // find the multiplexer object (contains a response object)
-        var m = braidify.multiplexers?.get(multiplexer)
-        if (!m) {
-            // free cors to multiplexer errors
+        var multiplexer = braidify.multiplexers?.get(multiplexer_id)
+        if (!multiplexer) {
+            if (braidify.multiplex_wait && next) {
+                // Wait for the multiplexer to be created.
+                // Handles the race where Multiplex-Through arrives
+                // before the POST that creates the multiplexer.
+                abortable_set_timeout(multiplexer_id,
+                    function give_up () {
+                        // Timed out — send 424
+                        free_cors(res)
+                        req.is_multiplexer = res.is_multiplexer = true
+                        res.writeHead(424, 'Multiplexer not found',
+                                      {'Bad-Multiplexer': multiplexer_id})
+                        res.end('multiplexer ' + multiplexer_id
+                                + ' does not exist')
+                    },
+                    function ready_for_mux () {
+                        // Multiplexer appeared — re-process the request
+                        req.reprocess_me = true
+                        braidify(req, res, next)
+                    },
+                    braidify.multiplex_wait)
+                return
+            }
+
             free_cors(res)
-            
             req.is_multiplexer = res.is_multiplexer = true
-            res.writeHead(424, 'Multiplexer no exist; cosnsider trying again', {'Bad-Multiplexer': multiplexer})
-            return res.end(`multiplexer ${multiplexer} does not exist`)
+            res.writeHead(424, 'Multiplexer not found',
+                          {'Bad-Multiplexer': multiplexer_id})
+            return res.end('multiplexer ' + multiplexer_id
+                           + ' does not exist')
         }
 
         // if this request-id already exists, respond with an error
-        if (m.requests.has(request)) {
+        if (multiplexer.requests.has(request_id)) {
             // free cors to multiplexer errors
             free_cors(res)
 
@@ -420,13 +488,13 @@ function braidify (req, res, next) {
             return res.end(JSON.stringify({
                 error: 'Request already multiplexed',
                 details: `Cannot multiplex request with duplicate ID '`
-                         + request + `' for multiplexer '` + multiplexer + `'`
+                         + request_id + `' for multiplexer '` + multiplexer_id + `'`
             }))
         }
 
-        m.res.write(`start response ${request}\r\n`)
+        multiplexer.res.write(`start response ${request_id}\r\n`)
 
-        // let the requester know we've multiplexed their response
+        // let the requester know we've multiplexed his response
         var og_stream = res.stream
         var og_socket = res.socket
         var og_res_end = () => {
@@ -472,10 +540,10 @@ function braidify (req, res, next) {
 
         // first we create a kind of fake socket
         class MultiplexedWritable extends require('stream').Writable {
-            constructor(multiplexer, request) {
+            constructor(multiplexer, request_id) {
                 super()
                 this.multiplexer = multiplexer
-                this.request = request
+                this.request_id = request_id
             }
 
             _write(chunk, encoding, callback) {
@@ -483,14 +551,14 @@ function braidify (req, res, next) {
 
                 try {
                     var len = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding)
-                    this.multiplexer.res.write(`${len} bytes for response ${this.request}\r\n`)
+                    this.multiplexer.res.write(`${len} bytes for response ${this.request_id}\r\n`)
                     this.multiplexer.res.write(chunk, encoding, callback)
                 } catch (e) {
                     callback(e)
                 }
             }
         }
-        var mw = new MultiplexedWritable(m, request)
+        var mw = new MultiplexedWritable(multiplexer, request_id)
         mw.on('error', () => {})  // EPIPE when client disconnects mid-stream
 
         // then we create a fake server response,
@@ -501,14 +569,14 @@ function braidify (req, res, next) {
 
         // register a handler for when the multiplexer closes,
         // to close our fake response
-        m.requests.set(request, () => {
+        multiplexer.requests.set(request_id, () => {
             og_res_end?.()
             res2.destroy()
         })
 
         // when our fake response is done,
         // we want to send a special message to the multiplexer saying so
-        res2.on('finish', () => m.res.write(`close response ${request}\r\n`))
+        res2.on('finish', () => multiplexer.res.write(`close response ${request_id}\r\n`))
 
         // copy over any headers which have already been set on res to res2
         for (let x of Object.entries(res.getHeaders()))
@@ -551,7 +619,7 @@ function braidify (req, res, next) {
         }
 
         // this is provided so code can know if the response has been multiplexed
-        res.multiplexer = m.res
+        res.multiplexer = multiplexer.res
     }
 
     // Add the braidly request/response helper methods
@@ -802,6 +870,8 @@ function free_cors(res) {
     res.setHeader("Access-Control-Allow-Headers", "*")
     res.setHeader("Access-Control-Expose-Headers", "*")
 }
+
+braidify.multiplex_wait = 10  // ms; set to 0 or false to disable
 
 module.exports = {
     braidify,

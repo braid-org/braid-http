@@ -210,7 +210,9 @@ require('http').createServer(
 ).listen(9935)
 ```
 
-You can also use `braidify` within a request handler like this:
+If you are working from a library, or from code that does not have access to
+the root of the HTTP handler or `next` in `(req, res, next)`, you can also
+call `braidify` inline:
 
 ```javascript
 require('http').createServer(
@@ -223,8 +225,9 @@ require('http').createServer(
 ).listen(9935)
 ```
 
-The `is_multiplexer` test in this form is only necessary if multiplexing is
-enabled.
+This works, but the inline form [leaks the multiplexing
+abstraction](#inline-braidifyreq-res-leaks-the-abstraction) in three minor
+ways.
 
 ### Example Nodejs server with Express
 
@@ -337,62 +340,6 @@ fetch('https://localhost:3009/chat',
       )
 ```
 
-## Configuring Multiplexing
-
-You shouldn't need to, but can, configure which requests the library will
-[multiplex](https://braid.org/protocol/multiplexing).  You can configure
-multiplexing on both the client and the server.  They both need multiplexing
-enabled for it to happen.
-
-### Client
-
-A client can globally disable multiplexing on `braid_fetch()` with:
-
-```javascript
-braid_fetch.enable_multiplex = false
-```
-
-It can enable multiplexing for all GET requests with:
-
-```javascript
-braid_fetch.enable_multiplex = true
-```
-
-It can also set it to multiplex after `N` connections to an origin with:
-
-```javascript
-braid_fetch.enable_multiplex = {after: N}
-```
-
-The default value is `{after: 1}`.
-
-A client can override this global setting per-request by passing the same
-value into `braid_fetch(url, {multiplex: <value>})`, such as with:
-
-```javascript
-braid_fetch('/example', {multiplex: true, subscription: true})
-braid_fetch('/example', {multiplex: false, subscription: true})
-// or
-braid_fetch('/example', {multiplex: {after: 1}, subscription: true})
-```
-
-Note that this library implements [optimistic multiplexing](https://braid.org/protocol/multiplexing#optimistic-creation), which is faster, but can print this harmless error message to your JS console:
-
-```
-GET /foo 424 (Multiplexer no exist; consider trying again)
-```
-
-You can ignore this message.
-
-### Server
-
-Configure mutliplexing with:
-
-```javascript
-var braidify = require('braid-http').http-server
-nbraidify.enable_multiplex = true   // or false
-```
-
 ## Testing
 
 Run all tests from the command line:
@@ -411,5 +358,93 @@ You can also filter tests by name:
 
 ```
 node test/test.js --filter="version"
+```
+
+## Multiplexing
+
+This library automatically
+[multiplexes](https://braid.org/protocol/multiplexing) subscriptions behind
+the scenes to overcome web browsers' 6-connection limit (with HTTP/1) and
+100-connection limit (with HTTP/2).  When you setup a server's `braidify` in
+the recommended ways, you don't need to know it's happening — the abstraction
+is completely transparent.
+
+```
+// Recommendation #1: Wrapping the entire request handler
+require('http').createServer(
+  braidify((req, res) => {
+    ...
+  })
+)
+```
+
+```
+// Recommendation #2: As middleware
+var app = require('express')()
+app.use(braidify)
+```
+
+```
+// Recommendation #3: With braidify(req, res, next)
+// (Equivalent to the middleware form.)
+   ...
+   braidify(req, res, next)
+   ...
+```
+
+
+### Inline `braidify(req, res)` leaks the abstraction
+
+If you are using braidify from within a library, or in another context without
+access to the entire request handler, or a `next()` method, then you can use
+the inline form:
+
+```
+  (req, res) => {
+      ...
+      braidify(req, res); if (req.is_multiplexer) return
+      ...
+  })
+```
+
+Just know that there are three abstraction leaks when using this form:
+
+1. You must add `if (req.is_multiplexer) return` after
+   the `braidify(req, res)` call.
+2. The library will disable the [buffering
+   optimization](https://braid.org/protocol/multiplexing#buffering-optimization)
+   on optimistic multiplexer creation.  This buffering prevents two minor
+   inconveniences that occur on about ~15% of page loads:
+   1. One round trip of additional latency on the first subscription to a host
+   2. A harmless `424` error in the javascript console, which can be safely
+      ignored:
+     ![424 error in browser console](https://braid.org/files/424-error.png)
+
+The buffering works like this: when the client connects to a new host, it
+sends a POST to create the multiplexer and GETs to subscribe — all in
+parallel.  Sometimes a GET arrives before the POST.  With the recommended
+forms, the server briefly buffers the GET (70ms, event-driven) until the
+POST lands, then processes it normally.  Without `next`, the server can't
+re-run the handler, so it returns 424 immediately and the client retries.
+
+### Configuring multiplexing
+
+You can tune multiplexing on the client, per-request or globally:
+
+```javascript
+braid_fetch('/a', {multiplex: true})      // force on for this request
+braid_fetch('/a', {multiplex: false})     // force off for this request
+
+braid_fetch.enable_multiplex = true       // on for all GETs
+braid_fetch.enable_multiplex = false      // off globally
+braid_fetch.enable_multiplex = {after: 1} // on after N connections (default)
+```
+
+And on the server:
+
+```javascript
+braidify.enable_multiplex = true    // default; set false to disable
+braidify.multiplex_wait = 10        // ms; timeout for the buffering optimization (default 10)
+                                    // set to 0 to disable buffering
 ```
 
