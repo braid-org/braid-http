@@ -24,7 +24,7 @@ label { margin-right: 1em; }
 Each trial forces a fresh multiplexer, reproducing the POST-vs-GET race condition.</p>
 
 <div>
-  <label>Wait values (ms): <input type="text" id="wait_input" value="1, 2, 4, 8" style="width:20em"></label>
+  <label>Wait values (ms): <input type="text" id="wait_input" value="0, 1, 2, 4, 8" style="width:20em"></label>
   <label>Trials per value: <input type="number" id="trials_input" value="50" min="5" max="1000" style="width:5em"></label>
   <button onclick="run_all()">Run Test</button>
   <button onclick="should_stop=true">Stop</button>
