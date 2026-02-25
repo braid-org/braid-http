@@ -387,9 +387,13 @@ app.use(braidify)
 ```
 // Recommendation #3: With braidify(req, res, next)
 // (Equivalent to the middleware form.)
-   ...
-   braidify(req, res, next)
-   ...
+require('http').createServer(
+  (req, res) => {
+    ...
+    braidify(req, res, next)
+    ...
+  }
+)
 ```
 
 
@@ -397,14 +401,16 @@ app.use(braidify)
 
 If you are using braidify from within a library, or in another context without
 access to the entire request handler, or a `next()` method, then you can use
-the inline form:
+the inline `braidify(req, res)` form:
 
 ```
+require('http').createServer(
   (req, res) => {
-      ...
-      braidify(req, res); if (req.is_multiplexer) return
-      ...
-  })
+    ...
+    braidify(req, res); if (req.is_multiplexer) return
+    ...
+  }
+)
 ```
 
 Just know that there are three abstraction leaks when using this form:
