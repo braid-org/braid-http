@@ -387,8 +387,8 @@ app.use(braidify)
 ```
 // Recommendation #3: With braidify(req, res, next)
 // (Equivalent to the middleware form.)
-require('http').createServer(
-  (req, res) => {
+app.use(
+  (req, res, next) => {
     ...
     braidify(req, res, next)
     ...
