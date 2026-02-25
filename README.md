@@ -165,7 +165,7 @@ for await (var update of subscription_iterator) {
 
 You can braidify your nodejs server with:
 
-```
+```javascript
 var braidify = require('braid-http').http_server
 ```
 
@@ -344,19 +344,19 @@ fetch('https://localhost:3009/chat',
 
 Run all tests from the command line:
 
-```
+```bash
 npm test
 ```
 
 Run tests in a browser (auto-opens):
 
-```
+```bash
 npm run test:browser
 ```
 
 You can also filter tests by name:
 
-```
+```bash
 node test/test.js --filter="version"
 ```
 
@@ -369,7 +369,7 @@ the scenes to overcome web browsers' 6-connection limit (with HTTP/1) and
 the recommended ways, you don't need to know it's happening — the abstraction
 is completely transparent.
 
-```
+```javascript
 // Recommendation #1: Wrapping the entire request handler
 require('http').createServer(
   braidify((req, res) => {
@@ -378,13 +378,13 @@ require('http').createServer(
 )
 ```
 
-```
+```javascript
 // Recommendation #2: As middleware
 var app = require('express')()
 app.use(braidify)
 ```
 
-```
+```javascript
 // Recommendation #3: With braidify(req, res, next)
 // (Equivalent to the middleware form.)
 app.use(
@@ -403,7 +403,7 @@ If you are using braidify from within a library, or in another context without
 access to the entire request handler, or a `next()` method, then you can use
 the inline `braidify(req, res)` form:
 
-```
+```javascript
 require('http').createServer(
   (req, res) => {
     ...
