@@ -21,7 +21,7 @@ label { margin-right: 1em; }
 <body>
 <h1>Multiplex Buffering Stress Test</h1>
 <p>Tests multiple <code>multiplex_wait</code> values to find the optimal buffering timeout.<br>
-Each trial forces a fresh multiplexer, reproducing the POST-vs-GET race condition.</p>
+Each trial forces a fresh multiplexer, reproducing a POST-vs-GET race, and evaluates whether the buffer prevents the need for a 424.</p>
 
 <div>
   <label>Wait values (ms): <input type="text" id="wait_input" value="0, 1, 2, 4, 8" style="width:20em"></label>

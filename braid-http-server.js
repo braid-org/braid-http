@@ -649,8 +649,18 @@ function braidify (req, res, next) {
             res.isSubscription = true
 
             // Let's disable the timeouts (if it exists)
-            if (req.socket.server)
+            if (req.socket.server) {
                 req.socket.server.timeout = 0.0
+
+                // Node 18+ added requestTimeout (default 300s) and
+                // headersTimeout (default 60s) which will kill idle
+                // long-lived connections — our bread and butter.  We disable
+                // the requestTimeout, but the headersTimeout is probably
+                // fine.
+                //
+                req.socket.server.requestTimeout = 0
+                // req.socket.server.headersTimeout = 0
+            }
 
             // We have a subscription!
             res.statusCode = 209
@@ -753,12 +763,12 @@ async function send_update(res, data, url, peer) {
     // Validate the body and patches
     assert(!(patch && patches),
            'sendUpdate: cannot have both `update.patch` and `update.patches` set')
-    if (patch)
-        patches = [patch]
     assert(!(body && patches),
            'sendUpdate: cannot have both `update.body` and `update.patch(es)')
     assert(!patches || Array.isArray(patches),
            'sendUpdate: `patches` provided is not array')
+    if (patch)
+        patches = patch
 
     // Validate body format
     if (body !== undefined) {
