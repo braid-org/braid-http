@@ -82,57 +82,6 @@ fetch('https://braid.org/chat', {subscribe: true}).then(
 )
 ```
 
-If you want automatic reconnections, this library add a `{retry: true}` option to `fetch()`.
-
-```javascript
-fetch('https://braid.org/chat', {subscribe: true, retry: true}).then(
-    res => res.subscribe(
-        (update) => {
-            console.log('We got a new update!', update)
-            // Do something with the update
-        }
-    )
-)
-```
-
-For use in conjunction with `{retry: true}`, it's possible to make the `parents` param equal to a function, which will be called to get the current parents each time the fetch establishes a new connection.
-
-```javascript
-fetch('https://braid.org/chat', {subscribe: true, retry: true, parents: () => {
-        return current_parents
-    }}).then(
-    res => res.subscribe(
-        (update) => {
-            console.log('We got a new update!', update)
-            // Do something with the update
-        }
-    )
-)
-```
-
-You can monitor the subscription's connection status with `onSubscriptionStatus`:
-
-```javascript
-fetch('https://braid.org/chat', {
-    subscribe: true,
-    retry: true,
-    onSubscriptionStatus: ({online, error, status, statusText}) => {
-        if (online)
-            console.log('Connected!')
-        else
-            console.log('Disconnected:', error)
-    }
-}).then(
-    res => res.subscribe(
-        (update) => { console.log('Got update!', update) }
-    )
-)
-```
-
-The callback receives an object with only the fields relevant to the event:
-- `{online: true}` — the subscription is connected
-- `{online: false, error}` — the subscription went offline, with the error/reason for disconnection
-
 ### Example Subscription with Async/Await
 
 ```javascript
@@ -160,6 +109,73 @@ for await (var update of subscription_iterator) {
     render_stuff()
 }
 ```
+
+### Advanced client features
+
+#### Automatic reconection
+
+Pass a `{retry: true}` option to `fetch()` to automatically reconnect:
+
+```javascript
+fetch('https://braid.org/chat', {subscribe: true, retry: true}).then(
+    res => res.subscribe(
+        (update) => {
+            console.log('We got a new update!', update)
+            // Do something with the update
+        }
+    )
+)
+```
+
+
+To update the parent version that you reconnect from, set the `parents`
+paramter to a function rather than an array of strings:
+
+```javascript
+fetch('https://braid.org/chat', {
+    subscribe: true,
+    retry: true,
+    parents: () => current_parents
+}).then(
+    res => res.subscribe(
+        (update) => {
+            console.log('We got a new update!', update)
+            // Do something with the update
+        }
+    )
+)
+```
+
+It will call the `parents` function each time it reconnects to learn the
+current parents to connection from.
+
+#### Monitor the connection status
+
+The `onSubscriptionStatus(status)` callback informs you when the connection
+goes online and offline:
+
+```javascript
+fetch('https://braid.org/chat', {
+    subscribe: true,
+    retry: true,
+    onSubscriptionStatus: ({online, error, status, statusText}) => {
+        if (online)
+            console.log('Connected!')
+        else
+            console.log('Disconnected:', error)
+    }
+}).then(
+    res => res.subscribe(
+        (update) => { console.log('Got update!', update) }
+    )
+)
+```
+
+The callback receives an object with only the fields relevant to the event:
+- `{online: true}` — the subscription is connected
+- `{online: false, error}` — the subscription went offline, with the error/reason for disconnection
+
+
 
 ## Using it in Nodejs
 
