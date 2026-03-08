@@ -171,7 +171,7 @@ async function braid_fetch (url, params = {}) {
                            : params.heartbeats)
 
     // Prevent browsers from going to disk cache
-    params.cache = 'no-cache'
+    params.cache = 'no-store'
 
     // Prepare patches
     if (params.patches) {
