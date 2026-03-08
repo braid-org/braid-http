@@ -858,10 +858,15 @@ async function send_update(res, data, url, peer) {
     // See also https://github.com/braid-org/braid-spec/issues/73
     if (res.isSubscription) {
         var extra_newlines = 1
-        if (res.is_firefox)
-            // Work around Firefox network buffering bug
-            // See https://github.com/braid-org/braidjs/issues/15
-            extra_newlines = 240
+
+        // Note: this firefox workaround was replaced with a content-type fix
+        // above.  We realized that content-type fixes the issue when we found
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313
+        //
+        // if (res.is_firefox)
+        //     // Work around Firefox network buffering bug
+        //     // See https://github.com/braid-org/braidjs/issues/15
+        //     extra_newlines = 240
 
         for (var i = 0; i < 1 + extra_newlines; i++)
             res.write("\r\n")
