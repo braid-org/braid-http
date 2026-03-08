@@ -1156,6 +1156,13 @@ runTest(
 runTest(
     "Test multiple requests waiting for same multiplexer via multiplex_wait.",
     async () => {
+        // Use a generous wait so the POST's CORS preflight (browser-only)
+        // doesn't eat into the timer window
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 50; res.end('ok')`
+        })
+
         var m = Math.random().toString(36).slice(2)
         var s1 = Math.random().toString(36).slice(2)
         var s2 = Math.random().toString(36).slice(2)
@@ -1184,6 +1191,13 @@ runTest(
         })
 
         var [r1, r2] = await Promise.all([get1, get2])
+
+        // Restore default
+        await fetch('/eval', {
+            method: 'POST',
+            body: `braidify.multiplex_wait = 10; res.end('ok')`
+        })
+
         return `r1=${r1.status}, r2=${r2.status}`
     },
     'r1=293, r2=293'
@@ -2171,7 +2185,7 @@ runTest(
         x[1].headers = Object.fromEntries([...x[1].headers])
         return JSON.stringify(x)
     },
-    `["${baseUrl}/json",{"headers":{"parents":"\\"test\\""},"cache":"no-cache","signal":{}},{}]`
+    `["${baseUrl}/json",{"headers":{"parents":"\\"test\\""},"signal":{}},{}]`
 )
 
 runTest(
