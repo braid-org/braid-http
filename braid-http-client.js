@@ -311,9 +311,32 @@ async function braid_fetch (url, params = {}) {
                     if (parents) params.headers.set('parents', parents.map(JSON.stringify).join(', '))
                 }
 
-                // undocumented feature used by braid-chrome
-                // to see the fetch args as they are right before it is actually called,
-                // to display them for the user in the dev panel
+                // Work around Chrome bug where when you restore a closed tab,
+                // Chrome overrides our {cache:'no-store'} parameter and instead sets
+                // SKIP_CACHE_VALIDATION, which overrides our subscription response
+                // with ... a static entry from its cache!  That sucks.
+                //
+                // See https://issues.chromium.org/issues/490673934
+                //
+                // Our workaround is to detect if we are in chrome, and subscribing,
+                // and are within a page restoration... and then...
+                if (!is_nodejs && params.headers.has('subscribe')) {
+                    var nav_entry = performance?.getEntriesByType?.('navigation')?.[0]
+                    if (nav_entry?.type === 'back_forward'
+                        && document.readyState !== 'complete')
+
+                        // ...we just wait until the page has loaded to send this fetch
+                        await new Promise(r => window.addEventListener('load', r))
+
+                        // Because the SKIP_CACHE_VALIDATION policy in chrome goes away
+                        // as soon as the page loads.
+                }
+
+                // Braid-Chrome needs the following special (undocumented)
+                // `onFetch` feature.  It's a callback with the params as they
+                // are being sent to the underlying fetch().  The Braid
+                // devtools wants to be able to display these in its devtools
+                // panel.
                 params.onFetch?.(url, params, underlying_aborter)
 
                 // Now we run the original fetch....

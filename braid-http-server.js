@@ -332,11 +332,21 @@ function braidify (req, res, next) {
     if ((subscribe === '' || subscribe)
         // And this is a GET, because `Subscribe:` is only
         // specified for GET thus far...
-        && req.method === 'GET')
+        && req.method === 'GET') {
         // Then let's set 'subscribe' on.  We default to "true", but if the
         // client actually specified a value other than empty string '', let's
         // use that rich value.
         subscribe = subscribe || true
+
+        // Great. Now we also need to set the response body's content-type, so
+        // that FireFox doesn't try to sniff the content-type on a stream and
+        // hang forever waiting for 512 bytes (see firefox issue
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313)
+        res.setHeader('Content-Type', 'message/http-sequence')
+
+        // And we don't want any caches trying to store these stream bodies.
+        res.setHeader('Cache-Contro', 'no-store')
+    }
 
     // Define convenience variables
     req.version   = version
