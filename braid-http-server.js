@@ -345,7 +345,7 @@ function braidify (req, res, next) {
         res.setHeader('Content-Type', 'message/http-sequence')
 
         // And we don't want any caches trying to store these stream bodies.
-        res.setHeader('Cache-Contro', 'no-store')
+        res.setHeader('Cache-Control', 'no-store')
     }
 
     // Define convenience variables
