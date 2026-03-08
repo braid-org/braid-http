@@ -159,19 +159,20 @@ async function braid_fetch (url, params = {}) {
         params.headers.set('version', params.version.map(JSON.stringify).map(ascii_ify).join(', '))
     if (Array.isArray(params.parents))
         params.headers.set('parents', params.parents.map(JSON.stringify).map(ascii_ify).join(', '))
-    if (params.subscribe)
+    if (params.subscribe) {
         params.headers.set('subscribe', 'true')
+        // Prevent this response from being cached
+        params.cache = 'no-store'
+    }
+
     if (params.peer)
         params.headers.set('peer', params.peer)
-    
+
     if (params.heartbeats)
         params.headers.set('heartbeats',
                            typeof params.heartbeats === 'number'
                            ? `${params.heartbeats}s`
                            : params.heartbeats)
-
-    // Prevent browsers from going to disk cache
-    params.cache = 'no-store'
 
     // Prepare patches
     if (params.patches) {
