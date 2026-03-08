@@ -324,13 +324,18 @@ async function braid_fetch (url, params = {}) {
                 if (!is_nodejs && params.headers.has('subscribe')) {
                     var nav_entry = performance?.getEntriesByType?.('navigation')?.[0]
                     if (nav_entry?.type === 'back_forward'
-                        && document.readyState !== 'complete')
+                        && document.readyState !== 'complete') {
 
-                        // ...we just wait until the page has loaded to send this fetch
+                        // ...we wait until the page has loaded to send this fetch,
+                        // because Chrome's SKIP_CACHE_VALIDATION policy goes away
+                        // once the page loads.
+
                         await new Promise(r => window.addEventListener('load', r))
 
-                        // Because the SKIP_CACHE_VALIDATION policy in chrome goes away
-                        // as soon as the page loads.
+                        // In practice, waiting for 'load' alone isn't enough;
+                        // we also need this setTimeout(0) for it to work reliably.
+                        await new Promise(done => setTimeout(done, 0))
+                    }
                 }
 
                 // Braid-Chrome needs the following special (undocumented)
