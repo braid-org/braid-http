@@ -321,6 +321,11 @@ function braidify (req, res, next) {
     res.setHeader('Range-Request-Allow-Methods', 'PATCH, PUT')
     res.setHeader('Range-Request-Allow-Units', 'json')
 
+    // All requests explicitly Vary on Version, Parents, and Subscribe
+    res.appendHeader('Vary', 'Version')
+    res.appendHeader('Vary', 'Parents')
+    res.appendHeader('Vary', 'Subscribe')
+
     // Extract braid info from headers
     var version = ('version' in req.headers) && JSON.parse('['+req.headers.version+']'),
         parents = ('parents' in req.headers) && JSON.parse('['+req.headers.parents+']'),
