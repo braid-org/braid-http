@@ -1058,6 +1058,12 @@ runTest(
 
 waitForTests(() => {})
 
+// Note: The following multiplex_wait tests rely on tight timing (e.g. 5ms
+// delays, 50ms windows) and may fail intermittently in the browser due to
+// CORS preflight overhead changing who wins the race. If you see spurious
+// 293-vs-424 failures, re-run to confirm. We should investigate whether
+// these are real bugs or just flaky timing, and fix either way.
+
 runTest(
     "Test multiplex_wait suppresses 424 when POST arrives within window.",
     async () => {
