@@ -3956,6 +3956,54 @@ runTest(
     'events=0'
 )
 
+addSectionHeader("already_buffered_body Tests")
+
+runTest(
+    "already_buffered_body works for multiple patches",
+    async () => {
+        var r = await fetch('/json_prebuffered', {
+            method: 'PUT',
+            headers: {check_patch_content_text: true},
+            patches: [
+                {unit: 'text', range: '[0:0]', content: 'first'},
+                {unit: 'text', range: '[5:5]', content: 'second'}
+            ]
+        })
+        return await r.text()
+    },
+    'first\nsecond\n'
+)
+
+addSectionHeader("Content-Type: message/http-patches Tests")
+
+runTest(
+    "Multi-patch PUT sends Content-Type: message/http-patches",
+    async () => {
+        var r = await fetch('/json_echo_content_type', {
+            method: 'PUT',
+            patches: [
+                {unit: 'text', range: '[0:0]', content: 'a'},
+                {unit: 'text', range: '[1:1]', content: 'b'}
+            ]
+        })
+        return await r.text()
+    },
+    'message/http-patches'
+)
+
+runTest(
+    "Single-patch PUT does not send Content-Type: message/http-patches",
+    async () => {
+        var r = await fetch('/json_echo_content_type', {
+            method: 'PUT',
+            patches: {unit: 'text', range: '[0:0]', content: 'a'}
+        })
+        var ct = await r.text()
+        return '' + (ct !== 'message/http-patches')
+    },
+    'true'
+)
+
 }
 
 // Export for both Node.js and browser

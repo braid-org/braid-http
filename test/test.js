@@ -300,6 +300,36 @@ function createTestServer() {
             }
         }
 
+        // Simulate a framework that pre-buffers the request body
+        // (like Fastify or Express with body-parser)
+        if (req.url === '/json_prebuffered' && req.method === 'PUT') {
+            braidify(req, res)
+            // Read the stream into a buffer, then set already_buffered_body
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', async () => {
+                req.already_buffered_body = Buffer.concat(chunks)
+                if (req.headers.check_patch_content_text) {
+                    let update = await req.parseUpdate()
+                    for (let p of update.patches)
+                        res.write('' + p.content_text + '\n')
+                } else if (req.headers.check_body_text) {
+                    let update = await req.parseUpdate()
+                    res.write(update.body_text)
+                }
+                res.statusCode = 200
+                res.end()
+            })
+            return
+        }
+
+        // Echo back the content-type header the server received
+        if (req.url === '/json_echo_content_type' && req.method === 'PUT') {
+            res.statusCode = 200
+            res.end(req.headers['content-type'] || 'none')
+            return
+        }
+
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
             if (req.headers.check_patch_content_text) {

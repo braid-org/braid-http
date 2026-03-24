@@ -197,6 +197,7 @@ async function braid_fetch (url, params = {}) {
         // Multiple patches get sent within a Patches: N block
         else {
             params.headers.set('Patches', params.patches.length)
+            params.headers.set('Content-Type', 'message/http-patches')
             let bufs = []
             let te = new TextEncoder()
             for (let patch of params.patches) {
@@ -801,6 +802,12 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
             headers.patches = JSON.parse(headers.patches)
     }
 
+    // If we have Patches: N, verify that we have the right content-type set
+    if ('patches' in headers
+        && headers['content-type'] !== 'message/http-patches')
+        console.warn('braid-http: update with Patches: ' + headers.patches
+                     + ' is missing Content-Type: message/http-patches.  Has Content-Type: ' + JSON.stringify(headers['content-type']))
+
     // Update the input
     input = input.slice(end)
 
@@ -964,7 +971,7 @@ function extra_headers (headers) {
 
     // Remove the non-extra parts
     var known_headers = ['version', 'parents', 'patches',
-                         'content-length', 'content-range', ':status']
+                         'content-length', 'content-range', 'content-type', ':status']
     for (var i = 0; i < known_headers.length; i++)
         delete result[known_headers[i]]
 

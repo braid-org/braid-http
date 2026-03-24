@@ -38,8 +38,8 @@ function write_patches (res, patches) {
 
     // An array of one patch behaves like a single patch
     if (Array.isArray(patches)) {
-
-        // Add `Patches: N` header if array
+        // Add `Patches: N` and `Content-Type: message/http-patches' if array
+        res.write('Content-Type: message/http-patches\r\n')
         res.write(`Patches: ${patches.length}\r\n\r\n`)
     } else
         // Else, we'll out put a single patch
@@ -94,123 +94,128 @@ function parse_patches (req, cb) {
 
 // This function reads an update (either a set of patches, or a body) from a
 // ReadableStream and then fires a callback when finished.
+//
+// If req.already_buffered_body is set (Buffer, Uint8Array, or string), it
+// will be used instead of reading from the request stream. This supports
+// HTTP frameworks (like Fastify, Express with body-parser) that consume the
+// request body before the handler runs.
 function parse_update (req, cb) {
-    var num_patches = req.headers.patches
+    if (req.already_buffered_body != null) {
+        var buf = req.already_buffered_body
+        if (typeof buf === 'string') buf = new TextEncoder().encode(buf)
+        parse_update_from_bytes(new Uint8Array(buf), req.headers, cb)
+    } else {
+        var chunks = []
+        req.on('data', chunk => chunks.push(chunk))
+        req.on('end', () =>
+            parse_update_from_bytes(new Uint8Array(Buffer.concat(chunks)), req.headers, cb))
+    }
+}
 
-    if (!num_patches && !req.headers['content-range']) {
-        var buffer = []
-        req.on('data', chunk => buffer.push(chunk))
-        req.on('end', () => {
-            let body = new Uint8Array(Buffer.concat(buffer))
-            let update = { body, patches: undefined }
-            Object.defineProperty(update, 'body_text', {
-                get: () => new TextDecoder('utf-8').decode(update.body)
-            })
-            cb(update)
+// Parse a complete body buffer into an update (body snapshot or patches).
+function parse_update_from_bytes (bytes, headers, cb) {
+    var num_patches = headers.patches
+
+    // Full body snapshot (no patches, no content-range)
+    if (!num_patches && !headers['content-range']) {
+        let update = { body: bytes, patches: undefined }
+        Object.defineProperty(update, 'body_text', {
+            get: () => new TextDecoder('utf-8').decode(update.body)
         })
+        return cb(update)
     }
 
     // Parse a single patch, lacking Patches: N
-    else if (num_patches === undefined && req.headers['content-range']) {
-        // We only support range patches right now, so there must be a
-        // Content-Range header.
-        assert(req.headers['content-range'], 'No patches to parse: need `Patches: N` or `Content-Range:` header in ' + JSON.stringify(req.headers))
+    // We only support range patches right now, so there must be a
+    // Content-Range header.
+    if (num_patches === undefined && headers['content-range']) {
+        assert(headers['content-range'], 'No patches to parse: need `Patches: N` or `Content-Range:` header in ' + JSON.stringify(headers))
 
         // Parse the Content-Range header
         // Content-range is of the form '<unit> <range>' e.g. 'json .index'
-        var [unit, range] = parse_content_range(req.headers['content-range'])
-
-        // The contents of the patch is in the request body
-        var buffer = []
-        // Read the body one chunk at a time
-        req.on('data', chunk => buffer.push(chunk))
-        // Then return it
-        req.on('end', () => {
-            let patch = {unit, range, content: new Uint8Array(Buffer.concat(buffer))}
-            Object.defineProperty(patch, 'content_text', {
-                get: () => new TextDecoder('utf-8').decode(patch.content)
-            })
-            cb({ patches: [patch], body: undefined })
+        var [unit, range] = parse_content_range(headers['content-range'])
+        let patch = {unit, range, content: bytes}
+        Object.defineProperty(patch, 'content_text', {
+            get: () => new TextDecoder('utf-8').decode(patch.content)
         })
+        return cb({ patches: [patch], body: undefined })
     }
 
     // Parse multiple patches within a Patches: N block
-    else {
-        num_patches = parseInt(num_patches)
-        let patches = []
-        let buffer = []
+    num_patches = parseInt(num_patches)
 
-        // We check to send send patches each time we parse one.  But if there
-        // are zero to parse, we will never check to send them.
-        if (num_patches === 0)
-            return cb({ patches: [], body: undefined })
+    // We check to send patches each time we parse one.  But if there
+    // are zero to parse, we will never check to send them.
+    if (num_patches === 0)
+        return cb({ patches: [], body: undefined })
 
-        req.on('data', function parse (chunk) {
+    var patches = []
+    var buffer = Array.from(bytes)
 
-            // Merge the latest chunk into our buffer
-            for (let x of chunk) buffer.push(x)
+    while (patches.length < num_patches) {
+        // Find the start of the headers (skip leading CR/LF)
+        let headers_start = 0
+        while (buffer[headers_start] === 13 || buffer[headers_start] === 10)
+            headers_start++
+        if (headers_start === buffer.length)
+            break
 
-            while (patches.length < num_patches) {
-                // Find the start of the headers
-                let s = 0;
-                while (buffer[s] === 13 || buffer[s] === 10) s++
-                if (s === buffer.length) return {result: 'waiting'}
+        // Look for the double-newline at the end of the headers.
+        let headers_end = headers_start
+        while (++headers_end) {
+            if (headers_end > buffer.length)
+                break
+            if (buffer[headers_end - 1] === 10
+                && (buffer[headers_end - 2] === 10
+                    || (buffer[headers_end - 2] === 13
+                        && buffer[headers_end - 3] === 10)))
+                break
+        }
+        if (headers_end > buffer.length)
+            break
 
-                // Look for the double-newline at the end of the headers.
-                let e = s;
-                while (++e) {
-                    if (e > buffer.length) return {result: 'waiting'}
-                    if (buffer[e - 1] === 10 && (buffer[e - 2] === 10 || (buffer[e - 2] === 13 && buffer[e - 3] === 10))) break
-                }
+        // Extract the header string
+        var headers_source = buffer.slice(headers_start, headers_end)
+            .map(x => String.fromCharCode(x)).join('')
 
-                // Extract the header string
-                let headers_source = buffer.slice(s, e).map(x => String.fromCharCode(x)).join('')
+        // Now let's parse those headers.
+        var patch_headers = require('parse-headers')(headers_source)
 
-                // Now let's parse those headers.
-                var headers = require('parse-headers')(headers_source)
+        // We require `content-length` to declare the length of the patch.
+        if (!('content-length' in patch_headers)) {
+            // Print a nice error if it's missing
+            console.error('No content-length in', JSON.stringify(patch_headers),
+                          'from', new TextDecoder().decode(new Uint8Array(buffer)),
+                          {buffer})
+            process.exit(1)
+        }
 
-                // We require `content-length` to declare the length of the patch.
-                if (!('content-length' in headers)) {
-                    // Print a nice error if it's missing
-                    console.error('No content-length in', JSON.stringify(headers),
-                                  'from', new TextDecoder().decode(new Uint8Array(buffer)), {buffer})
-                    process.exit(1)
-                }
+        var body_length = parseInt(patch_headers['content-length'])
 
-                var body_length = parseInt(headers['content-length'])
+        // Give up if we don't have the full patch yet.
+        if (buffer.length - headers_end < body_length) break
 
-                // Give up if we don't have the full patch yet.
-                if (buffer.length - e < body_length)
-                    return
+        // XX Todo: support custom patch types beyond content-range "Range Patches".
 
-                // XX Todo: support custom patch types beyond content-range.
+        // Content-range is of the form '<unit> <range>' e.g. 'json .index'
+        var [unit, range] = parse_content_range(patch_headers['content-range'])
+        var patch_content = new Uint8Array(buffer.slice(headers_end,
+                                                        headers_end + body_length))
 
-                // Content-range is of the form '<unit> <range>' e.g. 'json .index'
-                var [unit, range] = parse_content_range(headers['content-range'])
-                var patch_content = new Uint8Array(buffer.slice(e, e + body_length))
-
-                // We've got our patch!
-                let patch = {unit, range, content: patch_content}
-                Object.defineProperty(patch, 'content_text', {
-                    get: () => new TextDecoder('utf-8').decode(patch.content)
-                })
-                patches.push(patch)
-
-                buffer = buffer.slice(e + body_length)
-            }
-
-            // We got all the patches!  Pause the stream and tell the callback!
-            req.pause()
-            cb({ patches, body: undefined })
+        // We've got our patch!
+        let patch = {unit, range, content: patch_content}
+        Object.defineProperty(patch, 'content_text', {
+            get: () => new TextDecoder('utf-8').decode(patch.content)
         })
-        req.on('end', () => {
-            // If the stream ends before we get everything, then return what we
-            // did receive
-            console.error('Request stream ended!')
-            if (patches.length !== num_patches)
-                console.error(`Got an incomplete PUT: ${patches.length}/${num_patches} patches were received`)
-        })
+        patches.push(patch)
+
+        buffer = buffer.slice(headers_end + body_length)
     }
+
+    if (patches.length !== num_patches)
+        console.error(`Got an incomplete PUT: ${patches.length}/${num_patches} patches were received`)
+
+    cb({ patches, body: undefined })
 }
 
 function parse_content_range (range_string) {
