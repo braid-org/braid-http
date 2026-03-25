@@ -100,11 +100,9 @@ function parse_patches (req, cb) {
 // HTTP frameworks (like Fastify, Express with body-parser) that consume the
 // request body before the handler runs.
 function parse_update (req, cb) {
-    if (req.already_buffered_body != null) {
-        var buf = req.already_buffered_body
-        if (typeof buf === 'string') buf = new TextEncoder().encode(buf)
-        parse_update_from_bytes(new Uint8Array(buf), req.headers, cb)
-    } else {
+    if (req.already_buffered_body != null)
+        parse_update_from_bytes(new Uint8Array(req.already_buffered_body), req.headers, cb)
+    else {
         var chunks = []
         req.on('data', chunk => chunks.push(chunk))
         req.on('end', () =>
