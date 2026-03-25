@@ -760,8 +760,8 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
         ? headers_source.map(x => String.fromCharCode(x)).join('')
         : new TextDecoder().decode(headers_source)
 
-    // Convert "HTTP 200 OK" to a :status: 200 header
-    headers_source = headers_source.replace(/^HTTP\/?\d*\.?\d* (\d\d\d).*\r?\n/,
+    // Convert "HTTP 200 OK" or "200 OK" to a :status: 200 header
+    headers_source = headers_source.replace(/^(?:HTTP\/?\d*\.?\d* )?(\d\d\d).*\r?\n/,
                                             ':status: $1\r\n')
 
     var headers_length = headers_source.length
