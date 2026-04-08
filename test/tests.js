@@ -2330,7 +2330,7 @@ runTest(
 )
 
 runTest(
-    "Verify heartbeat_cb is called on heartbeats",
+    "Verify on_heartbeat is called on heartbeats",
     async () => {
         let a = new AbortController()
         let heartbeat_count = 0
@@ -2340,16 +2340,16 @@ runTest(
                 multiplex: false,
                 heartbeats: 0.3,
                 signal: a.signal,
-                heartbeat_cb: () => {
+                on_heartbeat: () => {
                     heartbeat_count++
-                    if (heartbeat_count >= 3) resolve(`heartbeat_cb called ${heartbeat_count} times`)
+                    if (heartbeat_count >= 3) resolve(`on_heartbeat called ${heartbeat_count} times`)
                 }
             }).then(res => res.subscribe(() => {}, reject)).catch(reject)
         })
         a.abort()
         return x
     },
-    'heartbeat_cb called 3 times'
+    'on_heartbeat called 3 times'
 )
 
 runTest(

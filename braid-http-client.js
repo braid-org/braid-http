@@ -376,7 +376,7 @@ async function braid_fetch (url, params = {}) {
                         if (isFinite(heartbeats)) {
                             let timeout = null
                             on_heartbeat = () => {
-                                params.heartbeat_cb?.()
+                                params.on_heartbeat?.()
                                 clearTimeout(timeout)
                                 let wait_seconds = 1.2 * heartbeats + 3
                                 timeout = setTimeout(() => {
