@@ -4542,6 +4542,53 @@ runTest(
 )
 
 runTest(
+    "sync_resource forwards user-supplied headers to GET and PUT",
+    async () => {
+        var key_suffix = 'headers_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Arm the server to log headers on every request to this key.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_headers_log[${JSON.stringify(full_key)}] = []; res.end('ok')`
+        })
+
+        var ac = new AbortController()
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            // Use custom headers only — browsers forbid JS from setting
+            // Cookie, Host, etc. via fetch(), so we can't test those here.
+            headers: {
+                'X-Test-Header': 'hello',
+                'X-Another-Header': 'world'
+            },
+            on_update: () => {}
+        })
+        await new Promise(r => setTimeout(r, 200))
+        await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        ac.abort()
+
+        // Read back what the server saw.
+        var log_res = await fetch('/eval', {
+            method: 'POST',
+            body: `res.end(JSON.stringify(global.braid_text_headers_log[${JSON.stringify(full_key)}]))`
+        })
+        var log = JSON.parse(await log_res.text())
+        var get_req = log.find(r => r.method === 'GET')
+        var put_req = log.find(r => r.method === 'PUT')
+
+        return JSON.stringify({
+            get_saw_header: get_req?.headers['x-test-header'] === 'hello',
+            get_saw_another: get_req?.headers['x-another-header'] === 'world',
+            put_saw_header: put_req?.headers['x-test-header'] === 'hello',
+            put_saw_another: put_req?.headers['x-another-header'] === 'world'
+        })
+    },
+    JSON.stringify({get_saw_header: true, get_saw_another: true, put_saw_header: true, put_saw_another: true})
+)
+
+runTest(
     "sync_resource warns and aborts on subscription parse errors",
     async () => {
         var warnings = []

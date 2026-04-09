@@ -73,6 +73,7 @@ var braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
 var braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
 var braid_text_put_concurrency = {}    // key -> {current, max}
 var braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
+var braid_text_headers_log = {}        // key -> [{method, headers}, ...]
 global.braid_text_fail_first_get = braid_text_fail_first_get
 global.braid_text_fail_first_put = braid_text_fail_first_put
 global.braid_text_first_get_status = braid_text_first_get_status
@@ -81,6 +82,7 @@ global.braid_text_get_parents_log = braid_text_get_parents_log
 global.braid_text_put_delay_ms = braid_text_put_delay_ms
 global.braid_text_put_concurrency = braid_text_put_concurrency
 global.braid_text_hang_first_put = braid_text_hang_first_put
+global.braid_text_headers_log = braid_text_headers_log
 
 function createTestServer() {
     const server = require('http2').createSecureServer({
@@ -156,6 +158,9 @@ function createTestServer() {
         // Braid-text test endpoint
         if (req.url.startsWith('/braid-text-test')) {
             var key = req.url.split('?')[0]
+            // Optional: record all headers on each request (for tests)
+            if (braid_text_headers_log[key])
+                braid_text_headers_log[key].push({method: req.method, headers: {...req.headers}})
             // Optional: log the parents header seen on each GET (for tests)
             if (req.method === 'GET' && braid_text_get_parents_log[key])
                 braid_text_get_parents_log[key].push(req.headers.parents ?? null)

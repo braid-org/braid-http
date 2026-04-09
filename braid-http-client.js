@@ -1473,6 +1473,7 @@ function sync_resource (url, {
     on_warning,
     on_error,
     parents,
+    headers: extra_headers,
     heartbeats = 20,
     put_timeout = heartbeats
 } = {}) {
@@ -1536,7 +1537,7 @@ function sync_resource (url, {
             var res = await braid_fetch(url, {
                 subscribe: true,
                 signal: inner_signal,
-                headers: {'Heartbeats': heartbeats},
+                headers: {'Heartbeats': heartbeats, ...extra_headers},
                 parents,
                 on_heartbeat: () => reset_heartbeat_timer()
             })
@@ -1625,7 +1626,8 @@ function sync_resource (url, {
                 var r = await braid_fetch(url, {
                     method: 'PUT',
                     signal: inner_signal,
-                    ...entry.update
+                    ...entry.update,
+                    headers: {...extra_headers, ...entry.update.headers}
                 })
                 if (timed_out) return
 

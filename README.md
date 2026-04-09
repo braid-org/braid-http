@@ -224,6 +224,7 @@ ac.abort()
 | `on_warning`  | `console.warn` | `(msg) => ...`. Called for unexpected-but-recoverable conditions (e.g. a 500 on a PUT retry, or a parse error that triggers shutdown). |
 | `on_error`    | —            | `(err) => ...`. Called once when `sync_resource` shuts itself down due to a fatal condition (e.g. a subscription parse error). Not called when the caller aborts `signal`. |
 | `parents`     | —            | Array or callback returning the latest versions the client knows about. Called fresh on every reconnect so the server can resume from the right point. |
+| `headers`     | —            | Extra HTTP headers to include on every GET and PUT (e.g. `Cookie`, `Authorization`, `Accept`). Per-PUT `headers` passed through `put()` override these on conflicts. |
 | `heartbeats`  | `20`         | Heartbeat period in seconds. Sent as the `Heartbeats` request header; if the server echoes it back and the client doesn't see any bytes for `1.2 × heartbeats + 3` seconds, it reconnects. |
 | `put_timeout` | `heartbeats` | Per-PUT timeout in seconds. If a PUT doesn't complete in time, all in-flight PUTs are aborted and the queue is retried. |
 
