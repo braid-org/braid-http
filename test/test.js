@@ -8,6 +8,8 @@ const {braidify, free_cors} = require('../braid-http-server.js')
 const https = require('../braid-http-client.js').http(require('https'))
 const braid_fetch = require('../braid-http-client.js').fetch
 const multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
+const sync_resource = require('../braid-http-client.js').sync_resource
+const {create_braid_text} = require('braid-text')
 
 // Parse command line arguments
 const args = process.argv.slice(2)
@@ -60,6 +62,25 @@ process.on("uncaughtException", (x) =>
 // ============================================================================
 // Test Server
 // ============================================================================
+
+var braid_text_instance = create_braid_text()
+braid_text_instance.db_folder = null
+var braid_text_fail_first_get = {}     // key -> true, returns 500
+var braid_text_fail_first_put = {}     // key -> true, returns 500
+var braid_text_first_get_status = {}   // key -> {status, retry_after?}
+var braid_text_first_put_status = {}   // key -> {status, retry_after?}
+var braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
+var braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
+var braid_text_put_concurrency = {}    // key -> {current, max}
+var braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
+global.braid_text_fail_first_get = braid_text_fail_first_get
+global.braid_text_fail_first_put = braid_text_fail_first_put
+global.braid_text_first_get_status = braid_text_first_get_status
+global.braid_text_first_put_status = braid_text_first_put_status
+global.braid_text_get_parents_log = braid_text_get_parents_log
+global.braid_text_put_delay_ms = braid_text_put_delay_ms
+global.braid_text_put_concurrency = braid_text_put_concurrency
+global.braid_text_hang_first_put = braid_text_hang_first_put
 
 function createTestServer() {
     const server = require('http2').createSecureServer({
@@ -131,6 +152,67 @@ function createTestServer() {
 
         if (req.url.startsWith('/eval_pre_braidify') && req.method === 'POST')
             if ((await eval_func()) !== 'keep going') return res.end('ok')
+
+        // Braid-text test endpoint
+        if (req.url.startsWith('/braid-text-test')) {
+            var key = req.url.split('?')[0]
+            // Optional: log the parents header seen on each GET (for tests)
+            if (req.method === 'GET' && braid_text_get_parents_log[key])
+                braid_text_get_parents_log[key].push(req.headers.parents ?? null)
+            // Optional: fail the first GET on this URL, then succeed (for retry tests)
+            if (req.method === 'GET' && braid_text_fail_first_get[key]) {
+                delete braid_text_fail_first_get[key]
+                res.writeHead(500)
+                return res.end('')
+            }
+            // Optional: return a specific status (and optional Retry-After)
+            // on the first GET of this key, then succeed on subsequent GETs
+            if (req.method === 'GET' && braid_text_first_get_status[key]) {
+                var spec = braid_text_first_get_status[key]
+                delete braid_text_first_get_status[key]
+                var headers = {}
+                if (spec.retry_after !== undefined)
+                    headers['Retry-After'] = String(spec.retry_after)
+                res.writeHead(spec.status, headers)
+                return res.end('')
+            }
+            if (req.method === 'PUT' && braid_text_fail_first_put[key]) {
+                delete braid_text_fail_first_put[key]
+                res.writeHead(500)
+                return res.end('')
+            }
+            // Optional: hang the first PUT forever (for timeout tests)
+            if (req.method === 'PUT' && braid_text_hang_first_put[key]) {
+                delete braid_text_hang_first_put[key]
+                return  // never respond
+            }
+            // Optional: return a specific status (and optional Retry-After)
+            // on the first PUT of this key, then succeed on subsequent PUTs
+            if (req.method === 'PUT' && braid_text_first_put_status[key]) {
+                var put_spec = braid_text_first_put_status[key]
+                delete braid_text_first_put_status[key]
+                var put_headers = {}
+                if (put_spec.retry_after !== undefined)
+                    put_headers['Retry-After'] = String(put_spec.retry_after)
+                res.writeHead(put_spec.status, put_headers)
+                return res.end('')
+            }
+            // Optional: track PUT concurrency per key (for probe-first tests)
+            if (req.method === 'PUT' && braid_text_put_concurrency[key]) {
+                var c = braid_text_put_concurrency[key]
+                c.current++
+                if (c.current > c.max) c.max = c.current
+                var decremented = false
+                var dec = () => { if (!decremented) { decremented = true; c.current-- } }
+                res.on('close', dec)
+                res.on('finish', dec)
+            }
+            // Optional: delay each PUT by some number of ms (for probe-first tests)
+            if (req.method === 'PUT' && braid_text_put_delay_ms[key]) {
+                await new Promise(r => setTimeout(r, braid_text_put_delay_ms[key]))
+            }
+            return braid_text_instance.serve(req, res, {key})
+        }
 
         // Braidifies our server
         braidify(req, res)
@@ -753,6 +835,7 @@ async function runConsoleTests() {
         test_update: { ...test_update, status: "200" },
         multiplex_fetch,
         braid_fetch: wrappedBraidFetch,
+        sync_resource,
         baseUrl: `https://localhost:${port}`  // For building expected values in tests
     })
 

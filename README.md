@@ -176,6 +176,99 @@ The callback receives an object with only the fields relevant to the event:
 - `{online: false, error}` — the subscription went offline, with the error/reason for disconnection
 
 
+## `sync_resource`: reliable sync in one call
+
+`sync_resource(url, options)` is a higher-level API built on top of
+`braid_fetch` that gives you a reliably-synced subscription plus a PUT queue
+that survives network failures. It implements the [Reliable Updates
+spec](https://braid.org/protocol/reliable-updates): it reconnects
+automatically, detects dead connections via heartbeats, retries failed PUTs,
+honors `Retry-After`, warns on unexpected status codes, and aborts on
+unrecoverable errors.
+
+```javascript
+var { sync_resource } = require('braid-http')
+
+var ac = new AbortController()
+var current_version = []
+
+var s = sync_resource('https://braid.org/chat', {
+    signal: ac.signal,
+    parents: () => current_version,
+    on_update: (update) => {
+        if (update.version) current_version = update.version
+        // Apply the update to your local state
+    },
+    on_warning: (msg) => console.warn('sync_resource:', msg),
+    on_error:   (err) => console.error('sync_resource shut down:', err)
+})
+
+// PUTs are queued and retried automatically. The returned promise
+// resolves when the server has acknowledged this specific PUT.
+await s.put({
+    version: ['me-1'],
+    patches: [{unit: 'text', range: '[0:0]', content: 'hello'}]
+})
+
+// Shut everything down (stops the subscription and rejects any
+// pending PUTs) by aborting the signal you passed in:
+ac.abort()
+```
+
+### Options
+
+| Option        | Default      | Description |
+|---------------|--------------|-------------|
+| `signal`      | —            | `AbortSignal`. When it aborts, the subscription stops, the PUT queue is drained with rejections, and no further retries happen. |
+| `on_update`   | —            | `(update) => ...`. Called for each update received on the subscription. Same shape as `braid_fetch`'s subscribe callback. |
+| `on_warning`  | `console.warn` | `(msg) => ...`. Called for unexpected-but-recoverable conditions (e.g. a 500 on a PUT retry, or a parse error that triggers shutdown). |
+| `on_error`    | —            | `(err) => ...`. Called once when `sync_resource` shuts itself down due to a fatal condition (e.g. a subscription parse error). Not called when the caller aborts `signal`. |
+| `parents`     | —            | Array or callback returning the latest versions the client knows about. Called fresh on every reconnect so the server can resume from the right point. |
+| `heartbeats`  | `20`         | Heartbeat period in seconds. Sent as the `Heartbeats` request header; if the server echoes it back and the client doesn't see any bytes for `1.2 × heartbeats + 3` seconds, it reconnects. |
+| `put_timeout` | `heartbeats` | Per-PUT timeout in seconds. If a PUT doesn't complete in time, all in-flight PUTs are aborted and the queue is retried. |
+
+### Returned API
+
+`sync_resource()` returns `{ put }`:
+
+- **`put(update)`** — enqueues a PUT. `update` is whatever you'd pass to
+  `braid_fetch` for a PUT (e.g. `{version, parents, patches}` or
+  `{version, body}`). Returns a promise that resolves with the fetch
+  response when the server acknowledges the PUT, or rejects if the
+  caller's `signal` is aborted first.
+
+### What the spec gets you
+
+Once you've wired up `sync_resource`, you get the reliable-updates
+behaviors for free:
+
+- **Auto-reconnection with backoff.** First failure retries after 1s;
+  subsequent failures wait 3s. Any successful reconnection resets the
+  counter.
+- **Status-code handling per spec.** `209` is a successful subscription
+  response; `309`, `408`, `425`, `429`, `432`, `502`, `503`, `504` (and
+  any response carrying a `Retry-After` header) retry silently; any other
+  non-`209` status warns via `on_warning` and retries.
+- **`Retry-After` honored.** If the server sends `Retry-After: N`
+  (seconds), the next reconnect waits that long instead of using the
+  default backoff.
+- **Heartbeat liveness detection.** The client asks the server to emit
+  data every `heartbeats` seconds; if it doesn't, the connection is
+  considered dead and gets re-established.
+- **PUT queue with probe-first retries.** PUTs are fired in parallel. If
+  any in-flight PUT fails, all siblings are aborted and the queue is
+  retried — starting with a single probe PUT. The rest fan out only
+  after the probe succeeds, avoiding a thundering-herd of doomed PUTs
+  against a still-sick server.
+- **Per-PUT timeouts.** If a PUT hangs longer than `put_timeout` seconds,
+  it's aborted and the queue is retried.
+- **Resume from your latest version.** On every reconnect, the `parents`
+  callback is invoked fresh, so the server picks up from wherever your
+  application's state actually is.
+- **Parse-error shutdown.** If the subscription stream contains
+  un-parseable bytes, `sync_resource` warns, calls `on_error`, and stops
+  retrying — the stream is corrupt and reconnecting won't fix it.
+
 
 ## Using it in Nodejs
 

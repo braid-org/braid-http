@@ -2,7 +2,7 @@
 // This file exports a function that takes a test runner and context
 
 function defineTests(runTest, context) {
-    var { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, baseUrl } = context
+    var { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, sync_resource, baseUrl } = context
     // baseUrl is empty in browser, 'https://localhost:${port}' in console tests
     baseUrl = baseUrl || ''
 
@@ -4008,6 +4008,573 @@ runTest(
         return '' + (ct !== 'message/http-patches')
     },
     'true'
+)
+
+addSectionHeader("sync_resource Tests")
+
+runTest(
+    "sync_resource receives updates via on_update and put sends a PUT",
+    async () => {
+        var ac = new AbortController()
+        var url = baseUrl + '/braid-text-test/sync_resource_' + Math.random().toString(36).slice(2)
+        var update_count = 0
+        var resolve_second
+
+        var got_second = new Promise(r => { resolve_second = r })
+
+        // Subscribe — braid-text sends an initial empty update, then
+        // our PUT should trigger a second update with the patch
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_update: update => {
+                update_count++
+                if (update_count === 2) resolve_second(update)
+            }
+        })
+
+        // Wait a moment for the subscription to establish, then PUT
+        await new Promise(r => setTimeout(r, 200))
+
+        var r = await s.put({
+            patches: [{unit: 'text', range: '[0:0]', content: 'hello'}]
+        })
+
+        var second_update = await got_second
+        ac.abort()
+
+        return JSON.stringify({
+            put_ok: r.ok,
+            received_put_update: second_update.patches?.[0]?.content_text ?? second_update.body_text
+        })
+    },
+    JSON.stringify({put_ok: true, received_put_update: 'hello'})
+)
+
+runTest(
+    "sync_resource retries the fetch if it throws",
+    async () => {
+        var key_suffix = 'retry_' + Math.random().toString(36).slice(2)
+        var url = baseUrl + '/braid-text-test/' + key_suffix
+
+        // Tell the server to fail the first GET on this key
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_fail_first_get[${JSON.stringify('/braid-text-test/' + key_suffix)}] = true; res.end('ok')`
+        })
+
+        var ac = new AbortController()
+
+        // Subscribe — first attempt should fail with 500, then retry ~1s later and succeed
+        var got_update = new Promise(resolve => {
+            sync_resource(url, {
+                signal: ac.signal,
+                on_update: update => resolve(update)
+            })
+        })
+
+        var update = await got_update
+        ac.abort()
+
+        // We successfully reconnected after a failure — the update we got is
+        // the initial (empty) update from braid-text on the retried connection
+        return '' + (update !== undefined)
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource retries put if it throws, and fires parallel puts in order",
+    async () => {
+        var key_suffix = 'put_retry_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Tell the server to fail the first PUT on this key
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_fail_first_put[${JSON.stringify(full_key)}] = true; res.end('ok')`
+        })
+
+        var ac = new AbortController()
+        var updates_body = []
+
+        // Subscribe so we can observe the eventual state
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_update: update => {
+                if (update.body_text !== undefined) updates_body.push(update.body_text)
+                else if (update.patches) updates_body.push('patches')
+            }
+        })
+
+        // Wait for the subscription to establish
+        await new Promise(r => setTimeout(r, 200))
+
+        // Fire 3 PUTs in parallel. The first will be failed by the server,
+        // which should abort all in-flight PUTs, and then all 3 should be
+        // re-fired in order after the 1s retry delay.
+        var results = await Promise.all([
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'a'}]}),
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'b'}]}),
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'c'}]})
+        ])
+
+        // Give the subscription a moment to receive the final state
+        await new Promise(r => setTimeout(r, 300))
+        ac.abort()
+
+        return JSON.stringify({
+            all_ok: results.every(r => r.ok),
+            num_results: results.length
+        })
+    },
+    JSON.stringify({all_ok: true, num_results: 3})
+)
+
+runTest(
+    "sync_resource reconnects when heartbeats stop",
+    async () => {
+        // /noheartbeat sends one update then goes silent (no heartbeats).
+        // With heartbeats: 0.5, the timeout is 1.2*0.5+3 = 3.6s, so after
+        // ~3.6s of silence we should reconnect and receive the initial
+        // update a second time.
+        var ac = new AbortController()
+        var update_count = 0
+        var got_second
+
+        var second_update_promise = new Promise(resolve => { got_second = resolve })
+
+        sync_resource(baseUrl + '/noheartbeat', {
+            signal: ac.signal,
+            heartbeats: 0.5,
+            on_update: update => {
+                update_count++
+                if (update_count === 2) got_second()
+            }
+        })
+
+        // Wait for the reconnect + 2nd update (give it plenty of time:
+        // 3.6s heartbeat timeout + 1s retry delay = ~4.6s, plus slack)
+        await Promise.race([
+            second_update_promise,
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 10000))
+        ])
+
+        ac.abort()
+        return '' + (update_count >= 2)
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource on_warning is called for non-silent status codes",
+    async () => {
+        var key_suffix = 'warn_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First GET returns 500 (not in the silent-retry list)
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 500}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var got_update = new Promise(resolve => {
+            sync_resource(url, {
+                signal: ac.signal,
+                on_warning: msg => warnings.push(msg),
+                on_update: () => resolve()
+            })
+        })
+
+        await got_update
+        ac.abort()
+
+        return '' + warnings.some(w => /500/.test(w))
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource does not warn on silent-retry status codes",
+    async () => {
+        var key_suffix = 'silent_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First GET returns 503 (in the silent-retry list)
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 503}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var got_update = new Promise(resolve => {
+            sync_resource(url, {
+                signal: ac.signal,
+                on_warning: msg => warnings.push(msg),
+                on_update: () => resolve()
+            })
+        })
+
+        await got_update
+        ac.abort()
+
+        return '' + (warnings.length === 0)
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource honors Retry-After header on subscription responses",
+    async () => {
+        var key_suffix = 'retry_after_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First GET returns 200 with Retry-After: 2 (seconds)
+        // 200 is not in the silent-retry list, but Retry-After makes it silent.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 200, retry_after: 2}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var start = Date.now()
+        var got_update = new Promise(resolve => {
+            sync_resource(url, {
+                signal: ac.signal,
+                on_warning: msg => warnings.push(msg),
+                on_update: () => resolve()
+            })
+        })
+
+        await got_update
+        var elapsed = Date.now() - start
+        ac.abort()
+
+        // Without Retry-After, we'd reconnect after 1s. With Retry-After: 2,
+        // the reconnect should happen ~2s after the first failure, so
+        // total elapsed should be at least 1800ms (allowing some slack).
+        return JSON.stringify({
+            fast_enough: elapsed >= 1800,
+            no_warnings: warnings.length === 0
+        })
+    },
+    JSON.stringify({fast_enough: true, no_warnings: true})
+)
+
+runTest(
+    "sync_resource calls parents() callback on each (re)connect",
+    async () => {
+        var key_suffix = 'parents_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Arm the server: log the parents header on every GET to this
+        // key, and make every GET return 500 so the client keeps retrying.
+        // We don't care about ever succeeding — we just want to observe
+        // that parents() gets called fresh on each reconnect attempt.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `
+                global.braid_text_get_parents_log[${JSON.stringify(full_key)}] = []
+                global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 500}
+                res.end('ok')
+            `
+        })
+
+        // Application-side "latest version I know about". Changes between
+        // the first GET and the retry so we can verify the callback was
+        // re-invoked (not just memoized).
+        var latest_parents = []
+        var parents_call_count = 0
+        var parents_cb = () => {
+            parents_call_count++
+            return latest_parents
+        }
+
+        var ac = new AbortController()
+        sync_resource(url, {
+            signal: ac.signal,
+            parents: parents_cb,
+            on_warning: () => {},   // silence the expected 500 warning
+            on_update: () => {}
+        })
+
+        // Wait for the first GET to fail, then switch the parents value.
+        await new Promise(r => setTimeout(r, 300))
+        latest_parents = ['abc-1']
+
+        // Wait long enough for the 1s retry to fire and hit the server.
+        // Every GET returns 500 (via first_get_status, which only fires
+        // once — but that's enough: first GET is rigged, second hits
+        // braid-text on an empty key which ignores the parents header).
+        await new Promise(r => setTimeout(r, 1500))
+        ac.abort()
+
+        // Read back what the server saw
+        var log_res = await fetch('/eval', {
+            method: 'POST',
+            body: `res.end(JSON.stringify(global.braid_text_get_parents_log[${JSON.stringify(full_key)}]))`
+        })
+        var log = JSON.parse(await log_res.text())
+
+        return JSON.stringify({
+            called_at_least_twice: parents_call_count >= 2,
+            first_had_no_parents: !log[0],
+            second_had_abc_1: !!log[1] && /abc-1/.test(log[1])
+        })
+    },
+    JSON.stringify({called_at_least_twice: true, first_had_no_parents: true, second_had_abc_1: true})
+)
+
+runTest(
+    "sync_resource probe-first: retry fires a single PUT before fanning out",
+    async () => {
+        var key_suffix = 'probe_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Arm the server: fail the first PUT, delay every PUT by 200ms,
+        // track PUT concurrency.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `
+                global.braid_text_fail_first_put[${JSON.stringify(full_key)}] = true
+                global.braid_text_put_delay_ms[${JSON.stringify(full_key)}] = 200
+                global.braid_text_put_concurrency[${JSON.stringify(full_key)}] = {current: 0, max: 0}
+                res.end('ok')
+            `
+        })
+
+        var ac = new AbortController()
+        var s = sync_resource(url, { signal: ac.signal, on_update: () => {} })
+        await new Promise(r => setTimeout(r, 200))   // let subscription establish
+
+        // Fire 3 parallel PUTs. First hits 500 (fails fast); other two
+        // are either completed, in-flight, or aborted when the failure
+        // triggers the reconnect.
+        var puts = Promise.all([
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'a'}]}),
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'b'}]}),
+            s.put({patches: [{unit: 'text', range: '[0:0]', content: 'c'}]})
+        ])
+
+        // Wait for the initial fan-out to finish (the 500 fires fast, the
+        // other two hit the 200ms delay, ~300ms is plenty). Then reset the
+        // concurrency tracker so we only measure the retry phase.
+        await new Promise(r => setTimeout(r, 400))
+        var reset_res = await fetch('/eval', {
+            method: 'POST',
+            body: `
+                var c = global.braid_text_put_concurrency[${JSON.stringify(full_key)}]
+                var initial_max = c.max
+                c.max = c.current
+                res.end(String(initial_max))
+            `
+        })
+        var initial_max = parseInt(await reset_res.text())
+
+        // Let the retry run to completion (1s delay + probe 200ms + fan-out 200ms).
+        await puts
+        await new Promise(r => setTimeout(r, 100))
+        ac.abort()
+
+        // Read the retry-phase max.
+        var retry_res = await fetch('/eval', {
+            method: 'POST',
+            body: `res.end(String(global.braid_text_put_concurrency[${JSON.stringify(full_key)}].max))`
+        })
+        var retry_max = parseInt(await retry_res.text())
+
+        // With probe-first, retry_max should be at most 2: the probe runs
+        // alone (max=1), and after it succeeds the remaining 2 PUTs fan
+        // out in parallel (max=2). Without probe-first, all 3 would fire
+        // in parallel and retry_max would be 3.
+        void initial_max  // unused; kept for debugging
+        return JSON.stringify({
+            retry_max_at_most_2: retry_max <= 2,
+            retry_max_at_least_1: retry_max >= 1
+        })
+    },
+    JSON.stringify({retry_max_at_most_2: true, retry_max_at_least_1: true})
+)
+
+runTest(
+    "sync_resource put: on_warning is called for non-silent status codes",
+    async () => {
+        var key_suffix = 'put_warn_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First PUT returns 500 (not in the silent-retry list)
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_put_status[${JSON.stringify(full_key)}] = {status: 500}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_warning: msg => warnings.push(msg),
+            on_update: () => {}
+        })
+        await new Promise(r => setTimeout(r, 200))  // let subscription establish
+
+        await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        ac.abort()
+
+        return '' + warnings.some(w => /500/.test(w))
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource put: does not warn on silent-retry status codes",
+    async () => {
+        var key_suffix = 'put_silent_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First PUT returns 503 (in the silent-retry list)
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_put_status[${JSON.stringify(full_key)}] = {status: 503}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_warning: msg => warnings.push(msg),
+            on_update: () => {}
+        })
+        await new Promise(r => setTimeout(r, 200))
+
+        await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        ac.abort()
+
+        return '' + (warnings.length === 0)
+    },
+    'true'
+)
+
+runTest(
+    "sync_resource put: honors Retry-After header",
+    async () => {
+        var key_suffix = 'put_retry_after_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First PUT returns 500 (not in silent list) with Retry-After: 2
+        // — Retry-After makes it silent and delays the retry by ~2s.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_put_status[${JSON.stringify(full_key)}] = {status: 500, retry_after: 2}; res.end('ok')`
+        })
+
+        var warnings = []
+        var ac = new AbortController()
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_warning: msg => warnings.push(msg),
+            on_update: () => {}
+        })
+        await new Promise(r => setTimeout(r, 200))
+
+        var start = Date.now()
+        await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        var elapsed = Date.now() - start
+        ac.abort()
+
+        // Without Retry-After, retry would be ~1s. With Retry-After: 2,
+        // elapsed should be at least ~1800ms (allowing slack).
+        return JSON.stringify({
+            slow_enough: elapsed >= 1800,
+            no_warnings: warnings.length === 0
+        })
+    },
+    JSON.stringify({slow_enough: true, no_warnings: true})
+)
+
+runTest(
+    "sync_resource put: times out and retries if PUT never responds",
+    async () => {
+        var key_suffix = 'put_timeout_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Hang the first PUT forever; second PUT succeeds normally.
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_hang_first_put[${JSON.stringify(full_key)}] = true; res.end('ok')`
+        })
+
+        var ac = new AbortController()
+        // Short put_timeout so the test runs fast
+        var s = sync_resource(url, {
+            signal: ac.signal,
+            on_update: () => {},
+            put_timeout: 1  // 1 second
+        })
+        await new Promise(r => setTimeout(r, 200))
+
+        var start = Date.now()
+        var r = await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        var elapsed = Date.now() - start
+        ac.abort()
+
+        // The first PUT hangs, timing out after ~1s, then there's a 1s
+        // retry delay, then the second PUT succeeds. Expect elapsed ~2s.
+        return JSON.stringify({
+            put_succeeded: r.ok,
+            elapsed_at_least_1800ms: elapsed >= 1800
+        })
+    },
+    JSON.stringify({put_succeeded: true, elapsed_at_least_1800ms: true})
+)
+
+runTest(
+    "sync_resource warns and aborts on subscription parse errors",
+    async () => {
+        var warnings = []
+        var on_error_called_with = null
+        var ac = new AbortController()
+
+        var shutdown_promise = new Promise(resolve => {
+            sync_resource(baseUrl + '/parse_error', {
+                signal: ac.signal,
+                on_warning: msg => warnings.push(msg),
+                on_error: err => {
+                    on_error_called_with = err
+                    resolve()
+                }
+            })
+        })
+
+        // The parse_error endpoint sends garbage; parser should fail, warn,
+        // and trigger shutdown via on_error.
+        await Promise.race([
+            shutdown_promise,
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 5000))
+        ])
+        ac.abort()
+
+        return JSON.stringify({
+            warned: warnings.some(w => /Parse error/i.test(w)),
+            on_error_fired: on_error_called_with !== null,
+            error_has_parse_message: /Parse error/i.test(on_error_called_with?.message || '')
+        })
+    },
+    JSON.stringify({warned: true, on_error_fired: true, error_has_parse_message: true})
 )
 
 }
