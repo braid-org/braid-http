@@ -1502,13 +1502,13 @@ function sync_resource (url, {
     // reconnector and the PUT queue. It aborts when the caller's signal
     // aborts (user-initiated shutdown) or when shutdown() is called
     // (self-initiated shutdown due to a fatal error like a parse error).
-    var ac = new AbortController()
-    signal?.addEventListener('abort', () => ac.abort())
+    var aborter = new AbortController()
+    signal?.addEventListener('abort', () => aborter.abort())
     var shut_down = false
     var shutdown = (err) => {
         if (shut_down) return
         shut_down = true
-        ac.abort()
+        aborter.abort()
         on_error?.(err)
     }
 
@@ -1523,7 +1523,7 @@ function sync_resource (url, {
     // ============================================================
     var heartbeat_timeout_ms = (1.2 * heartbeats + 3) * 1000
 
-    reconnector(ac.signal, delay, async (inner_signal, reconnect, on_success) => {
+    reconnector(aborter.signal, delay, async (inner_signal, reconnect, on_success) => {
         // Starts as a no-op and is reassigned to the real timer-setting
         // function only after we confirm the server echoed a Heartbeats
         // response header. braid_fetch fires on_heartbeat on every byte
@@ -1600,13 +1600,13 @@ function sync_resource (url, {
     var put_queue = new Set()    // entries: {update, resolve, reject}
     var fire_one
 
-    ac.signal.addEventListener('abort', () => {
+    aborter.signal.addEventListener('abort', () => {
         for (var entry of put_queue)
             entry.reject(new Error('sync_resource aborted'))
         put_queue.clear()
     })
 
-    reconnector(ac.signal, delay, async (inner_signal, reconnect, on_success) => {
+    reconnector(aborter.signal, delay, async (inner_signal, reconnect, on_success) => {
         // While probing, new put() calls enqueue but don't fire — they'll
         // be picked up by the fan-out after the probe succeeds. This is
         // attempt-local so it always starts false on a fresh attempt.
@@ -1707,20 +1707,20 @@ function sync_resource (url, {
 function reconnector (outer_signal, get_delay, func) {
     if (outer_signal?.aborted) return
 
-    var current_ac = null
-    outer_signal?.addEventListener('abort', () => current_ac?.abort())
+    var current_aborter = null
+    outer_signal?.addEventListener('abort', () => current_aborter?.abort())
 
     var failure_count = 0
     connect()
     function connect () {
         if (outer_signal?.aborted) return
-        var ac = current_ac = new AbortController()
-        var inner_signal = ac.signal
+        var aborter = current_aborter = new AbortController()
+        var inner_signal = aborter.signal
         func(
             inner_signal,
             (err) => {
                 if (outer_signal?.aborted || inner_signal.aborted) return
-                ac.abort()
+                aborter.abort()
                 setTimeout(connect, get_delay(err, ++failure_count))
             },
             () => { failure_count = 0 }
