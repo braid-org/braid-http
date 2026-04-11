@@ -1473,9 +1473,9 @@ function reliable_update_channel (url, {
     on_warning,
     on_error,
     reconnect_from_parents,
-    headers: extra_headers,
-    heartbeats = 20,
-    put_timeout = heartbeats
+    get_headers,
+    put_headers,
+    timeout = 20
 } = {}) {
     // Per the reliable-updates spec, these subscription response codes
     // indicate a transient failure we should retry without warning.
@@ -1524,7 +1524,7 @@ function reliable_update_channel (url, {
     // and rebuilt: the subscription reconnects and any queued PUTs
     // are re-fired.
     // ============================================================
-    var heartbeat_timeout_ms = (1.2 * heartbeats + 3) * 1000
+    var heartbeat_timeout_ms = (1.2 * timeout + 3) * 1000
     var put_queue = new Set()    // entries: {update, resolve, reject}
     var fire_one
 
@@ -1554,7 +1554,7 @@ function reliable_update_channel (url, {
             var res = await braid_fetch(url, {
                 subscribe: true,
                 signal: inner_signal,
-                headers: {'Heartbeats': heartbeats, ...extra_headers},
+                headers: {'Heartbeats': timeout, ...get_headers},
                 parents: reconnect_from_parents,
                 on_heartbeat: () => reset_heartbeat_timer()
             })
@@ -1610,20 +1610,20 @@ function reliable_update_channel (url, {
 
         var fire_core = async (entry) => {
             if (inner_signal.aborted) return
-            // Per the spec: each PUT has a timeout of put_timeout seconds.
-            // If it doesn't complete in time, trigger reconnect which
-            // aborts all in-flight PUTs and schedules a retry of the queue.
+            // Per the spec: each PUT has a timeout. If it doesn't
+            // complete in time, trigger reconnect which aborts all
+            // in-flight PUTs and schedules a retry of the queue.
             var timed_out = false
             var timeout_handle = setTimeout(() => {
                 timed_out = true
-                reconnect(new Error(`put timeout after ${put_timeout}s`))
-            }, put_timeout * 1000)
+                reconnect(new Error(`put timeout after ${timeout}s`))
+            }, timeout * 1000)
             try {
                 var r = await braid_fetch(url, {
                     method: 'PUT',
                     signal: inner_signal,
                     ...entry.update,
-                    headers: {...extra_headers, ...entry.update.headers}
+                    headers: {...put_headers, ...entry.update.headers}
                 })
                 if (timed_out) return
 

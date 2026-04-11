@@ -15,9 +15,9 @@ export declare function reliable_update_channel(url: string, options?: {
     on_warning?: (msg: string) => void;
     on_error?: (err: Error) => void;
     reconnect_from_parents?: string[] | (() => string[] | null | undefined);
-    headers?: Record<string, string>;
-    heartbeats?: number;
-    put_timeout?: number;
+    get_headers?: Record<string, string>;
+    put_headers?: Record<string, string>;
+    timeout?: number;
 }): {
     put(update: Record<string, any>): Promise<Response>;
     close(): void;

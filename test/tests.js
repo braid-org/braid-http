@@ -4129,7 +4129,7 @@ runTest(
     "reliable_update_channel reconnects when heartbeats stop",
     async () => {
         // /noheartbeat sends one update then goes silent (no heartbeats).
-        // With heartbeats: 0.5, the timeout is 1.2*0.5+3 = 3.6s, so after
+        // With timeout: 0.5, the heartbeat timeout is 1.2*0.5+3 = 3.6s, so after
         // ~3.6s of silence we should reconnect and receive the initial
         // update a second time.
         var update_count = 0
@@ -4138,7 +4138,7 @@ runTest(
         var second_update_promise = new Promise(resolve => { got_second = resolve })
 
         var s = reliable_update_channel(baseUrl + '/noheartbeat', {
-            heartbeats: 0.5,
+            timeout: 0.5,
             on_update: update => {
                 update_count++
                 if (update_count === 2) got_second()
@@ -4497,10 +4497,10 @@ runTest(
             body: `global.braid_text_hang_first_put[${JSON.stringify(full_key)}] = true; res.end('ok')`
         })
 
-        // Short put_timeout so the test runs fast
+        // Short timeout so the test runs fast
         var s = reliable_update_channel(url, {
             on_update: () => {},
-            put_timeout: 1  // 1 second
+            timeout: 1  // 1 second
         })
         await new Promise(r => setTimeout(r, 200))
 
@@ -4535,7 +4535,11 @@ runTest(
         var s = reliable_update_channel(url, {
             // Use custom headers only — browsers forbid JS from setting
             // Cookie, Host, etc. via fetch(), so we can't test those here.
-            headers: {
+            get_headers: {
+                'X-Test-Header': 'hello',
+                'X-Another-Header': 'world'
+            },
+            put_headers: {
                 'X-Test-Header': 'hello',
                 'X-Another-Header': 'world'
             },
