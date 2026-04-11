@@ -2,7 +2,7 @@
 // This file exports a function that takes a test runner and context
 
 function defineTests(runTest, context) {
-    var { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, sync_resource, baseUrl } = context
+    var { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, baseUrl } = context
     // baseUrl is empty in browser, 'https://localhost:${port}' in console tests
     baseUrl = baseUrl || ''
 
@@ -4010,13 +4010,13 @@ runTest(
     'true'
 )
 
-addSectionHeader("sync_resource Tests")
+addSectionHeader("reliable_update_channel Tests")
 
 runTest(
-    "sync_resource receives updates via on_update and put sends a PUT",
+    "reliable_update_channel receives updates via on_update and put sends a PUT",
     async () => {
         var ac = new AbortController()
-        var url = baseUrl + '/braid-text-test/sync_resource_' + Math.random().toString(36).slice(2)
+        var url = baseUrl + '/braid-text-test/reliable_update_channel_' + Math.random().toString(36).slice(2)
         var update_count = 0
         var resolve_second
 
@@ -4024,7 +4024,7 @@ runTest(
 
         // Subscribe — braid-text sends an initial empty update, then
         // our PUT should trigger a second update with the patch
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_update: update => {
                 update_count++
@@ -4051,7 +4051,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource retries the fetch if it throws",
+    "reliable_update_channel retries the fetch if it throws",
     async () => {
         var key_suffix = 'retry_' + Math.random().toString(36).slice(2)
         var url = baseUrl + '/braid-text-test/' + key_suffix
@@ -4066,7 +4066,7 @@ runTest(
 
         // Subscribe — first attempt should fail with 500, then retry ~1s later and succeed
         var got_update = new Promise(resolve => {
-            sync_resource(url, {
+            reliable_update_channel(url, {
                 signal: ac.signal,
                 on_update: update => resolve(update)
             })
@@ -4083,7 +4083,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource retries put if it throws, and fires parallel puts in order",
+    "reliable_update_channel retries put if it throws, and fires parallel puts in order",
     async () => {
         var key_suffix = 'put_retry_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4099,7 +4099,7 @@ runTest(
         var updates_body = []
 
         // Subscribe so we can observe the eventual state
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_update: update => {
                 if (update.body_text !== undefined) updates_body.push(update.body_text)
@@ -4132,7 +4132,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource reconnects when heartbeats stop",
+    "reliable_update_channel reconnects when heartbeats stop",
     async () => {
         // /noheartbeat sends one update then goes silent (no heartbeats).
         // With heartbeats: 0.5, the timeout is 1.2*0.5+3 = 3.6s, so after
@@ -4144,7 +4144,7 @@ runTest(
 
         var second_update_promise = new Promise(resolve => { got_second = resolve })
 
-        sync_resource(baseUrl + '/noheartbeat', {
+        reliable_update_channel(baseUrl + '/noheartbeat', {
             signal: ac.signal,
             heartbeats: 0.5,
             on_update: update => {
@@ -4168,7 +4168,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource on_warning is called for non-silent status codes",
+    "reliable_update_channel on_warning is called for non-silent status codes",
     async () => {
         var key_suffix = 'warn_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4183,7 +4183,7 @@ runTest(
         var warnings = []
         var ac = new AbortController()
         var got_update = new Promise(resolve => {
-            sync_resource(url, {
+            reliable_update_channel(url, {
                 signal: ac.signal,
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
@@ -4199,7 +4199,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource does not warn on silent-retry status codes",
+    "reliable_update_channel does not warn on silent-retry status codes",
     async () => {
         var key_suffix = 'silent_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4214,7 +4214,7 @@ runTest(
         var warnings = []
         var ac = new AbortController()
         var got_update = new Promise(resolve => {
-            sync_resource(url, {
+            reliable_update_channel(url, {
                 signal: ac.signal,
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
@@ -4230,7 +4230,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource honors Retry-After header on subscription responses",
+    "reliable_update_channel honors Retry-After header on subscription responses",
     async () => {
         var key_suffix = 'retry_after_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4247,7 +4247,7 @@ runTest(
         var ac = new AbortController()
         var start = Date.now()
         var got_update = new Promise(resolve => {
-            sync_resource(url, {
+            reliable_update_channel(url, {
                 signal: ac.signal,
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
@@ -4270,7 +4270,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource calls parents() callback on each (re)connect",
+    "reliable_update_channel calls parents() callback on each (re)connect",
     async () => {
         var key_suffix = 'parents_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4300,7 +4300,7 @@ runTest(
         }
 
         var ac = new AbortController()
-        sync_resource(url, {
+        reliable_update_channel(url, {
             signal: ac.signal,
             parents: parents_cb,
             on_warning: () => {},   // silence the expected 500 warning
@@ -4335,7 +4335,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource probe-first: retry fires a single PUT before fanning out",
+    "reliable_update_channel probe-first: retry fires a single PUT before fanning out",
     async () => {
         var key_suffix = 'probe_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4354,7 +4354,7 @@ runTest(
         })
 
         var ac = new AbortController()
-        var s = sync_resource(url, { signal: ac.signal, on_update: () => {} })
+        var s = reliable_update_channel(url, { signal: ac.signal, on_update: () => {} })
         await new Promise(r => setTimeout(r, 200))   // let subscription establish
 
         // Fire 3 parallel PUTs. First hits 500 (fails fast); other two
@@ -4407,7 +4407,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource put: on_warning is called for non-silent status codes",
+    "reliable_update_channel put: on_warning is called for non-silent status codes",
     async () => {
         var key_suffix = 'put_warn_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4421,7 +4421,7 @@ runTest(
 
         var warnings = []
         var ac = new AbortController()
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
@@ -4437,7 +4437,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource put: does not warn on silent-retry status codes",
+    "reliable_update_channel put: does not warn on silent-retry status codes",
     async () => {
         var key_suffix = 'put_silent_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4451,7 +4451,7 @@ runTest(
 
         var warnings = []
         var ac = new AbortController()
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
@@ -4467,7 +4467,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource put: honors Retry-After header",
+    "reliable_update_channel put: honors Retry-After header",
     async () => {
         var key_suffix = 'put_retry_after_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4482,7 +4482,7 @@ runTest(
 
         var warnings = []
         var ac = new AbortController()
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
@@ -4505,7 +4505,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource put: times out and retries if PUT never responds",
+    "reliable_update_channel put: times out and retries if PUT never responds",
     async () => {
         var key_suffix = 'put_timeout_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4519,7 +4519,7 @@ runTest(
 
         var ac = new AbortController()
         // Short put_timeout so the test runs fast
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             on_update: () => {},
             put_timeout: 1  // 1 second
@@ -4542,7 +4542,7 @@ runTest(
 )
 
 runTest(
-    "sync_resource forwards user-supplied headers to GET and PUT",
+    "reliable_update_channel forwards user-supplied headers to GET and PUT",
     async () => {
         var key_suffix = 'headers_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4555,7 +4555,7 @@ runTest(
         })
 
         var ac = new AbortController()
-        var s = sync_resource(url, {
+        var s = reliable_update_channel(url, {
             signal: ac.signal,
             // Use custom headers only — browsers forbid JS from setting
             // Cookie, Host, etc. via fetch(), so we can't test those here.
@@ -4589,14 +4589,14 @@ runTest(
 )
 
 runTest(
-    "sync_resource warns and aborts on subscription parse errors",
+    "reliable_update_channel warns and aborts on subscription parse errors",
     async () => {
         var warnings = []
         var on_error_called_with = null
         var ac = new AbortController()
 
         var shutdown_promise = new Promise(resolve => {
-            sync_resource(baseUrl + '/parse_error', {
+            reliable_update_channel(baseUrl + '/parse_error', {
                 signal: ac.signal,
                 on_warning: msg => warnings.push(msg),
                 on_error: err => {

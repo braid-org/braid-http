@@ -176,9 +176,9 @@ The callback receives an object with only the fields relevant to the event:
 - `{online: false, error}` — the subscription went offline, with the error/reason for disconnection
 
 
-## `sync_resource`: reliable sync in one call
+## `reliable_update_channel`: reliable sync in one call
 
-`sync_resource(url, options)` is a higher-level API built on top of
+`reliable_update_channel(url, options)` is a higher-level API built on top of
 `braid_fetch` that gives you a reliably-synced subscription plus a PUT queue
 that survives network failures. It implements the [Reliable Updates
 spec](https://braid.org/protocol/reliable-updates): it reconnects
@@ -198,8 +198,8 @@ var channel = reliable_update_channel('https://braid.org/chat', {
         // Apply the update to your local state
     },
     on_status: ({online, outstanding_puts}) => {},
-    on_warning: (msg) => console.warn('sync_resource:', msg),
-    on_error:   (err) => console.error('sync_resource shut down:', err)
+    on_warning: (msg) => console.warn('reliable_update_channel:', msg),
+    on_error:   (err) => console.error('reliable_update_channel shut down:', err)
 })
 
 // PUTs are queued and retried automatically. The returned promise
@@ -220,7 +220,7 @@ channel.close()
 | `signal`      | —            | `AbortSignal`. When it aborts, the subscription stops, the PUT queue is drained with rejections, and no further retries happen. |
 | `on_update`   | —            | `(update) => ...`. Called for each update received on the subscription. Same shape as `braid_fetch`'s subscribe callback. |
 | `on_warning`  | `console.warn` | `(msg) => ...`. Called for unexpected-but-recoverable conditions (e.g. a 500 on a PUT retry, or a parse error that triggers shutdown). |
-| `on_error`    | —            | `(err) => ...`. Called once when `sync_resource` shuts itself down due to a fatal condition (e.g. a subscription parse error). Not called when the caller aborts `signal`. |
+| `on_error`    | —            | `(err) => ...`. Called once when `reliable_update_channel` shuts itself down due to a fatal condition (e.g. a subscription parse error). Not called when the caller aborts `signal`. |
 | `parents`     | —            | Array or callback returning the latest versions the client knows about. Called fresh on every reconnect so the server can resume from the right point. |
 | `headers`     | —            | Extra HTTP headers to include on every GET and PUT (e.g. `Cookie`, `Authorization`, `Accept`). Per-PUT `headers` passed through `put()` override these on conflicts. |
 | `heartbeats`  | `20`         | Heartbeat period in seconds. Sent as the `Heartbeats` request header; if the server echoes it back and the client doesn't see any bytes for `1.2 × heartbeats + 3` seconds, it reconnects. |
@@ -228,7 +228,7 @@ channel.close()
 
 ### Returned API
 
-`sync_resource()` returns `{ put }`:
+`reliable_update_channel()` returns `{ put }`:
 
 - **`put(update)`** — enqueues a PUT. `update` is whatever you'd pass to
   `braid_fetch` for a PUT (e.g. `{version, parents, patches}` or
@@ -238,7 +238,7 @@ channel.close()
 
 ### What the spec gets you
 
-Once you've wired up `sync_resource`, you get the reliable-updates
+Once you've wired up `reliable_update_channel`, you get the reliable-updates
 behaviors for free:
 
 - **Auto-reconnection with backoff.** First failure retries after 1s;
@@ -265,7 +265,7 @@ behaviors for free:
   callback is invoked fresh, so the server picks up from wherever your
   application's state actually is.
 - **Parse-error shutdown.** If the subscription stream contains
-  un-parseable bytes, `sync_resource` warns, calls `on_error`, and stops
+  un-parseable bytes, `reliable_update_channel` warns, calls `on_error`, and stops
   retrying — the stream is corrupt and reconnecting won't fix it.
 
 

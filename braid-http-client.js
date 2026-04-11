@@ -1467,7 +1467,7 @@ function concat_buffers(buffers) {
     return x
 }
 
-function sync_resource (url, {
+function reliable_update_channel (url, {
     signal,
     on_update,
     on_warning,
@@ -1488,7 +1488,7 @@ function sync_resource (url, {
 
     var warn = (msg) => {
         if (on_warning) on_warning(msg)
-        else console.warn('sync_resource:', msg)
+        else console.warn('reliable_update_channel:', msg)
     }
 
     // Captive-portal-ish fetch failures get a plain console.log,
@@ -1572,7 +1572,7 @@ function sync_resource (url, {
                     // as "won't be fixed by reconnecting" — primarily
                     // subscription parse errors (corrupt stream) and
                     // user-code exceptions thrown from on_update. Warn and
-                    // shut down the whole sync_resource.
+                    // shut down the whole reliable_update_channel.
                     if (err?.dont_retry) {
                         warn('subscription error: ' + err.message)
                         return shutdown(err)
@@ -1602,7 +1602,7 @@ function sync_resource (url, {
 
     aborter.signal.addEventListener('abort', () => {
         for (var entry of put_queue)
-            entry.reject(new Error('sync_resource aborted'))
+            entry.reject(new Error('reliable_update_channel aborted'))
         put_queue.clear()
     })
 
@@ -1741,5 +1741,5 @@ if (typeof module !== 'undefined' && module.exports)
         parse_update,
         parse_headers,
         parse_body,
-        sync_resource
+        reliable_update_channel
     }

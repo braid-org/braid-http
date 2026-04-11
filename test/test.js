@@ -8,7 +8,7 @@ const {braidify, free_cors} = require('../braid-http-server.js')
 const https = require('../braid-http-client.js').http(require('https'))
 const braid_fetch = require('../braid-http-client.js').fetch
 const multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
-const sync_resource = require('../braid-http-client.js').sync_resource
+const reliable_update_channel = require('../braid-http-client.js').reliable_update_channel
 const {create_braid_text} = require('braid-text')
 
 // Parse command line arguments
@@ -840,7 +840,7 @@ async function runConsoleTests() {
         test_update: { ...test_update, status: "200" },
         multiplex_fetch,
         braid_fetch: wrappedBraidFetch,
-        sync_resource,
+        reliable_update_channel,
         baseUrl: `https://localhost:${port}`  // For building expected values in tests
     })
 

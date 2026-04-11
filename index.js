@@ -7,7 +7,7 @@ var client = require('./braid-http-client'),
 
 module.exports = {
     fetch: client.fetch,
-    sync_resource: client.sync_resource,
+    reliable_update_channel: client.reliable_update_channel,
     http_client: client.http,
     http_server: server.braidify,
     free_cors: server.free_cors

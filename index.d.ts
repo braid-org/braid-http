@@ -9,7 +9,7 @@ export declare function free_cors(res: ServerResponse): void;
 
 export declare function fetch(url: string, params?: Record<string, any>): Promise<Response>;
 
-export declare function sync_resource(url: string, options?: {
+export declare function reliable_update_channel(url: string, options?: {
     signal?: AbortSignal;
     on_update?: (update: any) => void;
     on_warning?: (msg: string) => void;
