@@ -4599,6 +4599,82 @@ runTest(
     JSON.stringify({warned: true, on_error_fired: true, error_has_parse_message: true})
 )
 
+runTest(
+    "reliable_update_channel on_status reports online transitions",
+    async () => {
+        var key_suffix = 'status_online_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // First GET returns 500, so we go: offline → reconnect → online
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 500}; res.end('ok')`
+        })
+
+        var statuses = []
+        var s
+        var got_update = new Promise(resolve => {
+            s = reliable_update_channel(url, {
+                on_update: () => resolve(),
+                on_status: (status) => statuses.push({...status}),
+                on_warning: () => {}
+            })
+        })
+
+        await got_update
+        s.close()
+
+        // We expect: first on_status with online:true when the retry
+        // succeeds (the initial connect never goes online, so there's
+        // no offline transition for it).
+        return JSON.stringify({
+            went_online: statuses.some(s => s.online === true),
+            has_statuses: statuses.length >= 1
+        })
+    },
+    JSON.stringify({went_online: true, has_statuses: true})
+)
+
+runTest(
+    "reliable_update_channel on_status reports outstanding_puts",
+    async () => {
+        var url = baseUrl + '/braid-text-test/status_puts_' + Math.random().toString(36).slice(2)
+
+        var statuses = []
+        var s = reliable_update_channel(url, {
+            on_update: () => {},
+            on_status: (status) => statuses.push({...status})
+        })
+
+        // Wait for subscription to establish
+        await new Promise(r => setTimeout(r, 200))
+
+        // Fire a PUT and wait for it to complete
+        await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
+        s.close()
+
+        // We should see outstanding_puts go to 1 (enqueued) then back
+        // to 0 (completed).
+        var saw_one = statuses.some(s => s.outstanding_puts === 1)
+        var saw_zero_after = false
+        for (var i = 0; i < statuses.length; i++) {
+            if (statuses[i].outstanding_puts === 1) {
+                for (var j = i + 1; j < statuses.length; j++) {
+                    if (statuses[j].outstanding_puts === 0) { saw_zero_after = true; break }
+                }
+                break
+            }
+        }
+
+        return JSON.stringify({
+            saw_enqueued: saw_one,
+            saw_completed: saw_zero_after
+        })
+    },
+    JSON.stringify({saw_enqueued: true, saw_completed: true})
+)
+
 }
 
 // Export for both Node.js and browser

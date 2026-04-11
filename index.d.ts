@@ -11,6 +11,7 @@ export declare function fetch(url: string, params?: Record<string, any>): Promis
 
 export declare function reliable_update_channel(url: string, options?: {
     on_update?: (update: any) => void;
+    on_status?: (status: { online: boolean; outstanding_puts: number }) => void;
     on_warning?: (msg: string) => void;
     on_error?: (err: Error) => void;
     reconnect_from_parents?: string[] | (() => string[] | null | undefined);

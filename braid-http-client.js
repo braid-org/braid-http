@@ -1469,6 +1469,7 @@ function concat_buffers(buffers) {
 
 function reliable_update_channel (url, {
     on_update,
+    on_status,
     on_warning,
     on_error,
     reconnect_from_parents,
@@ -1510,6 +1511,10 @@ function reliable_update_channel (url, {
         on_error?.(err)
     }
 
+    // Status tracking
+    var online = false
+    var notify_status = () => on_status?.({online, outstanding_puts: put_queue.size})
+
     // ============================================================
     // Single channel: subscription + PUT queue
     //
@@ -1527,9 +1532,15 @@ function reliable_update_channel (url, {
         for (var entry of put_queue)
             entry.reject(new Error('reliable_update_channel aborted'))
         put_queue.clear()
+        notify_status()
     })
 
-    reconnector(aborter.signal, delay, async (inner_signal, reconnect, on_success) => {
+    reconnector(aborter.signal, delay, async (inner_signal, raw_reconnect, on_success) => {
+
+        var reconnect = (err) => {
+            if (online) { online = false; notify_status() }
+            raw_reconnect(err)
+        }
 
         // ── Heartbeat timer ──────────────────────────────────────
         // Starts as a no-op; armed after we confirm the server echoed
@@ -1561,6 +1572,7 @@ function reliable_update_channel (url, {
             }
 
             on_success()
+            online = true; notify_status()
             if (res.headers.get('heartbeats')) {
                 reset_heartbeat_timer = () => {
                     clearTimeout(heartbeat_timer)
@@ -1632,6 +1644,7 @@ function reliable_update_channel (url, {
                 // of whether inner_signal was aborted in the meantime.
                 on_success()
                 put_queue.delete(entry)
+                notify_status()
                 entry.resolve(r)
             } catch (err) {
                 if (inner_signal.aborted || timed_out) return
@@ -1670,6 +1683,7 @@ function reliable_update_channel (url, {
             return new Promise((resolve, reject) => {
                 var entry = {update, resolve, reject}
                 put_queue.add(entry)
+                notify_status()
                 fire_one(entry)
             })
         },
