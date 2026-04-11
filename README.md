@@ -199,7 +199,10 @@ var channel = reliable_update_channel('https://braid.org/chat', {
     },
     on_status: ({online, outstanding_puts}) => {},
     on_warning: (msg) => console.warn('reliable_update_channel:', msg),
-    on_error:   (err) => console.error('reliable_update_channel shut down:', err)
+    on_error:   (err) => console.error('reliable_update_channel shut down:', err),
+    get_headers: {},
+    put_headers: {},
+    timeout: 30
 })
 
 // PUTs are queued and retried automatically. The returned promise
