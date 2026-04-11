@@ -1513,26 +1513,34 @@ function reliable_update_channel (url, {
     }
 
     // ============================================================
-    // GET / subscription
+    // Single channel: subscription + PUT queue
     //
-    // We ask the server (e.g. braid-text) to emit data every `heartbeats`
-    // seconds via a Heartbeats header. If we don't see any bytes (updates
-    // or heartbeats) for 1.2 * heartbeats + 3 seconds, we assume the
-    // connection is dead and reconnect. on_heartbeat fires on every byte
-    // received.
+    // One reconnector manages both the GET subscription and the PUT
+    // queue. If anything fails (subscription error, PUT error,
+    // heartbeat timeout, PUT timeout) the entire channel is torn down
+    // and rebuilt: the subscription reconnects and any queued PUTs
+    // are re-fired.
     // ============================================================
     var heartbeat_timeout_ms = (1.2 * heartbeats + 3) * 1000
+    var put_queue = new Set()    // entries: {update, resolve, reject}
+    var fire_one
+
+    aborter.signal.addEventListener('abort', () => {
+        for (var entry of put_queue)
+            entry.reject(new Error('reliable_update_channel aborted'))
+        put_queue.clear()
+    })
 
     reconnector(aborter.signal, delay, async (inner_signal, reconnect, on_success) => {
-        // Starts as a no-op and is reassigned to the real timer-setting
-        // function only after we confirm the server echoed a Heartbeats
-        // response header. braid_fetch fires on_heartbeat on every byte
-        // regardless of server agreement, so without this gating we'd
-        // start a heartbeat deadline even when the server isn't sending
-        // heartbeats.
+
+        // ── Heartbeat timer ──────────────────────────────────────
+        // Starts as a no-op; armed after we confirm the server echoed
+        // the Heartbeats header.
         var heartbeat_timer = null
         var reset_heartbeat_timer = () => {}
+        inner_signal.addEventListener('abort', () => clearTimeout(heartbeat_timer))
 
+        // ── Subscription (GET) ───────────────────────────────────
         try {
             var res = await braid_fetch(url, {
                 subscribe: true,
@@ -1583,33 +1591,11 @@ function reliable_update_channel (url, {
         } catch (err) {
             if (inner_signal.aborted) return
             note_fetch_error(err)
-            reconnect(err)
+            return reconnect(err)
         }
-    })
 
-    // ============================================================
-    // PUT queue
-    //
-    // Each put() enqueues an entry and (if we're not currently waiting
-    // for a retry) fires it off immediately. All in-flight PUTs share a
-    // single inner_signal so that if any one fails, reconnect() aborts
-    // them all, waits, and then fires a fresh attempt. The next attempt
-    // re-fires the whole queue in insertion order. If any PUT succeeds,
-    // that counts as a successful connect and resets the retry delay.
-    // ============================================================
-    var put_queue = new Set()    // entries: {update, resolve, reject}
-    var fire_one
-
-    aborter.signal.addEventListener('abort', () => {
-        for (var entry of put_queue)
-            entry.reject(new Error('reliable_update_channel aborted'))
-        put_queue.clear()
-    })
-
-    reconnector(aborter.signal, delay, async (inner_signal, reconnect, on_success) => {
-        // While probing, new put() calls enqueue but don't fire — they'll
-        // be picked up by the fan-out after the probe succeeds. This is
-        // attempt-local so it always starts false on a fresh attempt.
+        // ── PUT queue ────────────────────────────────────────────
+        // While probing, new put() calls enqueue but don't fire.
         var probing = false
 
         var fire_core = async (entry) => {
@@ -1666,12 +1652,9 @@ function reliable_update_channel (url, {
             fire_core(entry)
         }
 
-        // Per the reliable-updates spec: when retrying a non-empty queue
-        // after a failure, first probe with a single PUT and wait for it
-        // to succeed before firing the rest in parallel. This avoids a
-        // thundering-herd of doomed PUTs if the server is still sick. On
-        // the initial connect the queue is empty, so this is a no-op and
-        // new put()s fan out normally via fire_one from the put() method.
+        // Probe-first: on reconnect, send one PUT and wait for it to
+        // succeed before fanning out the rest. On initial connect the
+        // queue is empty, so this is a no-op.
         var first = put_queue.values().next().value
         if (first) {
             probing = true
