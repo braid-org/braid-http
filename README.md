@@ -257,13 +257,12 @@ behaviors for free:
 - **Heartbeat liveness detection.** The client asks the server to emit
   data every `heartbeats` seconds; if it doesn't, the connection is
   considered dead and gets re-established.
-- **PUT queue with probe-first retries.** PUTs are fired in parallel. If
-  any in-flight PUT fails, all siblings are aborted and the queue is
-  retried — starting with a single probe PUT. The rest fan out only
-  after the probe succeeds, avoiding a thundering-herd of doomed PUTs
-  against a still-sick server.
-- **Per-PUT timeouts.** If a PUT hangs longer than `put_timeout` seconds,
-  it's aborted and the queue is retried.
+- **PUT queue with automatic retries.** PUTs are fired in parallel. If
+  any failure occurs (subscription drop, PUT error, heartbeat or PUT
+  timeout), the entire channel is torn down and rebuilt. Queued PUTs
+  wait for the subscription to come back online before re-sending.
+- **Per-PUT timeouts.** If a PUT hangs longer than `timeout` seconds,
+  the channel is torn down and reconnected.
 - **Resume from your latest version.** On every reconnect, the `parents`
   callback is invoked fresh, so the server picks up from wherever your
   application's state actually is.

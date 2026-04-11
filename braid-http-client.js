@@ -1526,7 +1526,7 @@ function reliable_update_channel (url, {
     // ============================================================
     var heartbeat_timeout_ms = (1.2 * timeout + 3) * 1000
     var put_queue = new Set()    // entries: {update, resolve, reject}
-    var fire_one
+    var fire                    // set to current connection's fire function once online
 
     aborter.signal.addEventListener('abort', () => {
         for (var entry of put_queue)
@@ -1605,10 +1605,7 @@ function reliable_update_channel (url, {
         }
 
         // ── PUT queue ────────────────────────────────────────────
-        // While probing, new put() calls enqueue but don't fire.
-        var probing = false
-
-        var fire_core = async (entry) => {
+        fire = async (entry) => {
             if (inner_signal.aborted) return
             // Per the spec: each PUT has a timeout. If it doesn't
             // complete in time, trigger reconnect which aborts all
@@ -1655,27 +1652,8 @@ function reliable_update_channel (url, {
             }
         }
 
-        // User-facing: put() calls this after enqueueing. If we're
-        // probing, do nothing — the entry stays queued and will be fired
-        // when the probe succeeds.
-        fire_one = (entry) => {
-            if (probing) return
-            fire_core(entry)
-        }
-
-        // Probe-first: on reconnect, send one PUT and wait for it to
-        // succeed before fanning out the rest. On initial connect the
-        // queue is empty, so this is a no-op.
-        var first = put_queue.values().next().value
-        if (first) {
-            probing = true
-            await fire_core(first)
-            probing = false
-            // Fire anything still queued (the probe entry was removed on
-            // success, or everything's still here on failure — in which
-            // case inner_signal is aborted and fire_core is a no-op).
-            for (var entry of put_queue) fire_core(entry)
-        }
+        // Fire any queued PUTs now that we're online.
+        for (var entry of put_queue) fire(entry)
     })
 
     return {
@@ -1684,7 +1662,7 @@ function reliable_update_channel (url, {
                 var entry = {update, resolve, reject}
                 put_queue.add(entry)
                 notify_status()
-                fire_one(entry)
+                if (online) fire(entry)
             })
         },
         close () { aborter.abort() }

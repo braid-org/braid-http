@@ -4322,9 +4322,9 @@ runTest(
 )
 
 runTest(
-    "reliable_update_channel probe-first: retry fires a single PUT before fanning out",
+    "reliable_update_channel retries all queued PUTs in parallel after reconnect",
     async () => {
-        var key_suffix = 'probe_' + Math.random().toString(36).slice(2)
+        var key_suffix = 'fanout_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
         var url = baseUrl + full_key
 
@@ -4356,40 +4356,34 @@ runTest(
         // other two hit the 200ms delay, ~300ms is plenty). Then reset the
         // concurrency tracker so we only measure the retry phase.
         await new Promise(r => setTimeout(r, 400))
-        var reset_res = await fetch('/eval', {
+        await fetch('/eval', {
             method: 'POST',
             body: `
                 var c = global.braid_text_put_concurrency[${JSON.stringify(full_key)}]
-                var initial_max = c.max
                 c.max = c.current
-                res.end(String(initial_max))
+                res.end('ok')
             `
         })
-        var initial_max = parseInt(await reset_res.text())
 
-        // Let the retry run to completion (1s delay + probe 200ms + fan-out 200ms).
+        // Let the retry run to completion (1s delay + fan-out 200ms).
         await puts
         await new Promise(r => setTimeout(r, 100))
         channel.close()
 
-        // Read the retry-phase max.
+        // Read the retry-phase max concurrency.
         var retry_res = await fetch('/eval', {
             method: 'POST',
             body: `res.end(String(global.braid_text_put_concurrency[${JSON.stringify(full_key)}].max))`
         })
         var retry_max = parseInt(await retry_res.text())
 
-        // With probe-first, retry_max should be at most 2: the probe runs
-        // alone (max=1), and after it succeeds the remaining 2 PUTs fan
-        // out in parallel (max=2). Without probe-first, all 3 would fire
-        // in parallel and retry_max would be 3.
-        void initial_max  // unused; kept for debugging
+        // All 3 queued PUTs should fan out in parallel after the GET
+        // comes back online — no probe step.
         return JSON.stringify({
-            retry_max_at_most_2: retry_max <= 2,
-            retry_max_at_least_1: retry_max >= 1
+            all_fired_in_parallel: retry_max === 3
         })
     },
-    JSON.stringify({retry_max_at_most_2: true, retry_max_at_least_1: true})
+    JSON.stringify({all_fired_in_parallel: true})
 )
 
 runTest(
