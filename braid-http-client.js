@@ -1468,7 +1468,6 @@ function concat_buffers(buffers) {
 }
 
 function reliable_update_channel (url, {
-    signal,
     on_update,
     on_warning,
     on_error,
@@ -1499,11 +1498,10 @@ function reliable_update_channel (url, {
     }
 
     // Internal abort controller — aborting this shuts down both the GET
-    // reconnector and the PUT queue. It aborts when the caller's signal
-    // aborts (user-initiated shutdown) or when shutdown() is called
-    // (self-initiated shutdown due to a fatal error like a parse error).
+    // reconnector and the PUT queue. It aborts when the caller calls
+    // close() or when shutdown() is called (self-initiated shutdown due
+    // to a fatal error like a parse error).
     var aborter = new AbortController()
-    signal?.addEventListener('abort', () => aborter.abort())
     var shut_down = false
     var shutdown = (err) => {
         if (shut_down) return
@@ -1674,7 +1672,8 @@ function reliable_update_channel (url, {
                 put_queue.add(entry)
                 fire_one(entry)
             })
-        }
+        },
+        close () { aborter.abort() }
     }
 }
 

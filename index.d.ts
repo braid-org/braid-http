@@ -10,7 +10,6 @@ export declare function free_cors(res: ServerResponse): void;
 export declare function fetch(url: string, params?: Record<string, any>): Promise<Response>;
 
 export declare function reliable_update_channel(url: string, options?: {
-    signal?: AbortSignal;
     on_update?: (update: any) => void;
     on_warning?: (msg: string) => void;
     on_error?: (err: Error) => void;
@@ -20,6 +19,7 @@ export declare function reliable_update_channel(url: string, options?: {
     put_timeout?: number;
 }): {
     put(update: Record<string, any>): Promise<Response>;
+    close(): void;
 };
 
 export declare function http_client(httpModule: any): any;

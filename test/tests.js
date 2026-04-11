@@ -4015,7 +4015,6 @@ addSectionHeader("reliable_update_channel Tests")
 runTest(
     "reliable_update_channel receives updates via on_update and put sends a PUT",
     async () => {
-        var ac = new AbortController()
         var url = baseUrl + '/braid-text-test/reliable_update_channel_' + Math.random().toString(36).slice(2)
         var update_count = 0
         var resolve_second
@@ -4025,7 +4024,6 @@ runTest(
         // Subscribe — braid-text sends an initial empty update, then
         // our PUT should trigger a second update with the patch
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_update: update => {
                 update_count++
                 if (update_count === 2) resolve_second(update)
@@ -4040,7 +4038,7 @@ runTest(
         })
 
         var second_update = await got_second
-        ac.abort()
+        s.close()
 
         return JSON.stringify({
             put_ok: r.ok,
@@ -4062,18 +4060,16 @@ runTest(
             body: `global.braid_text_fail_first_get[${JSON.stringify('/braid-text-test/' + key_suffix)}] = true; res.end('ok')`
         })
 
-        var ac = new AbortController()
-
         // Subscribe — first attempt should fail with 500, then retry ~1s later and succeed
+        var s
         var got_update = new Promise(resolve => {
-            reliable_update_channel(url, {
-                signal: ac.signal,
+            s = reliable_update_channel(url, {
                 on_update: update => resolve(update)
             })
         })
 
         var update = await got_update
-        ac.abort()
+        s.close()
 
         // We successfully reconnected after a failure — the update we got is
         // the initial (empty) update from braid-text on the retried connection
@@ -4095,12 +4091,10 @@ runTest(
             body: `global.braid_text_fail_first_put[${JSON.stringify(full_key)}] = true; res.end('ok')`
         })
 
-        var ac = new AbortController()
         var updates_body = []
 
         // Subscribe so we can observe the eventual state
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_update: update => {
                 if (update.body_text !== undefined) updates_body.push(update.body_text)
                 else if (update.patches) updates_body.push('patches')
@@ -4121,7 +4115,7 @@ runTest(
 
         // Give the subscription a moment to receive the final state
         await new Promise(r => setTimeout(r, 300))
-        ac.abort()
+        s.close()
 
         return JSON.stringify({
             all_ok: results.every(r => r.ok),
@@ -4138,14 +4132,12 @@ runTest(
         // With heartbeats: 0.5, the timeout is 1.2*0.5+3 = 3.6s, so after
         // ~3.6s of silence we should reconnect and receive the initial
         // update a second time.
-        var ac = new AbortController()
         var update_count = 0
         var got_second
 
         var second_update_promise = new Promise(resolve => { got_second = resolve })
 
-        reliable_update_channel(baseUrl + '/noheartbeat', {
-            signal: ac.signal,
+        var s = reliable_update_channel(baseUrl + '/noheartbeat', {
             heartbeats: 0.5,
             on_update: update => {
                 update_count++
@@ -4161,7 +4153,7 @@ runTest(
                 setTimeout(() => reject(new Error('timeout')), 10000))
         ])
 
-        ac.abort()
+        s.close()
         return '' + (update_count >= 2)
     },
     'true'
@@ -4181,17 +4173,16 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
+        var s
         var got_update = new Promise(resolve => {
-            reliable_update_channel(url, {
-                signal: ac.signal,
+            s = reliable_update_channel(url, {
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
             })
         })
 
         await got_update
-        ac.abort()
+        s.close()
 
         return '' + warnings.some(w => /500/.test(w))
     },
@@ -4212,17 +4203,16 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
+        var s
         var got_update = new Promise(resolve => {
-            reliable_update_channel(url, {
-                signal: ac.signal,
+            s = reliable_update_channel(url, {
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
             })
         })
 
         await got_update
-        ac.abort()
+        s.close()
 
         return '' + (warnings.length === 0)
     },
@@ -4244,11 +4234,10 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
+        var s
         var start = Date.now()
         var got_update = new Promise(resolve => {
-            reliable_update_channel(url, {
-                signal: ac.signal,
+            s = reliable_update_channel(url, {
                 on_warning: msg => warnings.push(msg),
                 on_update: () => resolve()
             })
@@ -4256,7 +4245,7 @@ runTest(
 
         await got_update
         var elapsed = Date.now() - start
-        ac.abort()
+        s.close()
 
         // Without Retry-After, we'd reconnect after 1s. With Retry-After: 2,
         // the reconnect should happen ~2s after the first failure, so
@@ -4299,9 +4288,7 @@ runTest(
             return latest_parents
         }
 
-        var ac = new AbortController()
-        reliable_update_channel(url, {
-            signal: ac.signal,
+        var s = reliable_update_channel(url, {
             reconnect_from_parents: parents_cb,
             on_warning: () => {},   // silence the expected 500 warning
             on_update: () => {}
@@ -4316,7 +4303,7 @@ runTest(
         // once — but that's enough: first GET is rigged, second hits
         // braid-text on an empty key which ignores the parents header).
         await new Promise(r => setTimeout(r, 1500))
-        ac.abort()
+        s.close()
 
         // Read back what the server saw
         var log_res = await fetch('/eval', {
@@ -4353,8 +4340,7 @@ runTest(
             `
         })
 
-        var ac = new AbortController()
-        var s = reliable_update_channel(url, { signal: ac.signal, on_update: () => {} })
+        var s = reliable_update_channel(url, { on_update: () => {} })
         await new Promise(r => setTimeout(r, 200))   // let subscription establish
 
         // Fire 3 parallel PUTs. First hits 500 (fails fast); other two
@@ -4384,7 +4370,7 @@ runTest(
         // Let the retry run to completion (1s delay + probe 200ms + fan-out 200ms).
         await puts
         await new Promise(r => setTimeout(r, 100))
-        ac.abort()
+        s.close()
 
         // Read the retry-phase max.
         var retry_res = await fetch('/eval', {
@@ -4420,16 +4406,14 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
         })
         await new Promise(r => setTimeout(r, 200))  // let subscription establish
 
         await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
-        ac.abort()
+        s.close()
 
         return '' + warnings.some(w => /500/.test(w))
     },
@@ -4450,16 +4434,14 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
         })
         await new Promise(r => setTimeout(r, 200))
 
         await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
-        ac.abort()
+        s.close()
 
         return '' + (warnings.length === 0)
     },
@@ -4481,9 +4463,7 @@ runTest(
         })
 
         var warnings = []
-        var ac = new AbortController()
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_warning: msg => warnings.push(msg),
             on_update: () => {}
         })
@@ -4492,7 +4472,7 @@ runTest(
         var start = Date.now()
         await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
         var elapsed = Date.now() - start
-        ac.abort()
+        s.close()
 
         // Without Retry-After, retry would be ~1s. With Retry-After: 2,
         // elapsed should be at least ~1800ms (allowing slack).
@@ -4517,10 +4497,8 @@ runTest(
             body: `global.braid_text_hang_first_put[${JSON.stringify(full_key)}] = true; res.end('ok')`
         })
 
-        var ac = new AbortController()
         // Short put_timeout so the test runs fast
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             on_update: () => {},
             put_timeout: 1  // 1 second
         })
@@ -4529,7 +4507,7 @@ runTest(
         var start = Date.now()
         var r = await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
         var elapsed = Date.now() - start
-        ac.abort()
+        s.close()
 
         // The first PUT hangs, timing out after ~1s, then there's a 1s
         // retry delay, then the second PUT succeeds. Expect elapsed ~2s.
@@ -4554,9 +4532,7 @@ runTest(
             body: `global.braid_text_headers_log[${JSON.stringify(full_key)}] = []; res.end('ok')`
         })
 
-        var ac = new AbortController()
         var s = reliable_update_channel(url, {
-            signal: ac.signal,
             // Use custom headers only — browsers forbid JS from setting
             // Cookie, Host, etc. via fetch(), so we can't test those here.
             headers: {
@@ -4567,7 +4543,7 @@ runTest(
         })
         await new Promise(r => setTimeout(r, 200))
         await s.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]})
-        ac.abort()
+        s.close()
 
         // Read back what the server saw.
         var log_res = await fetch('/eval', {
@@ -4593,11 +4569,10 @@ runTest(
     async () => {
         var warnings = []
         var on_error_called_with = null
-        var ac = new AbortController()
+        var s
 
         var shutdown_promise = new Promise(resolve => {
-            reliable_update_channel(baseUrl + '/parse_error', {
-                signal: ac.signal,
+            s = reliable_update_channel(baseUrl + '/parse_error', {
                 on_warning: msg => warnings.push(msg),
                 on_error: err => {
                     on_error_called_with = err
@@ -4613,7 +4588,7 @@ runTest(
             new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('timeout')), 5000))
         ])
-        ac.abort()
+        s.close()
 
         return JSON.stringify({
             warned: warnings.some(w => /Parse error/i.test(w)),
