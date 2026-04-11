@@ -197,6 +197,7 @@ var channel = reliable_update_channel('https://braid.org/chat', {
         if (update.version) current_version = update.version
         // Apply the update to your local state
     },
+    on_status: ({online, outstanding_puts}) => {},
     on_warning: (msg) => console.warn('sync_resource:', msg),
     on_error:   (err) => console.error('sync_resource shut down:', err)
 })
