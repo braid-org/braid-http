@@ -1472,7 +1472,7 @@ function reliable_update_channel (url, {
     on_update,
     on_warning,
     on_error,
-    parents,
+    reconnect_from_parents,
     headers: extra_headers,
     heartbeats = 20,
     put_timeout = heartbeats
@@ -1546,7 +1546,7 @@ function reliable_update_channel (url, {
                 subscribe: true,
                 signal: inner_signal,
                 headers: {'Heartbeats': heartbeats, ...extra_headers},
-                parents,
+                parents: reconnect_from_parents,
                 on_heartbeat: () => reset_heartbeat_timer()
             })
 

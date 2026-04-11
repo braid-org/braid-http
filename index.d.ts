@@ -14,7 +14,7 @@ export declare function reliable_update_channel(url: string, options?: {
     on_update?: (update: any) => void;
     on_warning?: (msg: string) => void;
     on_error?: (err: Error) => void;
-    parents?: string[] | (() => string[] | null | undefined);
+    reconnect_from_parents?: string[] | (() => string[] | null | undefined);
     headers?: Record<string, string>;
     heartbeats?: number;
     put_timeout?: number;

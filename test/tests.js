@@ -4302,7 +4302,7 @@ runTest(
         var ac = new AbortController()
         reliable_update_channel(url, {
             signal: ac.signal,
-            parents: parents_cb,
+            reconnect_from_parents: parents_cb,
             on_warning: () => {},   // silence the expected 500 warning
             on_update: () => {}
         })
