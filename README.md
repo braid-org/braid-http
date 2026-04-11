@@ -187,14 +187,12 @@ honors `Retry-After`, warns on unexpected status codes, and aborts on
 unrecoverable errors.
 
 ```javascript
-var { sync_resource } = require('braid-http')
+var { reliable_update_channel } = require('braid-http')
 
-var ac = new AbortController()
 var current_version = []
 
-var s = sync_resource('https://braid.org/chat', {
-    signal: ac.signal,
-    parents: () => current_version,
+var channel = reliable_update_channel('https://braid.org/chat', {
+    reconnect_from_parents: () => current_version,
     on_update: (update) => {
         if (update.version) current_version = update.version
         // Apply the update to your local state
@@ -205,14 +203,13 @@ var s = sync_resource('https://braid.org/chat', {
 
 // PUTs are queued and retried automatically. The returned promise
 // resolves when the server has acknowledged this specific PUT.
-await s.put({
+await channel.put({
     version: ['me-1'],
     patches: [{unit: 'text', range: '[0:0]', content: 'hello'}]
 })
 
-// Shut everything down (stops the subscription and rejects any
-// pending PUTs) by aborting the signal you passed in:
-ac.abort()
+// Shut down the controller
+channel.close()
 ```
 
 ### Options
