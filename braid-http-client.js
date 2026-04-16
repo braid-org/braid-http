@@ -1475,11 +1475,17 @@ function reliable_update_channel (url, {
     reconnect_from_parents,
     get_headers,
     put_headers,
-    timeout = 20
+    timeout = 20,
+
+    // undocumented:
+    no_retry_status_codes, // status codes that should error out
 } = {}) {
     // Per the reliable-updates spec, these subscription response codes
     // indicate a transient failure we should retry without warning.
     var silent_retry_codes = new Set([309, 408, 425, 429, 432, 502, 503, 504])
+
+    // Status codes that we should NOT retry:
+    no_retry_status_codes = new Set(no_retry_status_codes || [])
 
     // Delay for the next reconnect attempt. If the server sent a Retry-After
     // header (seconds), honor that. Otherwise use our 1s / 3s backoff.
@@ -1563,8 +1569,10 @@ function reliable_update_channel (url, {
             // codes (and any response with Retry-After) retry silently; the
             // rest emit a warning including the status code, then retry.
             if (res.status !== 209) {
-                var ra = parseFloat(res.headers.get('retry-after'))
                 var err = new Error(`status ${res.status}`)
+                if (no_retry_status_codes.has(res.status))
+                    return shutdown(err)
+                var ra = parseFloat(res.headers.get('retry-after'))
                 if (isFinite(ra)) err.retry_after_ms = ra * 1000
                 if (!silent_retry_codes.has(res.status) && !isFinite(ra))
                     warn(`subscription got unexpected status ${res.status}`)
@@ -1629,8 +1637,10 @@ function reliable_update_channel (url, {
                 // Retry-After) reconnect silently; other non-2xx status
                 // codes warn and reconnect.
                 if (r.status < 200 || r.status >= 300) {
-                    var ra = parseFloat(r.headers.get('retry-after'))
                     var err = new Error(`status ${r.status}`)
+                    if (no_retry_status_codes.has(r.status))
+                        return shutdown(err)
+                    var ra = parseFloat(r.headers.get('retry-after'))
                     if (isFinite(ra)) err.retry_after_ms = ra * 1000
                     if (!silent_retry_codes.has(r.status) && !isFinite(ra))
                         warn(`put got unexpected status ${r.status}`)

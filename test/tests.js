@@ -4673,6 +4673,72 @@ runTest(
     JSON.stringify({saw_enqueued: true, saw_completed: true})
 )
 
+runTest(
+    "reliable_update_channel no_retry_status_codes shuts down on matching GET status",
+    async () => {
+        var key_suffix = 'no_retry_get_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Make the first GET return 403
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_get_status[${JSON.stringify(full_key)}] = {status: 403}; res.end('ok')`
+        })
+
+        var errors = []
+        var channel
+        var got_error = new Promise(resolve => {
+            channel = reliable_update_channel(url, {
+                on_update: () => {},
+                on_error: err => { errors.push(err); resolve() },
+                no_retry_status_codes: [403]
+            })
+        })
+
+        await got_error
+        channel.close()
+
+        return '' + (errors.length === 1 && /403/.test(errors[0].message))
+    },
+    'true'
+)
+
+runTest(
+    "reliable_update_channel no_retry_status_codes shuts down on matching PUT status",
+    async () => {
+        var key_suffix = 'no_retry_put_' + Math.random().toString(36).slice(2)
+        var full_key = '/braid-text-test/' + key_suffix
+        var url = baseUrl + full_key
+
+        // Make the first PUT return 403
+        await fetch('/eval', {
+            method: 'POST',
+            body: `global.braid_text_first_put_status[${JSON.stringify(full_key)}] = {status: 403}; res.end('ok')`
+        })
+
+        var errors = []
+        var channel
+        var got_error = new Promise(resolve => {
+            channel = reliable_update_channel(url, {
+                on_update: () => {},
+                on_error: err => { errors.push(err); resolve() },
+                no_retry_status_codes: [403]
+            })
+        })
+
+        await new Promise(r => setTimeout(r, 200))  // let subscription establish
+
+        // The PUT should trigger shutdown, not retry
+        channel.put({patches: [{unit: 'text', range: '[0:0]', content: 'x'}]}).catch(() => {})
+        await got_error
+        channel.close()
+
+        return '' + (errors.length === 1 && /403/.test(errors[0].message))
+    },
+    'true'
+)
+
 }
 
 // Export for both Node.js and browser
