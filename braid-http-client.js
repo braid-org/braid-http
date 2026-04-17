@@ -1533,6 +1533,7 @@ function reliable_update_channel (url, {
     var heartbeat_timeout_ms = (1.2 * timeout + 3) * 1000
     var put_queue = new Set()    // entries: {update, resolve, reject}
     var fire                    // set to current connection's fire function once online
+    var reconnect               // set to current connection's reconnect function
 
     aborter.signal.addEventListener('abort', () => {
         for (var entry of put_queue)
@@ -1543,7 +1544,7 @@ function reliable_update_channel (url, {
 
     reconnector(aborter.signal, delay, async (inner_signal, raw_reconnect, on_success) => {
 
-        var reconnect = (err) => {
+        reconnect = (err) => {
             if (online) { online = false; notify_status() }
             raw_reconnect(err)
         }
@@ -1675,7 +1676,8 @@ function reliable_update_channel (url, {
                 if (online) fire(entry)
             })
         },
-        close () { aborter.abort() }
+        close () { aborter.abort() },
+        reconnect () { reconnect?.(new Error('manual reconnect')) }
     }
 }
 

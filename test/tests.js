@@ -4739,6 +4739,52 @@ runTest(
     'true'
 )
 
+runTest(
+    "reliable_update_channel reconnect() triggers a fresh reconnection",
+    async () => {
+        var url = baseUrl + '/braid-text-test/manual_reconnect_' + Math.random().toString(36).slice(2)
+
+        var parents_call_count = 0
+        var statuses = []
+        var channel
+        var first_online = new Promise(resolve => {
+            channel = reliable_update_channel(url, {
+                on_update: () => {},
+                reconnect_from_parents: () => { parents_call_count++; return [] },
+                on_status: (status) => {
+                    statuses.push({...status})
+                    if (status.online) resolve()
+                }
+            })
+        })
+
+        await first_online
+        var calls_before = parents_call_count
+        var online_count_before = statuses.filter(s => s.online).length
+
+        // Manually trigger a reconnect
+        channel.reconnect()
+
+        // Wait for it to come back online
+        await new Promise(resolve => {
+            var check = () => {
+                if (statuses.filter(s => s.online).length > online_count_before) resolve()
+                else setTimeout(check, 50)
+            }
+            check()
+        })
+
+        channel.close()
+
+        return JSON.stringify({
+            parents_called_again: parents_call_count > calls_before,
+            went_offline_then_online: statuses.some(s => !s.online) &&
+                statuses.filter(s => s.online).length >= 2
+        })
+    },
+    JSON.stringify({parents_called_again: true, went_offline_then_online: true})
+)
+
 }
 
 // Export for both Node.js and browser
