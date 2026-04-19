@@ -417,6 +417,35 @@ function createTestServer() {
             return
         }
 
+        // Test patch: vs patches: wire format
+        if (req.url === '/test_patches_n_trigger' && req.method === 'GET' && req.subscribe) {
+            res.startSubscription()
+
+            // Single patch via patch: (should inline, no Patches: N)
+            res.sendUpdate({
+                version: ['v1'],
+                patch: {unit: 'text', range: '[0:0]', content: 'hello'},
+            })
+
+            // Single patch via patches: array (should use Patches: 1)
+            res.sendUpdate({
+                version: ['v2'],
+                patches: [{unit: 'text', range: '[0:0]', content: 'world'}],
+            })
+
+            // Multiple patches via patches: array (should use Patches: 2)
+            res.sendUpdate({
+                version: ['v3'],
+                patches: [
+                    {unit: 'text', range: '[0:0]', content: 'a'},
+                    {unit: 'text', range: '[1:1]', content: 'b'},
+                ],
+            })
+
+            setTimeout(() => res.end(), 100)
+            return
+        }
+
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
             if (req.headers.check_patch_content_text) {

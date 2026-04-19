@@ -2,11 +2,7 @@ var assert = require('assert')
 
 // Writes patches in pseudoheader format.
 //
-//   The `patches` argument can be:
-//     - Array of patches
-//     - A single patch
-//
-//   Multiple patches are generated like:
+//   If using_patches_n, we generate patches like:
 //
 //       Patches: n
 //
@@ -18,32 +14,28 @@ var assert = require('assert')
 //       content-length: x
 //       ...
 //
-//   A single patch is generated like:
+//   Else, we have a single patch, and generate it like:
 //
 //       content-length: 21
 //       content-range: json .range
 //
 //       {"some": "json object"}
 //
-function write_patches (res, patches) {
-    // `patches` must be a patch object or an array of patch objects
-    //  - Object:  {unit, range, content}
+function write_patches (res, patches, using_patches_n) {
+    // `patches` must be an array of patch objects
     //  - Array:  [{unit, range, content}, ...]
 
-    if (typeof patches !== 'object')
-        console.error('We got bad patches!', {patches})
-
     assert(patches)
-    assert(typeof patches === 'object')  // An array is also an object
+    assert(typeof patches === 'object' && Array.isArray(patches))
 
-    // An array of one patch behaves like a single patch
-    if (Array.isArray(patches)) {
+    if (using_patches_n) {
         // Add `Patches: N` and `Content-Type: message/http-patches' if array
         res.write('Content-Type: message/http-patches\r\n')
         res.write(`Patches: ${patches.length}\r\n\r\n`)
-    } else
-        // Else, we'll out put a single patch
-        patches = [patches]
+    }
+    else
+        // Else, we'll output a single patch
+        assert(patches.length === 1)
 
     // Generate each patch
     patches.forEach((patch, i) => {
@@ -756,7 +748,8 @@ function braidify (req, res, next) {
 }
 
 async function send_update(res, data, url, peer) {
-    var {version, parents, patches, patch, body, status, encoding} = data
+    var {version, parents, patches, patch, body, status, encoding, content_type} = data
+    // Note: What the heck is this `encoding` field about above?  Where is it used?
 
     if (status) {
         assert(typeof status === 'number', 'sendUpdate: status must be a number')
@@ -781,12 +774,21 @@ async function send_update(res, data, url, peer) {
     // Validate the body and patches
     assert(!(patch && patches),
            'sendUpdate: cannot have both `update.patch` and `update.patches` set')
-    assert(!(body && patches),
+    assert(!(body && (patches || patch)),
            'sendUpdate: cannot have both `update.body` and `update.patch(es)')
     assert(!patches || Array.isArray(patches),
            'sendUpdate: `patches` provided is not array')
-    if (patch)
-        patches = patch
+
+    // Now the caller has specified EITHER `patch:` or `patches:`.  IFF he
+    // specified the latter, we will ultimately output a "Patches: N" block,
+    // rather than a single inlined patch.
+    var using_patches_n = !!patches
+
+    // Now we will stop using the `patch` form, and only use `patches`.
+    if (patch) {
+        patches = [patch]  // Use this now
+        patch = NaN        // Don't use this variable anymore
+    }
 
     // Validate body format
     if (body !== undefined) {
@@ -795,22 +797,28 @@ async function send_update(res, data, url, peer) {
     }
 
     // Validate patches format
-    if (patches !== undefined) {
-        // Now `patches` will be an array of patches
-        //
-        // This distinction is used in write_patches() to determine whether
-        // to inline a single patch in the update body vs. writing out a
-        // Patches: N block.
-        assert(typeof patches === 'object')
-        for (let p of Array.isArray(patches) ? patches : [patch]) {
+    if (patches) {
+        assert(typeof patches === 'object' && Array.isArray(patches))
+        for (let p of patches) {
             assert('unit' in p)
             assert('range' in p)
             assert('content' in p)
             assert(typeof p.content === 'string'
                    || get_binary_length(p.content) != null)
+
+            // And convert two things:
+            //   - Convert blobs to... what?   Because... why?  What is this?
             if (typeof Blob !== 'undefined' && p.content instanceof Blob)
                 p.content = await p.content.arrayBuffer()
+            //   - Move content-type onto each patch if using_patches_n
+            if (using_patches_n && content_type)
+                p['content-type'] = content_type
         }
+    }
+    if (using_patches_n) {
+        // Clear content_type, because we moved it onto the patches
+        content_type = undefined
+        delete data.content_type
     }
 
     // To send a response without a body, we just send an empty body
@@ -819,7 +827,7 @@ async function send_update(res, data, url, peer) {
 
     var reason =
         status === 200 ? 'OK'
-        : 404 ? 'Not Found'
+        : status === 404 ? 'Not Found'
         : 'Unknown'
     if (res.isSubscription && !encoding) res.write(`HTTP ${status} ${reason}\r\n`)
 
@@ -845,6 +853,10 @@ async function send_update(res, data, url, peer) {
             value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         }
 
+        // Convert content_type into content-type
+        else if (header === 'content_type')
+            header = 'content-type'
+
         // We don't output patches or body yet
         else if (header === 'patches' || header === 'body' || header === 'patch')
             continue
@@ -860,7 +872,7 @@ async function send_update(res, data, url, peer) {
         set_header(encoding ? 'Length' : 'Content-Length', length)
         write_body(binary)
     } else
-        write_patches(res, patches)
+        write_patches(res, patches, using_patches_n)
 
     // Add a newline to prepare for the next version
     // See also https://github.com/braid-org/braid-spec/issues/73

@@ -2191,7 +2191,7 @@ runTest(
         x[1].headers = Object.fromEntries([...x[1].headers])
         return JSON.stringify(x)
     },
-    `["${baseUrl}/json",{"headers":{"parents":"\\"test\\""},"signal":{}},{}]`
+    `["${baseUrl}/json",{"url":"${baseUrl}/json","headers":{"parents":"\\"test\\""},"signal":{}},{}]`
 )
 
 runTest(
@@ -4008,6 +4008,70 @@ runTest(
         return '' + (ct !== 'message/http-patches')
     },
     'true'
+)
+
+addSectionHeader("Server patch: vs patches: wire format")
+
+runTest(
+    "patch: (singular) inlines without Patches: N",
+    async () => {
+        var raw = ''
+        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var reader = r.body.getReader()
+        while (true) {
+            var {done, value} = await reader.read()
+            if (done) break
+            raw += new TextDecoder().decode(value)
+        }
+        // v1 uses patch: (singular) — should NOT have "Patches:" in its section
+        var v1_section = raw.split('HTTP 200 OK')[1]
+        var has_patches_header = v1_section.split('HTTP 200 OK')[0].includes('Patches:')
+        var has_content_range = v1_section.split('HTTP 200 OK')[0].includes('Content-Range:')
+        return JSON.stringify({has_patches_header, has_content_range})
+    },
+    JSON.stringify({has_patches_header: false, has_content_range: true})
+)
+
+runTest(
+    "patches: (array of 1) uses Patches: 1",
+    async () => {
+        var raw = ''
+        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var reader = r.body.getReader()
+        while (true) {
+            var {done, value} = await reader.read()
+            if (done) break
+            raw += new TextDecoder().decode(value)
+        }
+        // v2 is the second update — uses patches: array of 1
+        var sections = raw.split('HTTP 200 OK')
+        var v2_section = sections[2].split('HTTP 200 OK')[0]
+        var has_patches_1 = v2_section.includes('Patches: 1')
+        var has_message_http_patches = v2_section.includes('Content-Type: message/http-patches')
+        return JSON.stringify({has_patches_1, has_message_http_patches})
+    },
+    JSON.stringify({has_patches_1: true, has_message_http_patches: true})
+)
+
+runTest(
+    "patches: (array of 2) uses Patches: 2",
+    async () => {
+        var raw = ''
+        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var reader = r.body.getReader()
+        while (true) {
+            var {done, value} = await reader.read()
+            if (done) break
+            raw += new TextDecoder().decode(value)
+        }
+        // v3 is the third update — uses patches: array of 2
+        var sections = raw.split('HTTP 200 OK')
+        var v3_section = sections[3]
+        var has_patches_2 = v3_section.includes('Patches: 2')
+        var has_message_http_patches = v3_section.includes('Content-Type: message/http-patches')
+        return JSON.stringify({has_patches_2, has_message_http_patches})
+    },
+    JSON.stringify({has_patches_2: true, has_message_http_patches: true})
 )
 
 addSectionHeader("reliable_update_channel Tests")

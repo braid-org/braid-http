@@ -134,8 +134,24 @@ if (is_nodejs) {
 
 braid_fetch.set_fetch = f => normal_fetch = f
 
+// Global event listeners for debugging/devtools
+var braid_fetch_listeners = {}
+braid_fetch.on = (event, cb) => {
+    if (!braid_fetch_listeners[event]) braid_fetch_listeners[event] = []
+    braid_fetch_listeners[event].push(cb)
+}
+braid_fetch.off = (event, cb) => {
+    var list = braid_fetch_listeners[event]
+    if (list) braid_fetch_listeners[event] = list.filter(x => x !== cb)
+}
+braid_fetch.emit = (event, data) => {
+    for (var cb of braid_fetch_listeners[event] || [])
+        try { cb(data) } catch (e) { console.error('braid_fetch ' + event + ' listener error:', e) }
+}
+
 async function braid_fetch (url, params = {}) {
     params = deep_copy(params) // Copy params, because we'll mutate it
+    params.url = url
 
     // Initialize the headers object
     if (!params.headers)
@@ -346,6 +362,16 @@ async function braid_fetch (url, params = {}) {
                 // panel.
                 params.onFetch?.(url, params, underlying_aborter)
 
+                // Global debug events
+                braid_fetch.emit('bytes-out', {req: params})
+                // Every PUT is an update. PATCH/POST may also be updates
+                // in the future, but nobody uses those yet in practice.
+                if (params.method === 'PUT')
+                    braid_fetch.emit('update-out', {req: params, update: {
+                        version: params.version, parents: params.parents,
+                        patches: params.patches, body: params.body
+                    }})
+
                 // Now we run the original fetch....
 
                 // try multiplexing if the multiplex flag is set, and conditions are met
@@ -393,25 +419,43 @@ async function braid_fetch (url, params = {}) {
                         // TODO: check if this needs a return
                         throw new Error('This response\'s body has already been read', res)
 
+                    {
+                        // Emit synthetic bytes for the initial response headers
+                        var status_text = {
+                            200:'OK', 201:'Created', 204:'No Content',
+                            209:'Multiresponse', 304:'Not Modified',
+                            400:'Bad Request', 401:'Unauthorized', 403:'Forbidden',
+                            404:'Not Found', 409:'Conflict', 500:'Internal Server Error'
+                        }[res.status] || ''
+                        var response_line = `HTTP/1.1 ${res.status} ${status_text}\r\n`
+                        res.headers.forEach((v, k) => { response_line += `${k}: ${v}\r\n` })
+                        response_line += '\r\n'
+                        braid_fetch.emit('bytes-in', {
+                            req: params, res,
+                            bytes: new TextEncoder().encode(response_line)
+                        })
+                    }
+
                     // Parse the streamed response
                     handle_fetch_stream(
                         res.body,
 
                         // Each time something happens, we'll either get a new
-                        // version back, or an error.
+                        // update back, or an error.
                         async (result, err) => {
                             if (!err) {
                                 // check whether we aborted
                                 if (original_signal?.aborted)
                                     throw create_error('already aborted', {name: 'AbortError'})
 
-                                // Yay!  We got a new version!  Tell the callback!
+                                // Yay!  We got a new update!  Tell the callback!
+                                braid_fetch.emit('update-in', {req: params, res, update: result})
                                 try {
                                     await cb(result)
                                 } catch (e) {
                                     // This error is happening in the users code,
-                                    // so retrying the connection
-                                    // will probably still fail
+                                    // so retrying the connection will probably
+                                    // still fail.
                                     e.dont_retry = true
                                     throw e
                                 }
@@ -425,6 +469,7 @@ async function braid_fetch (url, params = {}) {
                             on_heartbeat()
                             params.on_heartbeat?.()
                             params.onBytes?.(...args)
+                            braid_fetch.emit('bytes-in', {req: params, res, bytes: args[0]})
                         }
                     )
                 }
@@ -1467,19 +1512,19 @@ function concat_buffers(buffers) {
     return x
 }
 
-function reliable_update_channel (url, {
-    on_update,
-    on_status,
-    on_warning,
-    on_error,
-    reconnect_from_parents,
-    get_headers,
-    put_headers,
-    timeout = 20,
+function reliable_update_channel (url, {on_update,
+                                        on_status,
+                                        on_warning,
+                                        on_error,
+                                        reconnect_from_parents,
+                                        get_headers,
+                                        put_headers,
+                                        timeout = 20,
 
-    // undocumented:
-    no_retry_status_codes, // status codes that should error out
-} = {}) {
+                                        // undocumented:
+                                        no_retry_status_codes, // status codes that should error out
+                                       } = {}) {
+
     // Per the reliable-updates spec, these subscription response codes
     // indicate a transient failure we should retry without warning.
     var silent_retry_codes = new Set([309, 408, 425, 429, 432, 502, 503, 504])
@@ -1592,7 +1637,12 @@ function reliable_update_channel (url, {
                 reset_heartbeat_timer()
             }
             res.subscribe(
-                update => on_update?.(update),
+                update => {
+                    // Mirror the server's content-type into PUT headers
+                    var type = update.extra_headers?.['content-type']
+                    if (type) put_headers['Content-Type'] = type
+                    on_update?.(update)
+                },
                 err => {
                     if (inner_signal.aborted) return
                     // dont_retry marks errors the stream code has flagged
