@@ -29,8 +29,8 @@ function write_patches (res, patches, using_patches_n) {
     assert(typeof patches === 'object' && Array.isArray(patches))
 
     if (using_patches_n) {
-        // Add `Patches: N` and `Content-Type: message/http-patches' if array
-        res.write('Content-Type: message/http-patches\r\n')
+        // Add `Patches: N` and `Content-Type: application/http-patches' if array
+        res.write(`Content-Type: application/http-patches; count=${patches.length}\r\n`)
         res.write(`Patches: ${patches.length}\r\n\r\n`)
     }
     else
@@ -342,7 +342,7 @@ function braidify (req, res, next) {
         // that FireFox doesn't try to sniff the content-type on a stream and
         // hang forever waiting for 512 bytes (see firefox issue
         // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313)
-        res.setHeader('Content-Type', 'message/http-sequence')
+        res.setHeader('Content-Type', 'application/http-sequence')
 
         // And we don't want any caches trying to store these stream bodies.
         res.setHeader('Cache-Control', 'no-store')
@@ -747,9 +747,17 @@ function braidify (req, res, next) {
     next && next()
 }
 
-async function send_update(res, data, url, peer) {
-    var {version, parents, patches, patch, body, status, encoding, content_type} = data
-    // Note: What the heck is this `encoding` field about above?  Where is it used?
+async function send_update(res, update, url, peer) {
+    // Normalize all headers in update to lowercase
+    update = Object.fromEntries(
+        Object.entries(update)
+            .map(([k, v]) => [k.toLowerCase(), v])
+    )
+
+    var {version, parents, patches, patch, body, status, encoding} = update
+    // Note: This ^^ `encoding` field is wrong!  It's used for the dt encoding
+    // in braid-text, but that should be content-encoding or transfer-encoding
+    // or x-transfer-encoding.
 
     if (status) {
         assert(typeof status === 'number', 'sendUpdate: status must be a number')
@@ -769,7 +777,7 @@ async function send_update(res, data, url, peer) {
         write_binary(res, body)
     }
 
-    // console.log('Sending Update', {url, peer, data, subscription: res.isSubscription})
+    // console.log('Sending Update', {url, peer, update, subscription: res.isSubscription})
 
     // Validate the body and patches
     assert(!(patch && patches),
@@ -806,20 +814,29 @@ async function send_update(res, data, url, peer) {
             assert(typeof p.content === 'string'
                    || get_binary_length(p.content) != null)
 
-            // And convert two things:
-            //   - Convert blobs to... what?   Because... why?  What is this?
+            // And convert blobs to... what?   Because... why?  What is this?
             if (typeof Blob !== 'undefined' && p.content instanceof Blob)
                 p.content = await p.content.arrayBuffer()
-            //   - Move content-type onto each patch if using_patches_n
-            if (using_patches_n && content_type)
-                p['content-type'] = content_type
+
+            // //   - Move content-type onto each patch if using_patches_n
+            // if (using_patches_n && content_type)
+            //     p['content-type'] = content_type
         }
     }
-    if (using_patches_n) {
-        // Clear content_type, because we moved it onto the patches
-        content_type = undefined
-        delete data.content_type
+
+    if (using_patches_n && update['content-type']) {
+        // Clear content_type, because it will get clobbered in write_patches()
+        console.warn('braid-http: content-type ' + update['content-type']
+                     + ' ignored on update with multiple patches'
+                     + ' (of type application/http-patches)')
+        delete update['content-type']
     }
+
+    // if (using_patches_n) {
+    //     // Clear content_type, because we moved it onto the patches
+    //     content_type = undefined
+    //     delete update.content_type
+    // }
 
     // To send a response without a body, we just send an empty body
     if (!patches && !body)
@@ -832,8 +849,7 @@ async function send_update(res, data, url, peer) {
     if (res.isSubscription && !encoding) res.write(`HTTP ${status} ${reason}\r\n`)
 
     // Write the headers or virtual headers
-    for (var [header, value] of Object.entries(data)) {
-        header = header.toLowerCase()
+    for (var [header, value] of Object.entries(update)) {
 
         // A header set to undefined acts like it wasn't set
         if (value === undefined)
@@ -852,10 +868,6 @@ async function send_update(res, data, url, peer) {
             header = 'Parents'               // Capitalize for prettiness
             value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         }
-
-        // Convert content_type into content-type
-        else if (header === 'content_type')
-            header = 'content-type'
 
         // We don't output patches or body yet
         else if (header === 'patches' || header === 'body' || header === 'patch')

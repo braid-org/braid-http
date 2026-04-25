@@ -3980,10 +3980,10 @@ runTest(
     'first\nsecond\n'
 )
 
-addSectionHeader("Content-Type: message/http-patches Tests")
+addSectionHeader("Content-Type: application/http-patches Tests")
 
 runTest(
-    "Multi-patch PUT sends Content-Type: message/http-patches",
+    "Multi-patch PUT sends Content-Type: application/http-patches",
     async () => {
         var r = await fetch('/json_echo_content_type', {
             method: 'PUT',
@@ -3994,18 +3994,18 @@ runTest(
         })
         return await r.text()
     },
-    'message/http-patches'
+    'application/http-patches; count=2'
 )
 
 runTest(
-    "Single-patch PUT does not send Content-Type: message/http-patches",
+    "Single-patch PUT does not send Content-Type: application/http-patches",
     async () => {
         var r = await fetch('/json_echo_content_type', {
             method: 'PUT',
             patches: {unit: 'text', range: '[0:0]', content: 'a'}
         })
-        var ct = await r.text()
-        return '' + (ct !== 'message/http-patches')
+        var type = await r.text()
+        return '' + !type.startsWith('application/http-patches')
     },
     'true'
 )
@@ -4047,7 +4047,7 @@ runTest(
         var sections = raw.split('HTTP 200 OK')
         var v2_section = sections[2].split('HTTP 200 OK')[0]
         var has_patches_1 = v2_section.includes('Patches: 1')
-        var has_message_http_patches = v2_section.includes('Content-Type: message/http-patches')
+        var has_message_http_patches = v2_section.includes('Content-Type: application/http-patches')
         return JSON.stringify({has_patches_1, has_message_http_patches})
     },
     JSON.stringify({has_patches_1: true, has_message_http_patches: true})
@@ -4068,7 +4068,7 @@ runTest(
         var sections = raw.split('HTTP 200 OK')
         var v3_section = sections[3]
         var has_patches_2 = v3_section.includes('Patches: 2')
-        var has_message_http_patches = v3_section.includes('Content-Type: message/http-patches')
+        var has_message_http_patches = v3_section.includes('Content-Type: application/http-patches')
         return JSON.stringify({has_patches_2, has_message_http_patches})
     },
     JSON.stringify({has_patches_2: true, has_message_http_patches: true})

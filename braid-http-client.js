@@ -213,7 +213,8 @@ async function braid_fetch (url, params = {}) {
         // Multiple patches get sent within a Patches: N block
         else {
             params.headers.set('Patches', params.patches.length)
-            params.headers.set('Content-Type', 'message/http-patches')
+            params.headers.set('Content-Type', 'application/http-patches; count='
+                                                + params.patches.length)
             let bufs = []
             let te = new TextEncoder()
             for (let patch of params.patches) {
@@ -384,6 +385,8 @@ async function braid_fetch (url, params = {}) {
                     res = await multiplex_fetch(url, params, mux_params)
                 } else
                     res = await normal_fetch(url, params)
+
+                braid_fetch.emit('response', {req: params, res})
 
                 // And customize the response with a couple methods for getting
                 // the braid subscription data:
@@ -644,11 +647,12 @@ var subscription_parser = (cb) => ({
             // Maybe we parsed an update!  That's cool!
             if (this.state.result === 'success') {
                 var update = {
-                    version: this.state.version,
-                    parents: this.state.parents,
-                    body:    this.state.body,
-                    patches: this.state.patches,
-                    status:  this.state.status,
+                    version:      this.state.version,
+                    parents:      this.state.parents,
+                    body:         this.state.body,
+                    patches:      this.state.patches,
+                    status:       this.state.status,
+                    content_type: this.state.content_type,
 
                     // Output extra_headers if there are some
                     extra_headers: extra_headers(this.state.headers)
@@ -728,10 +732,15 @@ function parse_update (state) {
             return state
         }
 
-        state.headers = parsed.headers
-        state.version = state.headers.version
-        state.parents = state.headers.parents
-        state.status  = state.headers[':status']
+        state.headers       = parsed.headers
+        state.version       = state.headers.version
+        state.parents       = state.headers.parents
+        state.status        = state.headers[':status']
+        state.content_type  = state.headers['content-type']
+
+        // Ignore the patches content-type, because we expect and handle it
+        if (state.content_type?.startsWith('application/http-patches'))
+            delete state.content_type
 
         // Take the parsed headers out of the buffer
         state.input = parsed.input
@@ -846,11 +855,11 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
             headers.patches = JSON.parse(headers.patches)
     }
 
-    // If we have Patches: N, verify that we have the right content-type set
-    if ('patches' in headers
-        && headers['content-type'] !== 'message/http-patches')
-        console.warn('braid-http: update with Patches: ' + headers.patches
-                     + ' is missing Content-Type: message/http-patches.  Has Content-Type: ' + JSON.stringify(headers['content-type']))
+    // // If we have Patches: N, verify that we have the right content-type set
+    // if ('patches' in headers
+    //     && !(headers['content-type'].startsWith('application/http-patches'))
+    //     console.warn('braid-http: update with Patches: ' + headers.patches
+    //                  + ' is missing Content-Type: application/http-patches.  Has Content-Type: ' + JSON.stringify(headers['content-type']))
 
     // Update the input
     input = input.slice(end)
@@ -1014,8 +1023,8 @@ function extra_headers (headers) {
     var result = Object.assign({}, headers)
 
     // Remove the non-extra parts
-    var known_headers = ['version', 'parents', 'patches',
-                         'content-length', 'content-range', 'content-type', ':status']
+    var known_headers = ['version', 'parents', 'patches', ':status',
+                         'content-length', 'content-range', 'content-type']
     for (var i = 0; i < known_headers.length; i++)
         delete result[known_headers[i]]
 
@@ -1621,7 +1630,7 @@ function reliable_update_channel (url, {on_update,
                 var ra = parseFloat(res.headers.get('retry-after'))
                 if (isFinite(ra)) err.retry_after_ms = ra * 1000
                 if (!silent_retry_codes.has(res.status) && !isFinite(ra))
-                    warn(`subscription got unexpected status ${res.status}`)
+                    warn(`subscription to ${url} got unexpected status ${res.status}`)
                 return reconnect(err)
             }
 
