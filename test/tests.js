@@ -1,17 +1,17 @@
 // Shared test definitions that work in both Node.js and browser environments
 // This file exports a function that takes a test runner and context
 
-function defineTests(runTest, context) {
-    var { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, baseUrl } = context
-    // baseUrl is empty in browser, 'https://localhost:${port}' in console tests
-    baseUrl = baseUrl || ''
+function define_tests(run_test, context) {
+    var { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url } = context
+    // base_url is empty in browser, 'https://localhost:${port}' in console tests
+    base_url = base_url || ''
 
-addSectionHeader("Multiplexing Tests")
+add_section_header("Multiplexing Tests")
 
 var multiplex_version = '1.0'
 braid_fetch.enable_multiplex = {}
 
-runTest(
+run_test(
     "Basic MULTIPLEX method test.",
     async () => {
         await fetch('/eval', {
@@ -30,9 +30,9 @@ runTest(
     true
 )
 
-waitForTests(() => {})
+wait_for_tests(() => {})
 
-runTest(
+run_test(
     "Test multiplexing with Express middleware endpoint",
     async () => {
         var a = new AbortController()
@@ -59,7 +59,7 @@ runTest(
     '{"multiplexed":true,"message":"Braidify works as Express middleware!"}'
 )
 
-runTest(
+run_test(
     "Test multiplexing with wrapper function endpoint",
     async () => {
         var a = new AbortController()
@@ -87,7 +87,7 @@ runTest(
     '{"multiplexed":true,"message":"Braidify works as a wrapper function!","version":"wrapper-test-version"}'
 )
 
-runTest(
+run_test(
     "Test that when DELETE gets 404 for multiplexer, it kills the multiplexer",
     async () => {
         var a = new AbortController()
@@ -113,7 +113,7 @@ runTest(
     `false`
 )
 
-runTest(
+run_test(
     "Test that multiplex request sets cache-control: no-store.",
     async () => {
         var a = new AbortController()
@@ -140,7 +140,7 @@ runTest(
     `no-store`
 )
 
-runTest(
+run_test(
     "Test multiplexer timing out because of no requests.",
     async () => {
         var a = new AbortController()
@@ -189,7 +189,7 @@ runTest(
     `t1=true, t2=true, t3=true, t4=false`
 )
 
-runTest(
+run_test(
     "Test retrying MULTIPLEX if duplicate id (with new id).",
     async () => {
         console.log('Test retrying MULTIPLEX if duplicate id (with new id).')
@@ -231,7 +231,7 @@ runTest(
     'is_mux=true, retried=true, fast=true'
 )
 
-runTest(
+run_test(
     "Test retrying MULTIPLEX-POST if duplicate id (with new id).",
     async () => {
         var a = new AbortController()
@@ -274,7 +274,7 @@ runTest(
     'is_mux=true, retried=true, fast=true'
 )
 
-runTest(
+run_test(
     `Test for "Incremental: ?1" header in multiplexer response.`,
     async () => {
         var m = Math.random().toString(36).slice(2)
@@ -284,7 +284,7 @@ runTest(
     '?1'
 )
 
-runTest(
+run_test(
     "Test handling duplicate request id locally",
     async () => {
         var a = new AbortController()
@@ -324,7 +324,7 @@ runTest(
     'same mux = true, same_request: false, fast=true, got update'
 )
 
-runTest(
+run_test(
     "Test falling back to MULTIPLEX well-known url, if method doesn't work.",
     async () => {
         var a = new AbortController()
@@ -343,7 +343,7 @@ runTest(
     'is_mux=true, fast=true'
 )
 
-runTest(
+run_test(
     "Test option to use MULTIPLEX well-known url regardless.",
     async () => {
         var a = new AbortController()
@@ -369,7 +369,7 @@ runTest(
     '2'
 )
 
-runTest(
+run_test(
     "Test that when multiplexer doesn't exist, it returns the proper header.",
     async () => {
         var a = new AbortController()
@@ -381,7 +381,7 @@ runTest(
     true
 )
 
-runTest(
+run_test(
     "Test that multiplexer code handles a full url (rather than relative one).",
     async () => {
         var a1 = new AbortController()
@@ -414,7 +414,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-runTest(
+run_test(
     "Test that multiplexer code handles a full url (rather than relative one) on server.",
     async () => {
         var r = await fetch('/eval', {
@@ -448,7 +448,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-runTest(
+run_test(
     "Test closing unrecognized requests in the multiplexer.",
     async () => {
         var a = new AbortController()
@@ -478,7 +478,7 @@ runTest(
     '2'
 )
 
-runTest(
+run_test(
     "Test receiving multiplexed message.",
     async () => {
         var a = new AbortController()
@@ -504,7 +504,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-runTest(
+run_test(
     "Test receiving multiplexed message's version.",
     async () => {
         var a = new AbortController()
@@ -517,7 +517,7 @@ runTest(
     '"test"'
 )
 
-runTest(
+run_test(
     "Test receiving multiplexed messages with whitespace between them.",
     async () => {
         var a = new AbortController()
@@ -545,7 +545,7 @@ runTest(
     'test1'
 )
 
-runTest(
+run_test(
     "Test receiving multiplexed message using subscription",
     async () => {
         var a1 = new AbortController()
@@ -578,7 +578,7 @@ runTest(
     JSON.stringify(test_update)
 )
 
-runTest(
+run_test(
     "Test closing multiplexer",
     async () => {
         var a = new AbortController()
@@ -603,7 +603,7 @@ runTest(
     'multiplexer ended'
 )
 
-runTest(
+run_test(
     "Test closing multiplexer before headers received",
     async () => {
         var a = new AbortController()
@@ -629,7 +629,7 @@ runTest(
     'Error: multiplex stream ended unexpectedly'
 )
 
-runTest(
+run_test(
     "Test closing multiplexer with retry",
     async () => {
         var ret = ''
@@ -666,7 +666,7 @@ runTest(
     JSON.stringify(test_update) + ', request aborted'
 )
 
-runTest(
+run_test(
     "Test aborting multiplexed subscription.",
     async () => {
         await fetch('/json', {subscribe: true})
@@ -693,7 +693,7 @@ runTest(
     "passed"
 )
 
-runTest(
+run_test(
     "Test ending multiplexed subscription on the server side.",
     async () => {
         var onRes_count = 0
@@ -731,7 +731,7 @@ runTest(
     "onRes_count=2, update_count=2"
 )
 
-runTest(
+run_test(
     "Test retry when first establishinig multiplexer",
     async () => {
         if ((await (await og_fetch('/eval', {
@@ -757,7 +757,7 @@ runTest(
     'multiplexed!'
 )
 
-runTest(
+run_test(
     "Test that server multiplexer can detect closure.",
     async () => {
         var a = new AbortController()
@@ -791,7 +791,7 @@ runTest(
     '42'
 );
 
-runTest(
+run_test(
     "Test failing to establish multiplexed connection.",
     async () => {
         var a = new AbortController()
@@ -809,7 +809,7 @@ runTest(
     'multiplexer failed'
 );
 
-runTest(
+run_test(
     "Test that creating duplicate multiplexed connections fails correctly.",
     async () => {
         var a = new AbortController()
@@ -831,7 +831,7 @@ runTest(
     'status: 409, json.error: Multiplexer already exists, error as expected: true'
 );
 
-runTest(
+run_test(
     "Test that creating duplicate multiplexed requests fails correctly.",
     async () => {
         var a = new AbortController()
@@ -865,7 +865,7 @@ runTest(
     'status: 409, json.error: Request already multiplexed, error as expected: true'
 );
 
-runTest(
+run_test(
     "Test failing to establish multiplexed request.",
     async () => {
         var a = new AbortController()
@@ -883,7 +883,7 @@ runTest(
     'Error: Could not establish multiplexed request'
 );
 
-runTest(
+run_test(
     "Test failing to establish multiplexed request because of version.",
     async () => {
         var a = new AbortController()
@@ -906,7 +906,7 @@ runTest(
     'Error: Could not establish multiplexed request'
 );
 
-runTest(
+run_test(
     "Test that failed DELETE on multiplexed request is caught (no uncaught rejection).",
     async () => {
         var saw_rejection = false
@@ -935,7 +935,7 @@ runTest(
     'error was caught'
 );
 
-runTest(
+run_test(
     "Test header syntax error in multiplexed stream.",
     async () => {
         var a = new AbortController()
@@ -973,7 +973,7 @@ runTest(
     'Error: error parsing headers'
 );
 
-runTest(
+run_test(
     "Test 2nd GET causing multiplexed connection.",
     async () => {
         var a = new AbortController()
@@ -995,7 +995,7 @@ runTest(
     'true'
 );
 
-runTest(
+run_test(
     "Test stream parsing error.",
     async () => {
         var a = new AbortController()
@@ -1023,7 +1023,7 @@ runTest(
     'Parse error in headers: ""HTP 555\\r\\n\\r\\n""'
 );
 
-runTest(
+run_test(
     "Test server getting GET for multiplexer that doesn't exist.",
     async () => {
         var a = new AbortController()
@@ -1061,7 +1061,7 @@ runTest(
     'we got the error we expected'
 );
 
-runTest(
+run_test(
     "Test multiplexed request aborted before GET, on server",
     async () => {
         var a = new AbortController()
@@ -1078,7 +1078,7 @@ runTest(
     '404'
 )
 
-waitForTests(() => {})
+wait_for_tests(() => {})
 
 // Note: The following multiplex_wait tests rely on tight timing (e.g. 5ms
 // delays, 50ms windows) and may fail intermittently in the browser due to
@@ -1086,7 +1086,7 @@ waitForTests(() => {})
 // 293-vs-424 failures, re-run to confirm. We should investigate whether
 // these are real bugs or just flaky timing, and fix either way.
 
-runTest(
+run_test(
     "Test multiplex_wait suppresses 424 when POST arrives within window.",
     async () => {
         var m = Math.random().toString(36).slice(2)
@@ -1116,7 +1116,7 @@ runTest(
     'get_status=293, post_ok=true'
 )
 
-runTest(
+run_test(
     "Test multiplex_wait times out to 424 when POST never arrives.",
     async () => {
         // Set a short wait so the test doesn't take long
@@ -1148,7 +1148,7 @@ runTest(
     'status=424, header=true'
 )
 
-runTest(
+run_test(
     "Test multiplex_wait=0 disables waiting (immediate 424).",
     async () => {
         await fetch('/eval', {
@@ -1181,7 +1181,7 @@ runTest(
     'status=424, fast=true'
 )
 
-runTest(
+run_test(
     "Test multiple requests waiting for same multiplexer via multiplex_wait.",
     async () => {
         // Use a generous wait so the POST's CORS preflight (browser-only)
@@ -1231,7 +1231,7 @@ runTest(
     'r1=293, r2=293'
 )
 
-runTest(
+run_test(
     "Test multiplex_wait has no effect without next (main server).",
     async () => {
         var m = Math.random().toString(36).slice(2)
@@ -1253,9 +1253,9 @@ runTest(
     'status=424, fast=true'
 )
 
-waitForTests(() => {})
+wait_for_tests(() => {})
 
-runTest(
+run_test(
     "Test client asking for multiplexing, but server doesn't realize it.",
     async () => {
         await fetch('/eval', {
@@ -1294,11 +1294,11 @@ runTest(
     'another!'
 )
 
-waitForTests(() => braid_fetch.enable_multiplex = false)
+wait_for_tests(() => braid_fetch.enable_multiplex = false)
 
-addSectionHeader("Express Middleware Tests")
+add_section_header("Express Middleware Tests")
 
-runTest(
+run_test(
     "Test braidify as Express middleware with subscription",
     async () => {
         var a = new AbortController()
@@ -1327,7 +1327,7 @@ runTest(
     'Braidify works as Express middleware!'
 )
 
-runTest(
+run_test(
     "Test braidify as Express middleware without subscription",
     async () => {
         var res = await fetch(`https://localhost:${port + 1}/middleware-test`)
@@ -1337,9 +1337,9 @@ runTest(
     "Braidify works as Express middleware!"
 )
 
-addSectionHeader("Wrapper Function Tests")
+add_section_header("Wrapper Function Tests")
 
-runTest(
+run_test(
     "Test braidify as wrapper function with subscription",
     async () => {
         var a = new AbortController()
@@ -1368,7 +1368,7 @@ runTest(
     'Braidify works as a wrapper function! → This is an update!'
 )
 
-runTest(
+run_test(
     "Test braidify as wrapper function without subscription",
     async () => {
         var res = await fetch(`https://localhost:${port + 2}/wrapper-test`)
@@ -1378,11 +1378,11 @@ runTest(
     "Braidify works as a wrapper function!"
 )
 
-addSectionHeader("braidify.server() Tests")
+add_section_header("braidify.server() Tests")
 
 // braidify.server() attaches to an existing http.Server.  Listens on port+3.
 
-runTest(
+run_test(
     "Test braidify.server with subscription",
     async () => {
         var a = new AbortController()
@@ -1408,7 +1408,7 @@ runTest(
     'Braidify works as server! → This is a server update!'
 )
 
-runTest(
+run_test(
     "Test braidify.server without subscription",
     async () => {
         var res = await fetch(`https://localhost:${port + 3}/server-test`)
@@ -1418,7 +1418,7 @@ runTest(
     "Braidify works as server!"
 )
 
-runTest(
+run_test(
     "Test multiplexing through braidify.server endpoint",
     async () => {
         var a = new AbortController()
@@ -1446,7 +1446,7 @@ runTest(
     '{"multiplexed":true,"message":"Braidify works as server!"}'
 )
 
-runTest(
+run_test(
     // The http2-proxy bug pattern: setting a property on `res` and reading
     // it from inside an event listener on `res`.  Under the old
     // property-forwarding hack this could fail in the multiplex-through
@@ -1483,9 +1483,9 @@ runTest(
     'ok'
 )
 
-addSectionHeader("Server sending binary data with sendUpdate")
+add_section_header("Server sending binary data with sendUpdate")
 
-runTest(
+run_test(
     "Server can send binary body when not subscribing",
     async () => {
         var a = new AbortController()
@@ -1497,7 +1497,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary body as ArrayBuffer",
     async () => {
         var a = new AbortController()
@@ -1515,7 +1515,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary body as Uint8Array",
     async () => {
         var a = new AbortController()
@@ -1533,7 +1533,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary body as Blob",
     async () => {
         var a = new AbortController()
@@ -1551,7 +1551,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary body as Buffer",
     async () => {
         var a = new AbortController()
@@ -1569,7 +1569,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary patch as ArrayBuffer",
     async () => {
         var a = new AbortController()
@@ -1587,7 +1587,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary patch as Uint8Array",
     async () => {
         var a = new AbortController()
@@ -1605,7 +1605,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary patch as Blob",
     async () => {
         var a = new AbortController()
@@ -1624,7 +1624,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send binary patch as Buffer",
     async () => {
         var a = new AbortController()
@@ -1642,7 +1642,7 @@ runTest(
     '0,1,2,3'
 )
 
-runTest(
+run_test(
     "Server can send multiple binary patches as ArrayBuffers",
     async () => {
         var a = new AbortController()
@@ -1662,7 +1662,7 @@ runTest(
     '0,1,2,3,10,11,12,13'
 )
 
-runTest(
+run_test(
     "Server can send multiple binary patches as Uint8Arrays",
     async () => {
         var a = new AbortController()
@@ -1682,7 +1682,7 @@ runTest(
     '0,1,2,3,10,11,12,13'
 )
 
-runTest(
+run_test(
     "Server can send multiple binary patches as Blobs",
     async () => {
         var a = new AbortController()
@@ -1706,7 +1706,7 @@ runTest(
     '0,1,2,3,10,11,12,13'
 )
 
-runTest(
+run_test(
     "Server can send multiple binary patches as Buffers",
     async () => {
         var a = new AbortController()
@@ -1726,9 +1726,9 @@ runTest(
     '0,1,2,3,10,11,12,13'
 )
 
-addSectionHeader("Client sending binary data")
+add_section_header("Client sending binary data")
 
-runTest(
+run_test(
     "Client can PUT single binary patch as ArrayBuffer",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1739,7 +1739,7 @@ runTest(
     '0,1,2,3\n'
 )
 
-runTest(
+run_test(
     "Client can PUT single binary patch as Uint8Array",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1750,7 +1750,7 @@ runTest(
     '0,1,2,3\n'
 )
 
-runTest(
+run_test(
     "Client can PUT multiple binary patches as ArrayBuffers",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1761,7 +1761,7 @@ runTest(
     '0,1,2,3\n10,11,12,13\n'
 )
 
-runTest(
+run_test(
     "Client can PUT multiple binary patches as Uint8Arrays",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1772,7 +1772,7 @@ runTest(
     '0,1,2,3\n10,11,12,13\n'
 )
 
-runTest(
+run_test(
     "Client can PUT multiple binary patches as Blobs",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1783,7 +1783,7 @@ runTest(
     '0,1,2,3\n10,11,12,13\n'
 )
 
-runTest(
+run_test(
     "Client can PUT single patch with unicode text",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1794,7 +1794,7 @@ runTest(
     '🌈👽🎵\n'
 )
 
-runTest(
+run_test(
     "Client can PUT multiple patches with unicode texts",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1805,9 +1805,9 @@ runTest(
     '🌈👽🎵\nHello 🌍!\n'
 )
 
-addSectionHeader("Make sure contents are binary, with property to access as text")
+add_section_header("Make sure contents are binary, with property to access as text")
 
-runTest(
+run_test(
     "Verify client-side patches are binary",
     async () => {
         var a = new AbortController()
@@ -1825,7 +1825,7 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "Verify client-side patches have content_text",
     async () => {
         var a = new AbortController()
@@ -1843,7 +1843,7 @@ runTest(
     '1'
 )
 
-runTest(
+run_test(
     "Verify that content_text can be accessed after overriding content",
     async () => {
         var a = new AbortController()
@@ -1862,7 +1862,7 @@ runTest(
     '1'
 )
 
-runTest(
+run_test(
     "Verify server-side bodies are binary",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1873,7 +1873,7 @@ runTest(
     '123,34,97,34,58,53,125'
 )
 
-runTest(
+run_test(
     "Verify server-side bodies have body_text",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1884,7 +1884,7 @@ runTest(
     '{"a":5}'
 )
 
-runTest(
+run_test(
     "Verify server-side patches are binary",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1895,7 +1895,7 @@ runTest(
     '123,34,97,34,58,53,125\n'
 )
 
-runTest(
+run_test(
     "Verify server-side patches have content_text",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1906,7 +1906,7 @@ runTest(
     '{"a":5}\n'
 )
 
-runTest(
+run_test(
     "Verify server-side 'everything' patches are binary",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1917,7 +1917,7 @@ runTest(
     '123,34,97,34,58,53,125'
 )
 
-runTest(
+run_test(
     "Verify server-side 'everything' patches have content_text",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1928,7 +1928,7 @@ runTest(
     '{"a":5}'
 )
 
-runTest(
+run_test(
     "Verify that body_text can be accessed after overriding body",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1949,7 +1949,7 @@ runTest(
     'undefined'
 )
 
-runTest(
+run_test(
     "Handle client-side undefined body_text without exceptions",
     async () => {
         return '' + await new Promise((resolve, reject) => {
@@ -1969,9 +1969,9 @@ runTest(
     'undefined'
 )
 
-addSectionHeader("Misc")
+add_section_header("Misc")
 
-runTest(
+run_test(
     "Test that startSubscription can detect closure.",
     async () => {
         var a = new AbortController()
@@ -2003,7 +2003,7 @@ runTest(
     '42'
 );
 
-runTest(
+run_test(
     "Test set_fetch",
     async () => {
         var flag_A = false
@@ -2033,7 +2033,7 @@ runTest(
     'flag_A = true, flag_B = true'
 )
 
-runTest(
+run_test(
     "Test version header is parsing prints error on corrupt version",
     async () => {
         var r = await fetch('/eval', {
@@ -2048,7 +2048,7 @@ runTest(
     'undefined'
 )
 
-runTest(
+run_test(
     "Test version header is parsed into res.version",
     async () => {
         var r = await fetch('/eval', {
@@ -2063,7 +2063,7 @@ runTest(
     '["v1"]'
 )
 
-runTest(
+run_test(
     "Test current-version header is parsed into res.version",
     async () => {
         var r = await fetch('/eval', {
@@ -2078,7 +2078,7 @@ runTest(
     '["cv1"]'
 )
 
-runTest(
+run_test(
     "Test version header with multiple versions",
     async () => {
         var r = await fetch('/eval', {
@@ -2093,7 +2093,7 @@ runTest(
     '["v1","v2"]'
 )
 
-runTest(
+run_test(
     "Test res.version is undefined when no version header",
     async () => {
         var r = await fetch('/eval', {
@@ -2107,7 +2107,7 @@ runTest(
     'undefined'
 )
 
-runTest(
+run_test(
     "Test calling subscribe on a non-subscription.",
     async () => {
         return await new Promise(async (resolve, reject) => {
@@ -2125,7 +2125,7 @@ runTest(
     'Error: Got unexpected subscription status code: 200. Expected 209.'
 )
 
-runTest(
+run_test(
     "Verify error in cb stops retry",
     async () => {
         return await new Promise((resolve, reject) => {
@@ -2144,7 +2144,7 @@ runTest(
     'My Error'
 )
 
-runTest(
+run_test(
     "Verify heartbeat error in cb doesn't stop retry",
     async () => {
         return await new Promise((resolve, reject) => {
@@ -2170,7 +2170,7 @@ runTest(
     'did retry!'
 )
 
-runTest(
+run_test(
     "Verify error in async cb stops retry",
     async () => {
         return await new Promise((resolve, reject) => {
@@ -2189,7 +2189,7 @@ runTest(
     'My Error'
 )
 
-runTest(
+run_test(
     "Verify that server sets peer on response object",
     async () => {
         return await (await fetch("/eval", {
@@ -2201,7 +2201,7 @@ runTest(
     'test-peer-123'
 )
 
-runTest(
+run_test(
     "Verify that client writes ASCII versions",
     async () => {
         return await (await fetch("/eval", {
@@ -2213,7 +2213,7 @@ runTest(
     '"hello\\ud83c\\udf0d-0"'
 )
 
-runTest(
+run_test(
     "Verify that server writes ASCII versions",
     async () => {
         var x = await fetch('/json', {headers: {skip_first: true, send_unicode_version: true, giveup: true}})
@@ -2222,7 +2222,7 @@ runTest(
     '"hello\\ud83c\\udf0d-0"'
 )
 
-runTest(
+run_test(
     "Verify that client writes ASCII parents",
     async () => {
         return await (await fetch("/eval", {
@@ -2234,7 +2234,7 @@ runTest(
     '"hello\\ud83c\\udf0d-0", "\\ud83c\\udf08-5"'
 )
 
-runTest(
+run_test(
     "Verify that server writes ASCII parents",
     async () => {
         var x = await fetch('/json', {headers: {skip_first: true, send_unicode_parents: true, giveup: true}})
@@ -2243,7 +2243,7 @@ runTest(
     '"hello\\ud83c\\udf0d-0", "\\ud83c\\udf08-5"'
 )
 
-runTest(
+run_test(
     "Verify that fetch params are not mutated",
     async () => {
         var x = {
@@ -2258,7 +2258,7 @@ runTest(
     'hello'
 )
 
-runTest(
+run_test(
     "Verify content-type with charset=utf-8 is handled correctly",
     async () => {
         var updates = []
@@ -2283,7 +2283,7 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
-runTest(
+run_test(
     "Verify that parents option results in parents header",
     async () => {
         var x = { parents: ["test-0", "test-1"] }
@@ -2293,7 +2293,7 @@ runTest(
     '"test-0", "test-1"'
 )
 
-runTest(
+run_test(
     "Verify that parents option can be a function",
     async () => {
         var x = { parents: ["test-0", "test-1"] }
@@ -2303,7 +2303,7 @@ runTest(
     '"test-0", "test-1"'
 )
 
-runTest(
+run_test(
     "Verify that parents option can be an async function",
     async () => {
         var x = { parents: ["test-0", "test-1"] }
@@ -2314,7 +2314,7 @@ runTest(
 )
 
 
-runTest(
+run_test(
     "onFetch test 1",
     async () => {
         var x = await new Promise(async (done, fail) => {
@@ -2326,10 +2326,10 @@ runTest(
         x[1].headers = Object.fromEntries([...x[1].headers])
         return JSON.stringify(x)
     },
-    `["${baseUrl}/json",{"url":"${baseUrl}/json","headers":{"parents":"\\"test\\""},"signal":{}},{}]`
+    `["${base_url}/json",{"url":"${base_url}/json","headers":{"parents":"\\"test\\""},"signal":{}},{}]`
 )
 
-runTest(
+run_test(
     "onBytes test 1",
     async () => {
         return await new Promise(async (done, fail) => {
@@ -2348,7 +2348,7 @@ runTest(
     "HTTP 200 OK\r\nVersion: \"test\"\r\nParents: \"oldie\"\r\nContent-Length: 16\r\n\r\n{\"this\":\"stuff\"}\r\n\r\n"
 )
 
-runTest(
+run_test(
     "parents-function test 1",
     async () => {
         var has_parents = null
@@ -2361,9 +2361,9 @@ runTest(
     '{"has_parents":"false","res":{}}'
 )
 
-addSectionHeader("Heartbeat Tests")
+add_section_header("Heartbeat Tests")
 
-runTest(
+run_test(
     "Verify heartbeats don't prevent user writing headers",
     async () => {
         var a = new AbortController()
@@ -2374,7 +2374,7 @@ runTest(
     'post-sub-header: yup'
 )
 
-runTest(
+run_test(
     "Verify heartbeat reception",
     async () => {
         var a = new AbortController()
@@ -2390,7 +2390,7 @@ runTest(
     'got beat!'
 )
 
-runTest(
+run_test(
     "Verify absence of unwanted heartbeats",
     async () => {
         var a = new AbortController()
@@ -2407,7 +2407,7 @@ runTest(
     'did not get!'
 )
 
-runTest(
+run_test(
     "Test heartbeat error",
     async () => {
         var res_count = 0
@@ -2421,7 +2421,7 @@ runTest(
     'Error: heartbeat not seen in 3.60s'
 )
 
-runTest(
+run_test(
     "Restart connection on missed heartbeats",
     async () => {
         var res_count = 0
@@ -2442,7 +2442,7 @@ runTest(
     'detected no heartbeat'
 )
 
-runTest(
+run_test(
     "Maintain connection with regular heartbeats",
     async () => {
         var res_count = 0
@@ -2464,7 +2464,7 @@ runTest(
     "didn't restart"
 )
 
-runTest(
+run_test(
     "Verify on_heartbeat is called on heartbeats",
     async () => {
         var a = new AbortController()
@@ -2487,7 +2487,7 @@ runTest(
     'on_heartbeat called 3 times'
 )
 
-runTest(
+run_test(
     "Test reconnect_delay_ms default path",
     async () => {
         await braid_fetch.reconnect_delay_test_chain
@@ -2525,7 +2525,7 @@ runTest(
     'default path ok'
 )
 
-runTest(
+run_test(
     "Test reconnect_delay_ms as number",
     async () => {
         await braid_fetch.reconnect_delay_test_chain
@@ -2561,7 +2561,7 @@ runTest(
     'number path ok'
 )
 
-runTest(
+run_test(
     "Test reconnect_delay_ms as function",
     async () => {
         await braid_fetch.reconnect_delay_test_chain
@@ -2601,9 +2601,9 @@ runTest(
     'function path ok'
 )
 
-addSectionHeader("Read Tests")
+add_section_header("Read Tests")
 
-runTest(
+run_test(
     "Subscribe with empty Subscribe header value",
     async () => {
         var a = new AbortController()
@@ -2620,7 +2620,7 @@ runTest(
     'status: 209'
 )
 
-runTest(
+run_test(
     "Subscribe returns 209 with statusText 'Multiresponse' (HTTP/1.x only)",
     async () => {
         var a = new AbortController()
@@ -2643,7 +2643,7 @@ runTest(
     'ok'
 )
 
-runTest(
+run_test(
     "Subscribe and receive multiple updates, using promise chaining",
     async () => {
         var updates = []
@@ -2668,7 +2668,7 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
-runTest(
+run_test(
     "Subscribe and receive multiple updates, using async/await",
     async () => {
         var updates = []
@@ -2696,7 +2696,7 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
-runTest(
+run_test(
     "Subscribe and receive multiple updates, using 'for await'",
     async () => {
         var updates = []
@@ -2715,9 +2715,9 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 )
 
-addSectionHeader("Write Tests")
+add_section_header("Write Tests")
 
-runTest(
+run_test(
     "PUT with single patch, not in array",
     async () => {
         var res = await fetch('/json', {
@@ -2730,7 +2730,7 @@ runTest(
     "returned 200"
 )
 
-runTest(
+run_test(
     "PUT with single patch, in array",
     async () => {
         var res = await fetch('/json', {
@@ -2743,7 +2743,7 @@ runTest(
     "returned 200"
 )
 
-runTest(
+run_test(
     "PUT with multiples patches",
     async () => {
         var res = await fetch('/json', {
@@ -2760,7 +2760,7 @@ runTest(
     "returned 200"
 )
 
-runTest(
+run_test(
     "PUT with empty patches array",
     async () => {
         var res = await fetch('/json', {
@@ -2773,12 +2773,12 @@ runTest(
     "returned 200"
 )
 
-addSectionHeader('Testing braid wrapper for node http(s).get')
+add_section_header('Testing braid wrapper for node http(s).get')
 
-runTest(
+run_test(
     "Subscribe and receive multiple updates",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
             var updates = []
             ;(new Promise((resolve, reject) => {
                 https.get(
@@ -2802,7 +2802,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -2819,10 +2819,10 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 );
 
-runTest(
+run_test(
     "PUT with single patch, not in array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
             var p = new Promise((resolve, reject) => {
                 https.get(
                     'https://localhost:' + port + '/json',
@@ -2846,7 +2846,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -2858,10 +2858,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with single patch, in array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
             var p = new Promise((resolve, reject) => {
                 https.get(
                     'https://localhost:' + port + '/json',
@@ -2885,7 +2885,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -2897,10 +2897,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with multiples patches",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
             var p = new Promise((resolve, reject) => {
                 https.get(
                     'https://localhost:' + port + '/json',
@@ -2928,7 +2928,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -2940,10 +2940,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with empty patches array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
             var p = new Promise((resolve, reject) => {
                 https.get(
                     'https://localhost:' + port + '/json',
@@ -2967,7 +2967,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -2979,12 +2979,12 @@ runTest(
     'returned 200'
 );
 
-addSectionHeader('Testing braid wrapper for node fetch')
+add_section_header('Testing braid wrapper for node fetch')
 
-runTest(
+run_test(
     "Subscribe and receive multiple updates",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
         void (() => {
             if (typeof fetch === 'undefined') return res.end('"old node version"')
             var updates = []
@@ -3013,7 +3013,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -3031,10 +3031,10 @@ runTest(
     '{"version":["another!"],"body":"\\\"!\\\"","status":"200"}'
 );
 
-runTest(
+run_test(
     "PUT with single patch, not in array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
         void (() => {
             if (typeof fetch === 'undefined') return res.end('"old node version"')
             var p = new Promise(async (resolve, reject) => {
@@ -3059,7 +3059,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -3071,10 +3071,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with single patch, in array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
         void (() => {
             if (typeof fetch === 'undefined') return res.end('"old node version"')
             var p = new Promise(async (resolve, reject) => {
@@ -3098,7 +3098,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -3110,10 +3110,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with multiples patches",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
         void (() => {
             if (typeof fetch === 'undefined') return res.end('"old node version"')
             var p = new Promise(async (resolve, reject) => {
@@ -3141,7 +3141,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -3153,10 +3153,10 @@ runTest(
     'returned 200'
 );
 
-runTest(
+run_test(
     "PUT with empty patches array",
     async () => {
-        var codeToEval = `
+        var code_to_eval = `
         void (() => {
             if (typeof fetch === 'undefined') return res.end('"old node version"')
             var p = new Promise(async (resolve, reject) => {
@@ -3180,7 +3180,7 @@ runTest(
         var response = await fetch('/eval', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: codeToEval
+            body: code_to_eval
         });
 
         if (!response.ok)
@@ -3192,9 +3192,9 @@ runTest(
     'returned 200'
 );
 
-addSectionHeader("Retry Tests")
+add_section_header("Retry Tests")
 
-runTest(
+run_test(
     "Verify that retry.retryRes gets heeded when true.",
     async () => {
         return await new Promise(done => {
@@ -3228,7 +3228,7 @@ runTest(
     'retried!'
 )
 
-runTest(
+run_test(
     "Verify that retry.retryRes gets heeded when false.",
     async () => {
         return await new Promise(done => {
@@ -3262,7 +3262,7 @@ runTest(
     'did not retry!'
 )
 
-runTest(
+run_test(
     "Verify that setting retry as function gets heeded when true.",
     async () => {
         return await new Promise(done => {
@@ -3294,7 +3294,7 @@ runTest(
     'retried!'
 )
 
-runTest(
+run_test(
     "Verify that setting retry as function gets heeded when false.",
     async () => {
         return await new Promise(done => {
@@ -3326,7 +3326,7 @@ runTest(
     'did not retry!'
 )
 
-runTest(
+run_test(
     "Verify that we retry on 503",
     async () => {
         return await new Promise(done => {
@@ -3354,7 +3354,7 @@ runTest(
     'retried!'
 )
 
-runTest(
+run_test(
     "Verify that we retry on 400 Missing Parents",
     async () => {
         return await new Promise(done => {
@@ -3383,7 +3383,7 @@ runTest(
     'retried!'
 )
 
-runTest(
+run_test(
     "Verify that we retry when Retry-After is set",
     async () => {
         return await new Promise(done => {
@@ -3413,7 +3413,7 @@ runTest(
     'retried!'
 )
 
-runTest(
+run_test(
     "Verify that unparsable headers do not result in retrying connection.",
     async () => {
         var a = new AbortController()
@@ -3431,7 +3431,7 @@ runTest(
     'Error: Parse error in headers: ""hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n""'
 )
 
-runTest(
+run_test(
     "Should not retry on HTTP 400",
     async () => {
         var r = await fetch("/400", { retry: true })
@@ -3440,7 +3440,7 @@ runTest(
     "400"
 )
 
-runTest(
+run_test(
     "Should not retry on HTTP 401 (access denied)",
     async () => {
         var r = await fetch("/401", { retry: true })
@@ -3449,7 +3449,7 @@ runTest(
     "401"
 )
 
-runTest(
+run_test(
     "Should not try at all if abort controller already aborted",
     async () => {
         var a = new AbortController()
@@ -3464,7 +3464,7 @@ runTest(
     "already aborted"
 )
 
-runTest(
+run_test(
     "Should not retry if aborted",
     async () => {
         var a = new AbortController()
@@ -3479,7 +3479,7 @@ runTest(
     "AbortError"
 )
 
-runTest(
+run_test(
     "Should not retry if already aborted",
     async () => {
         var a = new AbortController()
@@ -3494,7 +3494,7 @@ runTest(
     "AbortError"
 )
 
-runTest(
+run_test(
     "Should not retry if aborted, when subscribed",
     async () => {
         var good = false
@@ -3521,7 +3521,7 @@ runTest(
     "passed"
 )
 
-runTest(
+run_test(
     "Verify that retry option works with subscribe",
     async () => {
         var a = new AbortController()
@@ -3546,7 +3546,7 @@ runTest(
 )
 
 var {status, ...test_update_without_status} = test_update
-runTest(
+run_test(
     "Should retry on HTTP 408",
     async () => {
         var x = await (await fetch("/retry", { retry: true })).json()
@@ -3555,7 +3555,7 @@ runTest(
     JSON.stringify(test_update_without_status)
 )
 
-runTest(
+run_test(
     "Verify that onRes is called on first connection",
     async () => {
         try {
@@ -3571,7 +3571,7 @@ runTest(
     "onRes was called"
 )
 
-runTest(
+run_test(
     "Verify that onRes is called on reconnections",
     async () => {
         var onRes_count = 0
@@ -3607,7 +3607,7 @@ runTest(
     "onRes_count=2, update_count=2"
 )
 
-runTest(
+run_test(
     "Verify that retry works with for-await style subscription",
     async () => {
         var updates = []
@@ -3626,7 +3626,7 @@ runTest(
     '{"version":["test"],"parents":["oldie"],"body":"{\\\"this\\\":\\\"stuff\\\"}","status":"200"}'
 )
 
-runTest(
+run_test(
     "Should stop retrying in a subscription if reconnection attempt returns HTTP 500",
     async () => {
         var giveup_completely = Math.random().toString(36).slice(2)
@@ -3644,7 +3644,7 @@ runTest(
     '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}","status":"200"} -- Error: giving up because of http status: 500'
 )
 
-runTest(
+run_test(
     "Should throw an exception in for-await style when subscription encounters HTTP 500",
     async () => {
         var giveup_completely = Math.random().toString(36).slice(2)
@@ -3661,9 +3661,9 @@ runTest(
     '{"version":["test"],"parents":["oldie"],"body":"{\\"this\\":\\"stuff\\"}","status":"200"} -- Error: giving up because of http status: 500'
 )
 
-addSectionHeader('Binary Tests')
+add_section_header('Binary Tests')
 
-runTest(
+run_test(
     "Verify basic binary GET",
     async () => {
         var x = await fetch('/binary')
@@ -3675,7 +3675,7 @@ runTest(
     new Array(256).fill(0).map((x, i) => i).join(', ')
 )
 
-runTest(
+run_test(
     "Verify binary data in subscription update",
     async () => {
         var a = new AbortController()
@@ -3689,9 +3689,9 @@ runTest(
     '' + new Array(256).fill(0).map((x, i) => i)
 )
 
-addSectionHeader('Encoding Block Tests')
+add_section_header('Encoding Block Tests')
 
-runTest(
+run_test(
     "Basic encoding block test",
     async () => {
         var r = await fetch('/eval', {
@@ -3713,7 +3713,7 @@ runTest(
     'hello'
 )
 
-runTest(
+run_test(
     "Test multiple block types in stream",
     async () => {
         var stream1 = `
@@ -3767,7 +3767,7 @@ abc
     'yoHELLOabc'
 )
 
-runTest(
+run_test(
     "Test malformed encoding block",
     async () => {
         var r = await fetch('/eval', {
@@ -3784,7 +3784,7 @@ runTest(
     'Parse error in encoding block'
 )
 
-runTest(
+run_test(
     "Test that Patches with a Length header still works",
     async () => {
         var stream = `
@@ -3819,9 +3819,9 @@ my patch`
     'my patch'
 )
 
-addSectionHeader("onSubscriptionStatus Tests")
+add_section_header("onSubscriptionStatus Tests")
 
-runTest(
+run_test(
     "onSubscriptionStatus fires online:true on initial connection",
     async () => {
         var a = new AbortController()
@@ -3841,7 +3841,7 @@ runTest(
     'events=1,online=true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus fires online:true on reconnect",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -3874,7 +3874,7 @@ runTest(
     'online=true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus online:true has no extra fields",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -3907,7 +3907,7 @@ runTest(
     '{"online":true}'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus lifecycle: true, false, true",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -3938,7 +3938,7 @@ runTest(
     'true, false, true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus offline event has error, no status",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -3975,7 +3975,7 @@ runTest(
     'has_error=true, no_status=true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus offline error is descriptive",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -4008,7 +4008,7 @@ runTest(
     'Connection closed'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus cycles through 5 transitions",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -4039,7 +4039,7 @@ runTest(
     'true, false, true, false, true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus offline from parse error has descriptive error",
     async () => {
         braid_fetch.reconnect_delay_ms = 150
@@ -4085,7 +4085,7 @@ runTest(
     'true, true, true'
 )
 
-runTest(
+run_test(
     "onSubscriptionStatus not called without subscribe",
     async () => {
         var events = []
@@ -4097,9 +4097,9 @@ runTest(
     'events=0'
 )
 
-addSectionHeader("already_buffered_body Tests")
+add_section_header("already_buffered_body Tests")
 
-runTest(
+run_test(
     "already_buffered_body works for multiple patches",
     async () => {
         var r = await fetch('/json_prebuffered', {
@@ -4115,9 +4115,9 @@ runTest(
     'first\nsecond\n'
 )
 
-addSectionHeader("Content-Type: application/http-patches Tests")
+add_section_header("Content-Type: application/http-patches Tests")
 
-runTest(
+run_test(
     "Multi-patch PUT sends Content-Type: application/http-patches",
     async () => {
         var r = await fetch('/json_echo_content_type', {
@@ -4132,7 +4132,7 @@ runTest(
     'application/http-patches; count=2'
 )
 
-runTest(
+run_test(
     "Single-patch PUT does not send Content-Type: application/http-patches",
     async () => {
         var r = await fetch('/json_echo_content_type', {
@@ -4145,13 +4145,13 @@ runTest(
     'true'
 )
 
-addSectionHeader("Server patch: vs patches: wire format")
+add_section_header("Server patch: vs patches: wire format")
 
-runTest(
+run_test(
     "patch: (singular) inlines without Patches: N",
     async () => {
         var raw = ''
-        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var r = await og_fetch(base_url + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
         var reader = r.body.getReader()
         while (true) {
             var {done, value} = await reader.read()
@@ -4167,11 +4167,11 @@ runTest(
     JSON.stringify({has_patches_header: false, has_content_range: true})
 )
 
-runTest(
+run_test(
     "patches: (array of 1) uses Patches: 1",
     async () => {
         var raw = ''
-        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var r = await og_fetch(base_url + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
         var reader = r.body.getReader()
         while (true) {
             var {done, value} = await reader.read()
@@ -4188,11 +4188,11 @@ runTest(
     JSON.stringify({has_patches_1: true, has_message_http_patches: true})
 )
 
-runTest(
+run_test(
     "patches: (array of 2) uses Patches: 2",
     async () => {
         var raw = ''
-        var r = await og_fetch(baseUrl + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
+        var r = await og_fetch(base_url + '/test_patches_n_trigger', {headers: {subscribe: 'true'}})
         var reader = r.body.getReader()
         while (true) {
             var {done, value} = await reader.read()
@@ -4209,12 +4209,12 @@ runTest(
     JSON.stringify({has_patches_2: true, has_message_http_patches: true})
 )
 
-addSectionHeader("reliable_update_channel Tests")
+add_section_header("reliable_update_channel Tests")
 
-runTest(
+run_test(
     "reliable_update_channel receives updates via on_update and put sends a PUT",
     async () => {
-        var url = baseUrl + '/braid-text-test/reliable_update_channel_' + Math.random().toString(36).slice(2)
+        var url = base_url + '/braid-text-test/reliable_update_channel_' + Math.random().toString(36).slice(2)
         var update_count = 0
         var resolve_second
 
@@ -4247,11 +4247,11 @@ runTest(
     JSON.stringify({put_ok: true, received_put_update: 'hello'})
 )
 
-runTest(
+run_test(
     "reliable_update_channel retries the fetch if it throws",
     async () => {
         var key_suffix = 'retry_' + Math.random().toString(36).slice(2)
-        var url = baseUrl + '/braid-text-test/' + key_suffix
+        var url = base_url + '/braid-text-test/' + key_suffix
 
         // Tell the server to fail the first GET on this key
         await fetch('/eval', {
@@ -4277,12 +4277,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel retries put if it throws, and fires parallel puts in order",
     async () => {
         var key_suffix = 'put_retry_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Tell the server to fail the first PUT on this key
         await fetch('/eval', {
@@ -4324,7 +4324,7 @@ runTest(
     JSON.stringify({all_ok: true, num_results: 3})
 )
 
-runTest(
+run_test(
     "reliable_update_channel reconnects when heartbeats stop",
     async () => {
         // /noheartbeat sends one update then goes silent (no heartbeats).
@@ -4336,7 +4336,7 @@ runTest(
 
         var second_update_promise = new Promise(resolve => { got_second = resolve })
 
-        var channel = reliable_update_channel(baseUrl + '/noheartbeat', {
+        var channel = reliable_update_channel(base_url + '/noheartbeat', {
             timeout: 0.5,
             on_update: update => {
                 update_count++
@@ -4358,12 +4358,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel on_warning is called for non-silent status codes",
     async () => {
         var key_suffix = 'warn_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First GET returns 500 (not in the silent-retry list)
         await fetch('/eval', {
@@ -4388,12 +4388,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel does not warn on silent-retry status codes",
     async () => {
         var key_suffix = 'silent_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First GET returns 503 (in the silent-retry list)
         await fetch('/eval', {
@@ -4418,12 +4418,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel honors Retry-After header on subscription responses",
     async () => {
         var key_suffix = 'retry_after_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First GET returns 200 with Retry-After: 2 (seconds)
         // 200 is not in the silent-retry list, but Retry-After makes it silent.
@@ -4457,12 +4457,12 @@ runTest(
     JSON.stringify({fast_enough: true, no_warnings: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel calls parents() callback on each (re)connect",
     async () => {
         var key_suffix = 'parents_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Arm the server: log the parents header on every GET to this
         // key, and make every GET return 500 so the client keeps retrying.
@@ -4520,12 +4520,12 @@ runTest(
     JSON.stringify({called_at_least_twice: true, first_had_no_parents: true, second_had_abc_1: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel retries all queued PUTs in parallel after reconnect",
     async () => {
         var key_suffix = 'fanout_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Arm the server: fail the first PUT, delay every PUT by 200ms,
         // track PUT concurrency.
@@ -4585,12 +4585,12 @@ runTest(
     JSON.stringify({all_fired_in_parallel: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel put: on_warning is called for non-silent status codes",
     async () => {
         var key_suffix = 'put_warn_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First PUT returns 500 (not in the silent-retry list)
         await fetch('/eval', {
@@ -4613,12 +4613,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel put: does not warn on silent-retry status codes",
     async () => {
         var key_suffix = 'put_silent_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First PUT returns 503 (in the silent-retry list)
         await fetch('/eval', {
@@ -4641,12 +4641,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel put: honors Retry-After header",
     async () => {
         var key_suffix = 'put_retry_after_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First PUT returns 500 (not in silent list) with Retry-After: 2
         // — Retry-After makes it silent and delays the retry by ~2s.
@@ -4677,12 +4677,12 @@ runTest(
     JSON.stringify({slow_enough: true, no_warnings: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel put: times out and retries if PUT never responds",
     async () => {
         var key_suffix = 'put_timeout_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Hang the first PUT forever; second PUT succeeds normally.
         await fetch('/eval', {
@@ -4712,12 +4712,12 @@ runTest(
     JSON.stringify({put_succeeded: true, elapsed_at_least_1800ms: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel forwards user-supplied headers to GET and PUT",
     async () => {
         var key_suffix = 'headers_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Arm the server to log headers on every request to this key.
         await fetch('/eval', {
@@ -4761,7 +4761,7 @@ runTest(
     JSON.stringify({get_saw_header: true, get_saw_another: true, put_saw_header: true, put_saw_another: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel warns and aborts on subscription parse errors",
     async () => {
         var warnings = []
@@ -4769,7 +4769,7 @@ runTest(
         var channel
 
         var shutdown_promise = new Promise(resolve => {
-            channel = reliable_update_channel(baseUrl + '/parse_error', {
+            channel = reliable_update_channel(base_url + '/parse_error', {
                 on_warning: msg => warnings.push(msg),
                 on_error: err => {
                     on_error_called_with = err
@@ -4796,12 +4796,12 @@ runTest(
     JSON.stringify({warned: true, on_error_fired: true, error_has_parse_message: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel on_status reports online transitions",
     async () => {
         var key_suffix = 'status_online_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // First GET returns 500, so we go: offline → reconnect → online
         await fetch('/eval', {
@@ -4833,10 +4833,10 @@ runTest(
     JSON.stringify({went_online: true, has_statuses: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel on_status reports outstanding_puts",
     async () => {
-        var url = baseUrl + '/braid-text-test/status_puts_' + Math.random().toString(36).slice(2)
+        var url = base_url + '/braid-text-test/status_puts_' + Math.random().toString(36).slice(2)
 
         var statuses = []
         var channel = reliable_update_channel(url, {
@@ -4872,12 +4872,12 @@ runTest(
     JSON.stringify({saw_enqueued: true, saw_completed: true})
 )
 
-runTest(
+run_test(
     "reliable_update_channel no_retry_status_codes shuts down on matching GET status",
     async () => {
         var key_suffix = 'no_retry_get_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Make the first GET return 403
         await fetch('/eval', {
@@ -4903,12 +4903,12 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel no_retry_status_codes shuts down on matching PUT status",
     async () => {
         var key_suffix = 'no_retry_put_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
-        var url = baseUrl + full_key
+        var url = base_url + full_key
 
         // Make the first PUT return 403
         await fetch('/eval', {
@@ -4938,10 +4938,10 @@ runTest(
     'true'
 )
 
-runTest(
+run_test(
     "reliable_update_channel reconnect() triggers a fresh reconnection",
     async () => {
-        var url = baseUrl + '/braid-text-test/manual_reconnect_' + Math.random().toString(36).slice(2)
+        var url = base_url + '/braid-text-test/manual_reconnect_' + Math.random().toString(36).slice(2)
 
         var parents_call_count = 0
         var statuses = []
@@ -4988,5 +4988,5 @@ runTest(
 
 // Export for both Node.js and browser
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = defineTests
+    module.exports = define_tests
 }

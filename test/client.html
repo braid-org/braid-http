@@ -137,10 +137,10 @@ let test_update = {
 let delay = 0
 var port = 9000
 
-function createTestRow(testName, expected) {
+function createTestRow(test_name, expected) {
     const row = document.createElement("tr")
     row.innerHTML = `
-        <td>${testName}</td>
+        <td>${test_name}</td>
         <td class="result">Queued...</td>
     `
     row.className = "queued"
@@ -160,10 +160,10 @@ function updateTestResult(row, status, got) {
     resultCell.textContent = got
 }
 
-function addSectionHeader(headerText) {
+function add_section_header(header_text) {
     const row = document.createElement("tr")
     let cell = document.createElement("td")
-    cell.textContent = headerText
+    cell.textContent = header_text
     cell.className = "section-header"
     cell.setAttribute("colspan", "3")
     row.appendChild(cell)
@@ -190,23 +190,23 @@ function setSummaryBoxRunning(box) {
 var wait_for_me = Promise.resolve()
 var wait_list = []
 
-function waitForTests(cb) {
+function wait_for_tests(cb) {
     wait_for_me = Promise.all([wait_for_me, ...wait_list]).then(() => cb())
     wait_list = []    
 }
 
 // Parse URL for filter parameter
 const urlParams = new URLSearchParams(window.location.search)
-const filterArg = urlParams.get('filter') || urlParams.get('grep')
+const filter_arg = urlParams.get('filter') || urlParams.get('grep')
 
-function runTest(testName, testFunction, expectedResult) {
+function run_test(test_name, test_function, expected_result) {
     // Skip tests that don't match filter
-    if (filterArg && !testName.toLowerCase().includes(filterArg.toLowerCase())) {
+    if (filter_arg && !test_name.toLowerCase().includes(filter_arg.toLowerCase())) {
         return
     }
 
     const summaryBox = createSummaryBox(true);
-    const row = createTestRow(testName, expectedResult)
+    const row = createTestRow(test_name, expected_result)
     
     wait_list.push(wait_for_me.then(async () => {
 
@@ -219,8 +219,8 @@ function runTest(testName, testFunction, expectedResult) {
         await new Promise(done => setTimeout(done, delay))
 
         try {
-            let got = await testFunction()
-            if (got === expectedResult) {
+            let got = await test_function()
+            if (got === expected_result) {
                 updateTestResult(row, 'passed', got)
                 updateSummaryBox(summaryBox, true)
             } else if (got === 'old node version') {
@@ -238,6 +238,6 @@ function runTest(testName, testFunction, expectedResult) {
 }
 
 // Load and run all tests from the shared tests.js file
-defineTests(runTest, { fetch, og_fetch, port, addSectionHeader, waitForTests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel })
+define_tests(run_test, { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel })
 
 </script>
