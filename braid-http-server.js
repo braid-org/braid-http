@@ -284,21 +284,113 @@ function abort_timeouts(batch_id) {
 }
 
 
-// The main server function!
+// The main server function!  Dispatches based on argument shape:
+//
+//  - braidify((req, res) => ...)      calls braidify.handler
+//  - braidify(server)                 calls braidify.server
+//  - braidify(req, res, next)         calls braidify.middleware (Express-style)
+//  - braidify(req, res)               calls braidify.request (inline)
+//
 function braidify (req, res, next) {
-    if (typeof req === 'function') {
-        var handler = req
-        return (req, res, next) =>
-            braidify(req, res, () => handler(req, res, next))
-    }
+    if (typeof req === 'function') return braidify.handler(req)
+    // A server-like object can be distinguished because it has:
+    //   • 1 arg
+    //   • a .listen() method
+    if (arguments.length === 1 && req && typeof req.listen === 'function')
+        return braidify.server(req)
+    if (typeof next === 'function') return braidify.middleware(req, res, next)
+    return braidify.request(req, res)
+}
 
+// Braidify a (req, res) => {} handler, by returning a wrapped (req, res) => {} handler.
+//
+// The wrapped handler:
+//  - Braidifies the req and res
+//  - Handles and hides multiplexer requests behind the scenes
+//  - Receives perfect replacement res that writes into multiplexer
+//  - Supports multiplex_wait to ensure ordering with multiplexer creation
+//
+braidify.handler = function (handler) {
+    return (req, res, next) => {
+        braidify_request_internal(req, res, (new_req, new_res) =>
+            handler(new_req, new_res, next))
+    }
+}
+
+// Braidify a node-style http.Server.  Supports 'http', 'https', 'http2',
+// 'fastify', 'restify', and the apps of 'express', 'koa', 'connect'...
+//
+// The server:
+//  - Braidifies the req and res
+//  - Handles and hides multiplexer requests behind the scenes
+//  - Provides perfect replacement res that writes into multiplexer
+//  - Supports multiplex_wait to ensure ordering with multiplexer creation
+//
+braidify.server = function (server) {
+    if (server._braidified_server) return server
+    server._braidified_server = true
+    var original_emit = server.emit.bind(server)
+    server.emit = function (event, ...args) {
+        if (event !== 'request') return original_emit(event, ...args)
+        var [req, res] = args
+        braidify_request_internal(req, res, (new_req, new_res) =>
+            original_emit('request', new_req, new_res))
+        return true
+    }
+    return server
+}
+
+// Braidify a request and response as Express middleware, with `next`.
+//
+//  - Handles and hides multiplexer requests behind the scenes
+//  - Does NOT provide perfect replacement res.  Some types of monkey-patches
+//    to req/res can break.
+//  - Supports multiplex_wait to ensure ordering with multiplexer creation
+//
+braidify.middleware = function (req, res, next) {
+    // Pass `() => next()` (not `next` directly) because braidify_request_internal
+    // calls done(req, new_res) with two args, and Express's next() interprets
+    // a truthy first arg as an error.  We want next() with no args.
+    braidify_request_internal(req, res, () => next())
+}
+
+// Braidify a `req` and `res` inline.
+//
+//  - Handles but does NOT HIDE multiplex requests.
+//    - Caller must do `if (req.is_multiplexer) return`
+//  - Returns a perfect replacement res that writes into multiplexer.
+//  - Does NOT support multiplex_wait buffer.
+//    - Results in 15% more 424s with extra 1rt on first multiplexed request
+//
+braidify.request = function (req, res) {
+    // No `done` callback → braidify_request_internal sees done is undefined,
+    // skips the multiplex_wait branch, and runs synchronously.  By the time
+    // it returns, new_res is final (either res2 if multiplex-through, else
+    // the original res).
+    var new_res = braidify_request_internal(req, res)
+    return {req, res: new_res}
+}
+
+
+// This does the actual braidification.
+//
+// When done and ready for the user's handler to be called, it calls
+// done(req, new_res).  Also returns new_res synchronously, for callers
+// (like braidify.request) that don't use the done callback.
+function braidify_request_internal (req, res, done) {
+    // We may end up creating a synthetic new_res to use in place of res for
+    // multiplex-through sub-requests.  We return it at the end so callers
+    // (like braidify.request) can hand it back to the user.
+    var new_res = res
 
     // Guard against double-braidification.
     if (req._braidified && !req.reprocess_me) {
         // If this was already braidified, then print a warning
         warn_braidify_dupe(req)
-        // and stop braidifying it any further
-        return next?.()
+        // and stop braidifying it any further — but still let the user
+        // handler run, since the dupe req/res were already braidified
+        done?.(req, res)
+        return new_res
     }
     // But some potential 424 responses get delayed and reprocessed.
     // So let's clear the reprocess_me flag on those, since we're doing it.
@@ -444,7 +536,7 @@ function braidify (req, res, next) {
         }
     }
 
-    // a Multiplex-Through header means the user wants to send the
+    // a Multiplex-Through header means the user wants to read the
     // results of this request to the provided multiplexer,
     // tagged with the given request id
     if ((braidify.enable_multiplex ?? true) &&
@@ -457,10 +549,12 @@ function braidify (req, res, next) {
         // find the multiplexer object (contains a response object)
         var multiplexer = braidify.multiplexers?.get(multiplexer_id)
         if (!multiplexer) {
-            if (braidify.multiplex_wait && next) {
-                // Wait for the multiplexer to be created.
-                // Handles the race where Multiplex-Through arrives
-                // before the POST that creates the multiplexer.
+            if (braidify.multiplex_wait && done) {
+                // Wait a few milliseconds for the multiplexer to be created.
+                //
+                // This handles the race where Multiplex-Through arrives
+                // before the POST that creates the multiplexer.  We'll wait a
+                // few ms to see if the POST arrives before giving up with a 424.
                 abortable_set_timeout(multiplexer_id,
                     function give_up () {
                         // Timed out — send 424
@@ -474,7 +568,7 @@ function braidify (req, res, next) {
                     function ready_for_mux () {
                         // Multiplexer appeared — re-process the request
                         req.reprocess_me = true
-                        braidify(req, res, next)
+                        braidify_request_internal(req, res, done)
                     },
                     braidify.multiplex_wait)
                 return
@@ -577,6 +671,11 @@ function braidify (req, res, next) {
         res2.useChunkedEncodingByDefault = false
         res2.assignSocket(mw)
 
+        // res2 is the "effective" response for this multiplexed sub-request.
+        // braidify.handler / braidify.server use this to deliver the right
+        // response object to the user's handler.
+        new_res = res2
+
         // register a handler for when the multiplexer closes,
         // to close our fake response
         multiplexer.requests.set(request_id, () => {
@@ -632,9 +731,37 @@ function braidify (req, res, next) {
         res.multiplexer = multiplexer.res
     }
 
-    // Add the braidly request/response helper methods
-    res.sendUpdate = (stuff) => send_update(res, stuff, req.url, peer)
-    res.sendVersion = res.sendUpdate
+    // Add the braidly request/response helper methods.
+    add_braid_helpers(req, res, new_res, peer)
+
+    // Check the Useragent to work around Firefox bugs
+    if (req.headers['user-agent']
+        && typeof req.headers['user-agent'] === 'string'
+        && req.headers['user-agent'].toLowerCase().indexOf('firefox') > -1)
+        res.is_firefox = true
+
+    // Hand control back to the caller with the new req and res.
+    done?.(req, new_res)
+    return new_res
+}
+
+
+// Add the braidly request/response helper methods:
+//
+//  - req.parseUpdate, req.patches, req.patchesJSON, req.startSubscription
+//  - res.sendUpdate, res.sendVersion, res.startSubscription
+//
+// We add the response helpers to both res and res2.
+//
+//  - res2 is the "canonical" response
+//  - res is backwards-compatible with some uses of braidify
+//    - it forwards specific properties to res2 (before this function runs)
+//
+function add_braid_helpers (req, res, res2, peer) {
+    res2 = res2 || res
+
+    res2.sendUpdate = (stuff) => send_update(res2, stuff, req.url, peer)
+    res2.sendVersion = res2.sendUpdate
     req.parseUpdate = () => new Promise(
         (done, err) => parse_update(req, (update) => done(update))
     )
@@ -649,14 +776,14 @@ function braidify (req, res, next) {
             ))
         )
     )
-    req.startSubscription = res.startSubscription =
+    req.startSubscription = res2.startSubscription =
         function startSubscription (args = {}) {
             // console.log('Starting subscription!')
             // console.log('Timeouts are:',
             //             req.socket.server.timeout,
             //             req.socket.server.keepAliveTimeout)
 
-            res.isSubscription = true
+            res2.isSubscription = true
 
             // Let's disable the timeouts (if it exists)
             if (req.socket.server) {
@@ -673,10 +800,10 @@ function braidify (req, res, next) {
             }
 
             // We have a subscription!
-            res.statusCode = 209
-            res.statusMessage = 'Multiresponse'
-            res.setHeader("subscribe", req.headers.subscribe ?? 'true')
-            res.setHeader('cache-control', 'no-cache, no-transform, no-store')
+            res2.statusCode = 209
+            res2.statusMessage = 'Multiresponse'
+            res2.setHeader("subscribe", req.headers.subscribe ?? 'true')
+            res2.setHeader('cache-control', 'no-cache, no-transform, no-store')
 
 
             // Note: I used to explicitly disable transfer-encoding chunked
@@ -691,11 +818,11 @@ function braidify (req, res, next) {
 
             // if (req.httpVersionMajor == 1) {
             //     // Explicitly disable transfer-encoding chunked for http 1
-            //     res.setHeader('transfer-encoding', '')
+            //     res2.setHeader('transfer-encoding', '')
             // }
 
             // Tell nginx not to buffer the subscription
-            res.setHeader('X-Accel-Buffering', 'no')
+            res2.setHeader('X-Accel-Buffering', 'no')
 
             var connected = true
             function disconnected (x) {
@@ -708,9 +835,9 @@ function braidify (req, res, next) {
                     args.onClose()
             }
 
-            res.on('close',   x => disconnected('close'))
-            res.on('finish',  x => disconnected('finish'))
-            req.on('abort',   x => disconnected('abort'))
+            res2.on('close',   x => disconnected('close'))
+            res2.on('finish',  x => disconnected('finish'))
+            req.on('abort',    x => disconnected('abort'))
 
             // Start sending heartbeats to the client every N seconds if
             // they've been requested.  Heartbeats help a client know if a
@@ -721,16 +848,16 @@ function braidify (req, res, next) {
             if (req.headers['heartbeats']) {
                 let heartbeats = parseFloat(req.headers['heartbeats'])
                 if (isFinite(heartbeats)) {
-                    res.setHeader('heartbeats', req.headers['heartbeats'])
+                    res2.setHeader('heartbeats', req.headers['heartbeats'])
                     let closed
-                    res.on('close', () => closed = true)
+                    res2.on('close', () => closed = true)
                     loop()
                     function loop() {
                         // We only send heartbeats:
                         //  - After the headers have been sent
                         //  - Before the stream has closed
-                        if (res.headersSent && !res.writableEnded && !closed)
-                            res.write("\r\n")
+                        if (res2.headersSent && !res2.writableEnded && !closed)
+                            res2.write("\r\n")
 
                         setTimeout(loop, 1000 * heartbeats)
                     }
@@ -738,13 +865,13 @@ function braidify (req, res, next) {
             }
         }
 
-    // Check the Useragent to work around Firefox bugs
-    if (req.headers['user-agent']
-        && typeof req.headers['user-agent'] === 'string'
-        && req.headers['user-agent'].toLowerCase().indexOf('firefox') > -1)
-        res.is_firefox = true
-
-    next && next()
+    // Mirror the helpers onto res so callers holding the original res
+    // (inline / middleware forms) find them too.  No-op when res === res2.
+    if (res !== res2) {
+        res.sendUpdate = res2.sendUpdate
+        res.sendVersion = res2.sendVersion
+        res.startSubscription = res2.startSubscription
+    }
 }
 
 async function send_update(res, update, url, peer) {

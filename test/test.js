@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 
 // Unified test runner - can run in console mode (Node.js) or browser mode (server)
-const fs = require('fs')
-const path = require('path')
-const defineTests = require('./tests.js')
-const {braidify, free_cors} = require('../braid-http-server.js')
-const https = require('../braid-http-client.js').http(require('https'))
-const braid_fetch = require('../braid-http-client.js').fetch
-const multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
-const reliable_update_channel = require('../braid-http-client.js').reliable_update_channel
-const {create_braid_text} = require('braid-text')
+var fs = require('fs')
+var path = require('path')
+var defineTests = require('./tests.js')
+var {braidify, free_cors} = require('../braid-http-server.js')
+var https = require('../braid-http-client.js').http(require('https'))
+var braid_fetch = require('../braid-http-client.js').fetch
+var multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
+var reliable_update_channel = require('../braid-http-client.js').reliable_update_channel
+var {create_braid_text} = require('braid-text')
 
 // Parse command line arguments
-const args = process.argv.slice(2)
-const mode = args.includes('--browser') || args.includes('-b') ? 'browser' : 'console'
-const filterArg = args.find(arg => arg.startsWith('--filter='))?.split('=')[1]
+var args = process.argv.slice(2)
+var mode = args.includes('--browser') || args.includes('-b') ? 'browser' : 'console'
+var filterArg = args.find(arg => arg.startsWith('--filter='))?.split('=')[1]
     || args.find(arg => arg.startsWith('--grep='))?.split('=')[1]
 
 // Show help if requested
@@ -26,6 +26,7 @@ Options:
   --browser, -b          Start server for browser testing (default: console mode)
   --filter=PATTERN       Only run tests matching pattern (case-insensitive)
   --grep=PATTERN         Alias for --filter
+  --port=N               Base port (uses N, N+1, N+2, N+3). Default 9000. Or set PORT env.
   --help, -h             Show this help message
 
 Examples:
@@ -33,6 +34,8 @@ Examples:
   node test/test.js --filter="version"   # Run only tests with "version" in name
   node test/test.js --browser            # Start browser test server
   node test/test.js -b                   # Short form for browser mode
+  node test/test.js --port=9100          # Run on ports 9100-9103 (e.g. parallel run)
+  PORT=9100 node test/test.js            # Same via env var
 `)
     process.exit(0)
 }
@@ -40,17 +43,19 @@ Examples:
 // Allow self-signed certs for localhost testing
 if (typeof fetch !== 'undefined') allow_self_signed_certs()
 
-// Server configuration
-const port = 9000
-const test_update = {
+// Server configuration.  Default port 9000; override with env PORT or --port=N.
+var port = parseInt(process.env.PORT
+    || args.find(arg => arg.startsWith('--port='))?.split('=')[1]
+    || 9000)
+var test_update = {
     version: ['test'],
     parents: ['oldie'],
     body: JSON.stringify({this: 'stuff'})
 }
-let retries_left = 4
-let giveup_completely_set = {}
-let faulty_mux_i = 0
-let deleted_request_count = {}
+var retries_left = 4
+var giveup_completely_set = {}
+var faulty_mux_i = 0
+var deleted_request_count = {}
 
 process.on("unhandledRejection", (x) => {
     if (mode === 'browser') console.log(`unhandledRejection: ${x.stack}`)
@@ -85,7 +90,7 @@ global.braid_text_hang_first_put = braid_text_hang_first_put
 global.braid_text_headers_log = braid_text_headers_log
 
 function createTestServer() {
-    const server = require('http2').createSecureServer({
+    var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
         allowHTTP1: true
@@ -137,7 +142,7 @@ function createTestServer() {
         if (req.headers.pre_delay_ms) await new Promise(done => setTimeout(done, parseFloat(req.headers.pre_delay_ms)))
 
         var eval_func = () => new Promise((done, fail) => {
-            let body = ''
+            var body = ''
             req.on('data', chunk => {
                 body += chunk.toString()
             })
@@ -397,11 +402,11 @@ function createTestServer() {
             req.on('end', async () => {
                 req.already_buffered_body = Buffer.concat(chunks)
                 if (req.headers.check_patch_content_text) {
-                    let update = await req.parseUpdate()
-                    for (let p of update.patches)
+                    var update = await req.parseUpdate()
+                    for (var p of update.patches)
                         res.write('' + p.content_text + '\n')
                 } else if (req.headers.check_body_text) {
-                    let update = await req.parseUpdate()
+                    var update = await req.parseUpdate()
                     res.write(update.body_text)
                 }
                 res.statusCode = 200
@@ -449,24 +454,24 @@ function createTestServer() {
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
             if (req.headers.check_patch_content_text) {
-                let update = await req.parseUpdate()
-                for (let p of update.patches)
+                var update = await req.parseUpdate()
+                for (var p of update.patches)
                     res.write('' + p.content_text + '\n')
             } else if (req.headers.check_patch_binary) {
-                let update = await req.parseUpdate()
-                for (let p of update.patches)
+                var update = await req.parseUpdate()
+                for (var p of update.patches)
                     res.write('' + p.content + '\n')
             } else if (req.headers.check_everything_patch_content_text) {
-                let patches = await req.patches()
+                var patches = await req.patches()
                 res.write(patches[0].content_text)
             } else if (req.headers.check_everything_patch_binary) {
-                let patches = await req.patches()
+                var patches = await req.patches()
                 res.write('' + patches[0].content)
             } else if (req.headers.check_body_binary) {
-                let update = await req.parseUpdate()
+                var update = await req.parseUpdate()
                 res.write('' + update.body)
             } else if (req.headers.check_body_text) {
-                let update = await req.parseUpdate()
+                var update = await req.parseUpdate()
                 res.write(update.body_text)
             }
             res.statusCode = 200
@@ -505,8 +510,8 @@ function createTestServer() {
                 res.end(JSON.stringify(test_update))
             }
         } else if (req.url === '/binary') {
-            const buffer = Buffer.alloc(256)
-            for (let i = 0; i < 256; i++) buffer[i] = i
+            var buffer = Buffer.alloc(256)
+            for (var i = 0; i < 256; i++) buffer[i] = i
 
             if (req.subscribe) {
                 res.startSubscription()
@@ -542,7 +547,7 @@ function createTestServer() {
 }
 
 function createExpressMiddlewareServer() {
-    const express_app = require("express")()
+    var express_app = require("express")()
 
     express_app.use((req, res, next) => {
         if (req.socket.remoteAddress !== '127.0.0.1'
@@ -646,6 +651,88 @@ function createWrapperServer() {
     }))
 }
 
+// Server using the new braidify.server() entry point (attaches to an
+// existing http.Server, intercepts 'request' events).  Listens on port+3.
+//
+// Hosts the same /wrapper-test-style endpoints, plus a /listener-test
+// endpoint that exercises the http2-proxy-bug pattern: setting a property
+// on `res` and reading it from inside an event listener.
+var listener_test_results = {}
+function create_wrapped_server() {
+    var server = https.createServer({
+        key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
+        cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
+    })
+
+    braidify.server(server)
+
+    server.on('request', (req, res) => {
+        if (req.socket.remoteAddress !== '127.0.0.1'
+            && req.socket.remoteAddress !== '::1'
+            && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
+            res.writeHead(403, { 'Content-Type': 'text/plain' })
+            res.end('Forbidden: Only localhost connections are allowed')
+            return
+        }
+
+        free_cors(res)
+        if (req.method === 'OPTIONS') return res.end()
+
+        if (req.url === '/server-test' && req.method === 'GET') {
+            res.setHeader('content-type', 'application/json')
+            if (req.subscribe) res.startSubscription()
+            res.sendUpdate({
+                version: ['server-test-version'],
+                body: JSON.stringify({ message: "Braidify works as server!" })
+            })
+            if (!req.subscribe) {
+                res.end()
+            } else {
+                setTimeout(() => res.sendUpdate({
+                    version: ['server-test-update'],
+                    body: JSON.stringify({ message: "This is a server update!" })
+                }), 200)
+            }
+            return
+        }
+
+        // Listener test: set a property on res, attach a 'finish' listener
+        // that reads `this[prop]`.  This is the pattern that broke under
+        // the old property-forwarding hack (state on res, listener on res2,
+        // mismatch when listener fires).
+        if (req.url.startsWith('/listener-test/')) {
+            var test_id = req.url.split('/').pop()
+            res.my_marker = 'magic-' + test_id
+            var record = function () {
+                if (listener_test_results[test_id]) return  // already recorded
+                listener_test_results[test_id] =
+                    (this.my_marker === 'magic-' + test_id) ? 'ok' : 'fail'
+            }
+            res.on('finish', record)
+            res.on('close', record)
+            res.setHeader('content-type', 'application/json')
+            if (req.subscribe) res.startSubscription()
+            res.sendUpdate({
+                version: ['listener-test-' + test_id],
+                body: JSON.stringify({ id: test_id })
+            })
+            return
+        }
+
+        if (req.url.startsWith('/listener-result/')) {
+            var test_id = req.url.split('/').pop()
+            res.writeHead(200, { 'Content-Type': 'text/plain' })
+            res.end(listener_test_results[test_id] || 'pending')
+            return
+        }
+
+        res.writeHead(404)
+        res.end('Not found')
+    })
+
+    return server
+}
+
 function allow_self_signed_certs() {
     fetch().catch(() => { })
     var globalDispatcherSymbol = Symbol.for('undici.globalDispatcher.1')
@@ -662,15 +749,15 @@ function allow_self_signed_certs() {
 // HTTP/2 fetch wrapper - needed because Node's native fetch uses HTTP/1.1
 // which doesn't support custom methods like MULTIPLEX
 function createHttp2Fetch(baseUrl) {
-    const http2 = require('http2')
-    const { URL } = require('url')
+    var http2 = require('http2')
+    var { URL } = require('url')
 
     // Keep a session pool for reuse
-    const sessions = new Map()
+    var sessions = new Map()
 
     function getSession(origin) {
         if (!sessions.has(origin)) {
-            const session = http2.connect(origin, { rejectUnauthorized: false })
+            var session = http2.connect(origin, { rejectUnauthorized: false })
             session.on('error', () => sessions.delete(origin))
             session.on('close', () => sessions.delete(origin))
             sessions.set(origin, session)
@@ -679,31 +766,31 @@ function createHttp2Fetch(baseUrl) {
     }
 
     return async function http2Fetch(url, options = {}) {
-        const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`
+        var fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`
 
         // use regular fetch when we can..
         if (options.method !== 'MULTIPLEX')
             return fetch(fullUrl, options)
 
-        const parsedUrl = new URL(fullUrl)
-        const origin = parsedUrl.origin
+        var parsedUrl = new URL(fullUrl)
+        var origin = parsedUrl.origin
 
-        const client = getSession(origin)
+        var client = getSession(origin)
 
-        const headers = {
+        var headers = {
             ':method': options.method || 'GET',
             ':path': parsedUrl.pathname + parsedUrl.search,
         }
 
         // Add custom headers
         if (options.headers) {
-            const h = options.headers instanceof Headers ? Object.fromEntries(options.headers) : options.headers
-            for (const [key, value] of Object.entries(h)) {
+            var h = options.headers instanceof Headers ? Object.fromEntries(options.headers) : options.headers
+            for (var [key, value] of Object.entries(h)) {
                 headers[key.toLowerCase()] = value
             }
         }
 
-        const req = client.request(headers)
+        var req = client.request(headers)
 
         // Send body if present
         if (options.body) {
@@ -714,13 +801,13 @@ function createHttp2Fetch(baseUrl) {
         return new Promise((resolve, reject) => {
             req.on('error', reject)
             req.on('response', (responseHeaders) => {
-                const status = responseHeaders[':status']
+                var status = responseHeaders[':status']
 
                 // For streaming responses, we need to provide a reader that
                 // returns data as it arrives, not wait for 'end'
-                let dataQueue = []
-                let dataResolve = null
-                let ended = false
+                var dataQueue = []
+                var dataResolve = null
+                var ended = false
 
                 req.on('data', chunk => {
                     if (dataResolve) {
@@ -740,7 +827,7 @@ function createHttp2Fetch(baseUrl) {
                 })
 
                 // Create a fetch-like Response object
-                const body = {
+                var body = {
                     getReader: () => ({
                         read: async () => {
                             if (dataQueue.length > 0) {
@@ -755,7 +842,7 @@ function createHttp2Fetch(baseUrl) {
                         }
                     })
                 }
-                const response = {
+                var response = {
                     ok: status >= 200 && status < 300,
                     status,
                     headers: {
@@ -763,10 +850,10 @@ function createHttp2Fetch(baseUrl) {
                     },
                     body,
                     text: async () => {
-                        const chunks = []
-                        const reader = body.getReader()
+                        var chunks = []
+                        var reader = body.getReader()
                         while (true) {
-                            const { done, value } = await reader.read()
+                            var { done, value } = await reader.read()
                             if (done) break
                             chunks.push(Buffer.from(value))
                         }
@@ -786,28 +873,28 @@ function createHttp2Fetch(baseUrl) {
 
 async function runConsoleTests() {
     // Test tracking
-    let totalTests = 0
-    let passedTests = 0
-    let failedTests = 0
-    let skippedTests = 0
+    var totalTests = 0
+    var passedTests = 0
+    var failedTests = 0
+    var skippedTests = 0
 
     // Store tests to run sequentially
-    const testsToRun = []
+    var testsToRun = []
 
     // Create wrapped fetch that points to localhost
     // Use HTTP/2 fetch for og_fetch since Node's native fetch uses HTTP/1.1
     // which doesn't support custom methods like MULTIPLEX
-    const og_fetch = createHttp2Fetch(`https://localhost:${port}`)
-    const wrappedFetch = async (url, options = {}) => {
-        const fullUrl = url.startsWith('http') ? url : `https://localhost:${port}${url}`
+    var og_fetch = createHttp2Fetch(`https://localhost:${port}`)
+    var wrappedFetch = async (url, options = {}) => {
+        var fullUrl = url.startsWith('http') ? url : `https://localhost:${port}${url}`
         return braid_fetch(fullUrl, options)
     }
     // Expose set_fetch on wrappedFetch so tests can call it
     wrappedFetch.set_fetch = braid_fetch.set_fetch
 
     // Create a wrapped braid_fetch that handles relative URLs for Node.js
-    const wrappedBraidFetch = (url, options = {}) => {
-        const fullUrl = url.startsWith('http') ? url : `https://localhost:${port}${url}`
+    var wrappedBraidFetch = (url, options = {}) => {
+        var fullUrl = url.startsWith('http') ? url : `https://localhost:${port}${url}`
         return braid_fetch(fullUrl, options)
     }
     // Copy properties from braid_fetch
@@ -841,20 +928,22 @@ async function runConsoleTests() {
         }
 
         totalTests++
-        const section = addSectionHeader.currentSection
+        var section = addSectionHeader.currentSection
         testsToRun.push({ testName, testFunction, expectedResult, section })
     }
 
     console.log('Starting braid-http tests...\n')
 
     // Start the servers
-    const mainServer = createTestServer()
-    const expressServer = createExpressMiddlewareServer()
-    const wrapperServer = createWrapperServer()
+    var mainServer = createTestServer()
+    var expressServer = createExpressMiddlewareServer()
+    var wrapperServer = createWrapperServer()
+    var wrapped_server = create_wrapped_server()
 
     await new Promise(resolve => mainServer.listen(port, resolve))
     await new Promise(resolve => expressServer.listen(port + 1, resolve))
     await new Promise(resolve => wrapperServer.listen(port + 2, resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
 
@@ -874,23 +963,23 @@ async function runConsoleTests() {
     })
 
     // Run tests sequentially
-    let currentSection = null
-    for (const item of testsToRun) {
+    var currentSection = null
+    for (var item of testsToRun) {
         // Handle waitForTests callbacks
         if (item.isWaitCallback) {
             item.callback()
             continue
         }
 
-        const { testName, testFunction, expectedResult, section } = item
+        var { testName, testFunction, expectedResult, section } = item
         if (section && section !== currentSection) {
             currentSection = section
             console.log(`\n--- ${section} ---`)
         }
 
         try {
-            const timeout_ms = 30000
-            const result = await Promise.race([
+            var timeout_ms = 10000
+            var result = await Promise.race([
                 testFunction(),
                 new Promise((_, reject) =>
                     setTimeout(() => reject(new Error(`Test timed out after ${timeout_ms/1000}s`)), timeout_ms))
@@ -923,12 +1012,14 @@ async function runConsoleTests() {
     mainServer.close()
     expressServer.close()
     wrapperServer.close()
+    wrapped_server.close()
 
     // Close all connections if available (Node 18.2+)
     if (typeof mainServer.closeAllConnections === 'function') {
         mainServer.closeAllConnections()
         expressServer.closeAllConnections()
         wrapperServer.closeAllConnections()
+        wrapped_server.closeAllConnections()
     }
 
     setTimeout(() => process.exit(failedTests > 0 ? 1 : 0), 100)
@@ -939,13 +1030,15 @@ async function runConsoleTests() {
 // ============================================================================
 
 async function runBrowserMode() {
-    const mainServer = createTestServer()
-    const expressServer = createExpressMiddlewareServer()
-    const wrapperServer = createWrapperServer()
+    var mainServer = createTestServer()
+    var expressServer = createExpressMiddlewareServer()
+    var wrapperServer = createWrapperServer()
+    var wrapped_server = create_wrapped_server()
 
     await new Promise(resolve => mainServer.listen(port, resolve))
     await new Promise(resolve => expressServer.listen(port + 1, resolve))
     await new Promise(resolve => wrapperServer.listen(port + 2, resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
     console.log(`Express middleware test server running on port ${port + 1}`)

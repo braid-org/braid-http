@@ -170,11 +170,15 @@ async function braid_fetch (url, params = {}) {
     // // Always set the peer
     // params.headers.set('peer', peer)
 
+    var version_to_header = (version_array) =>
+        version_array.map(JSON.stringify).map(ascii_ify).join(', ')
+
     // We provide some shortcuts for Braid params
-    if (params.version)
-        params.headers.set('version', params.version.map(JSON.stringify).map(ascii_ify).join(', '))
-    if (Array.isArray(params.parents))
-        params.headers.set('parents', params.parents.map(JSON.stringify).map(ascii_ify).join(', '))
+    if (params.version)                   // Q: Version checks truthiness...
+        params.headers.set('version', version_to_header(params.version))
+    if (Array.isArray(params.parents))    // Q: ...but parents checks isArray?  Why?
+        params.headers.set('parents', version_to_header(params.parents))
+
     if (params.subscribe) {
         params.headers.set('subscribe', 'true')
         // Prevent this response from being cached
@@ -375,15 +379,35 @@ async function braid_fetch (url, params = {}) {
 
                 // Now we run the original fetch....
 
-                // try multiplexing if the multiplex flag is set, and conditions are met
-                var mux_params = params.multiplex ?? braid_fetch.enable_multiplex
-                if (mux_params !== false &&
-                    (params.headers.has('multiplex-through') ||
-                    (params.headers.has('subscribe') &&
-                        braid_fetch.subscription_counts?.[origin] >
-                            (!mux_params ? 1 : (mux_params.after ?? 0))))) {
+                // We will multiplex it under these configurations:
+                //
+                // - multiplex == true                  → forced on
+                // - multiplex == false                 → forced off
+                // - Multiplex-Through header specified → on
+                // - multiplex == {after: N}            → if N subs exist
+                //   - default is {after: 1}, which multiplexes the 2nd sub
+
+                // We first look for the `multiplex` paramter to fetch().  If
+                // not present, we look at `braid_fetch.enable_multiplex`.
+                var mux_params = params.multiplex ?? braid_fetch.enable_multiplex,
+
+                    // Compute the maximum subscriptions allowed
+                    max_subs = ((mux_params && typeof mux_params === 'object')
+                                ? (mux_params.after ?? 1)
+                                : 1),
+
+                    // Are we past that number?
+                    too_many_subs = (braid_fetch.subscription_counts?.[origin]
+                                     > max_subs)
+
+                if (mux_params === true
+                    || (mux_params !== false
+                        && (params.headers.has('multiplex-through')
+                            || too_many_subs))) {
+                    // Then multiplex!
                     res = await multiplex_fetch(url, params, mux_params)
                 } else
+                    // Or do a regular fetch.
                     res = await normal_fetch(url, params)
 
                 braid_fetch.emit('response', {req: params, res})

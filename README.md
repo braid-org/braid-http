@@ -475,9 +475,9 @@ node test/test.js --filter="version"
 This library automatically
 [multiplexes](https://braid.org/protocol/multiplexing) subscriptions behind
 the scenes to overcome web browsers' 6-connection limit (with HTTP/1) and
-100-connection limit (with HTTP/2).  When you setup a server's `braidify` in
-the recommended ways, you don't need to know it's happening — the abstraction
-is completely transparent.
+100-connection limit (with HTTP/2).
+
+Multiplexing is leakproof with the following forms of `braidify`:
 
 ```javascript
 // Recommendation #1: Wrapping the entire request handler
