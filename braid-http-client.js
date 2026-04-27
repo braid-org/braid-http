@@ -763,7 +763,7 @@ function parse_update (state) {
         state.content_type  = state.headers['content-type']
 
         // Ignore the patches content-type, because we expect and handle it
-        if (state.content_type?.startsWith('application/http-patches'))
+        if (state.content_type?.includes('http-patches'))
             delete state.content_type
 
         // Take the parsed headers out of the buffer
@@ -897,12 +897,23 @@ function parse_content_range (range_string) {
     var match = range_string.match(/(\S+)( (.*))?/)
     return match && {unit: match[1], range: match[3] || ''}
 }
+function num_patches_in (headers) {
+    // It's in Patches: N
+    if (headers.patches != null)  // != null catches undefined and null
+        return headers.patches
+
+    // Or Content-Type: application/http-patches; count=N
+    var m = headers['content-type']?.match(/\/http-patches\s*;.*\bcount\s*=\s*(\d+)/i)
+    return m ? parseInt(m[1]) : undefined
+}
 function parse_body (state) {
 
     // Parse Body Snapshot
 
     var content_length = parseInt(state.headers['content-length'] ??
-        (state.headers.patches === undefined && state.headers['length']))
+        (state.headers.patches === undefined && state.headers['length'])),
+        num_patches = num_patches_in(state.headers)
+
     if (!isNaN(content_length)) {
 
         // We've read a Content-Length, so we have a block to parse
@@ -945,13 +956,13 @@ function parse_body (state) {
 
     // Parse Patches
 
-    else if (state.headers.patches != null) {
+    else if (num_patches != null) {
         state.patches = state.patches || []
 
         var last_patch = state.patches[state.patches.length-1]
 
         // Parse patches until the final patch has its content filled
-        while (!(state.patches.length === state.headers.patches
+        while (!(state.patches.length === num_patches
                  && (state.patches.length === 0 || 'content' in last_patch))) {
 
             // Are we starting a new patch?

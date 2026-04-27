@@ -102,9 +102,19 @@ function parse_update (req, cb) {
     }
 }
 
+function num_patches_in (headers) {
+    // It's in Patches: N
+    if (headers.patches != null)  // != null catches undefined and null
+        return headers.patches
+
+    // Or Content-Type: application/http-patches; count=N
+    var m = headers['content-type']?.match(/\/http-patches\s*;.*\bcount\s*=\s*(\d+)/i)
+    return m ? parseInt(m[1]) : undefined
+}
+
 // Parse a complete body buffer into an update (body snapshot or patches).
 function parse_update_from_bytes (bytes, headers, cb) {
-    var num_patches = headers.patches
+    var num_patches = num_patches_in(headers)
 
     // Full body snapshot (no patches, no content-range)
     if (!num_patches && !headers['content-range']) {
@@ -118,7 +128,7 @@ function parse_update_from_bytes (bytes, headers, cb) {
     // Parse a single patch, lacking Patches: N
     // We only support range patches right now, so there must be a
     // Content-Range header.
-    if (num_patches === undefined && headers['content-range']) {
+    if (num_patches == null && headers['content-range']) {
         assert(headers['content-range'], 'No patches to parse: need `Patches: N` or `Content-Range:` header in ' + JSON.stringify(headers))
 
         // Parse the Content-Range header

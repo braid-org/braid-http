@@ -4145,6 +4145,106 @@ run_test(
     'true'
 )
 
+add_section_header("Parsing patches with new vs legacy patch-count headers")
+//
+// During the transition from `Patches: N` to `Content-Type:
+// application/http-patches; count=N`, both forms must be parsed.
+// We test:
+//   - new form alone (Content-Type only)
+//   - legacy form alone (Patches: N only)
+// (Both together is exercised by every other test, since that's what
+// the server currently emits.)
+
+run_test(
+    "Server parses multi-patch PUT with only Content-Type: application/http-patches; count=N (no Patches: header)",
+    async () => {
+        var body =
+            'Content-Length: 1\r\n' +
+            'Content-Range: text [0:0]\r\n' +
+            '\r\n' +
+            'a\r\n' +
+            '\r\n' +
+            'Content-Length: 1\r\n' +
+            'Content-Range: text [1:1]\r\n' +
+            '\r\n' +
+            'b'
+        var r = await og_fetch(base_url + '/json', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/http-patches; count=2',
+                check_patch_content_text: 'true'
+            },
+            body
+        })
+        return await r.text()
+    },
+    'a\nb\n'
+)
+
+run_test(
+    "Server parses multi-patch PUT with only Patches: N header (no Content-Type)",
+    async () => {
+        var body =
+            'Content-Length: 1\r\n' +
+            'Content-Range: text [0:0]\r\n' +
+            '\r\n' +
+            'a\r\n' +
+            '\r\n' +
+            'Content-Length: 1\r\n' +
+            'Content-Range: text [1:1]\r\n' +
+            '\r\n' +
+            'b'
+        var r = await og_fetch(base_url + '/json', {
+            method: 'PUT',
+            headers: {
+                'Patches': '2',
+                check_patch_content_text: 'true'
+            },
+            body
+        })
+        return await r.text()
+    },
+    'a\nb\n'
+)
+
+run_test(
+    "Client parses subscription update with only Content-Type: application/http-patches; count=N (no Patches: header)",
+    async () => {
+        var got
+        await new Promise((resolve, reject) => {
+            fetch('/eval', {
+                method: 'POST',
+                multiplex: false,
+                body: `
+                    res.startSubscription()
+                    // Manually emit a multi-patch update with ONLY
+                    // Content-Type: application/http-patches; count=2
+                    // (no Patches: 2 header).
+                    res.write('HTTP 200 OK\\r\\n' +
+                              'Version: "v1"\\r\\n' +
+                              'Content-Type: application/http-patches; count=2\\r\\n' +
+                              '\\r\\n' +
+                              'Content-Length: 1\\r\\n' +
+                              'Content-Range: text [0:0]\\r\\n' +
+                              '\\r\\n' +
+                              'a\\r\\n\\r\\n' +
+                              'Content-Length: 1\\r\\n' +
+                              'Content-Range: text [1:1]\\r\\n' +
+                              '\\r\\n' +
+                              'b\\r\\n\\r\\n')
+                    setTimeout(() => res.end(), 50)
+                `
+            }).then(r => r.subscribe(u => {
+                if (u.patches) for (var p of u.patches) p.content = p.content_text
+                got = JSON.stringify(u)
+                resolve()
+            }, reject))
+        })
+        return got
+    },
+    '{"version":["v1"],"patches":[{"unit":"text","range":"[0:0]","content":"a"},{"unit":"text","range":"[1:1]","content":"b"}],"status":"200"}'
+)
+
 add_section_header("Server patch: vs patches: wire format")
 
 run_test(
