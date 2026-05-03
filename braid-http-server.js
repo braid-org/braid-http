@@ -92,13 +92,16 @@ function parse_patches (req, cb) {
 // HTTP frameworks (like Fastify, Express with body-parser) that consume the
 // request body before the handler runs.
 function parse_update (req, cb) {
-    if (req.already_buffered_body != null)
-        parse_update_from_bytes(new Uint8Array(req.already_buffered_body), req.headers, cb)
-    else {
+    if (req.already_buffered_body != null) {
+        var buf = req.already_buffered_body
+        if (typeof buf === 'string') buf = new TextEncoder().encode(buf)
+        parse_update_from_bytes(new Uint8Array(buf), req.headers, cb)
+    } else {
         var chunks = []
         req.on('data', chunk => chunks.push(chunk))
         req.on('end', () =>
-            parse_update_from_bytes(new Uint8Array(Buffer.concat(chunks)), req.headers, cb))
+            parse_update_from_bytes(new Uint8Array(Buffer.concat(chunks)),
+                                    req.headers, cb))
     }
 }
 
@@ -444,7 +447,7 @@ function braidify_request_internal (req, res, done) {
         // that FireFox doesn't try to sniff the content-type on a stream and
         // hang forever waiting for 512 bytes (see firefox issue
         // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313)
-        res.setHeader('Content-Type', 'application/http-sequence')
+        res.setHeader('Content-Type', 'application/http-history')
 
         // And we don't want any caches trying to store these stream bodies.
         res.setHeader('Cache-Control', 'no-store')

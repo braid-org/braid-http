@@ -1,9 +1,10 @@
-import { IncomingMessage, ServerResponse } from 'http';
+import { IncomingMessage, ServerResponse, Server } from 'http';
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
 export declare function http_server(handler: RequestHandler): RequestHandler;
 export declare function http_server(req: IncomingMessage, res: ServerResponse, next?: () => void): void;
+export declare function http_server(server: Server): Server;
 
 export declare function free_cors(res: ServerResponse): void;
 
