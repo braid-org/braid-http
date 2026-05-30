@@ -1695,9 +1695,9 @@ function reliable_update_channel (url, {on_update,
                     var err = new Error(`status ${res.status}`)
                     if (no_retry_status_codes.has(res.status))
                         return shutdown(err)
-                    var ra = parseFloat(res.headers.get('retry-after'))
-                    if (isFinite(ra)) err.retry_after_ms = ra * 1000
-                    if (!silent_retry_codes.has(res.status) && !isFinite(ra))
+                    var retry_after = parseFloat(res.headers.get('retry-after'))
+                    if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
+                    if (!silent_retry_codes.has(res.status) && !isFinite(retry_after))
                         warn(`subscription to ${url} got unexpected status ${res.status}`)
                     return reconnect(err)
                 }
@@ -1768,9 +1768,9 @@ function reliable_update_channel (url, {on_update,
                         var err = new Error(`status ${res.status}`)
                         if (no_retry_status_codes.has(res.status))
                             return shutdown(err)
-                        var ra = parseFloat(res.headers.get('retry-after'))
-                        if (isFinite(ra)) err.retry_after_ms = ra * 1000
-                        if (!silent_retry_codes.has(res.status) && !isFinite(ra))
+                        var retry_after = parseFloat(res.headers.get('retry-after'))
+                        if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
+                        if (!silent_retry_codes.has(res.status) && !isFinite(retry_after))
                             warn(`put got unexpected status ${res.status}`)
                         return reconnect(err)
                     }
