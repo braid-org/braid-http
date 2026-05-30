@@ -1562,7 +1562,7 @@ function reliable_update_channel (url, {on_update,
                                         on_error,
                                         reconnect_from_parents,
                                         get_headers,
-                                        put_headers,
+                                        put_headers = {},
                                         timeout = 20,
 
                                         // undocumented:
@@ -1593,10 +1593,10 @@ function reliable_update_channel (url, {on_update,
             console.log('connection not up: TLS hostname mismatch, likely a captive portal')
     }
 
-    // Internal abort controller — aborting this shuts down both the GET
-    // reconnector and the PUT queue. It aborts when the caller calls
-    // close() or when shutdown() is called (self-initiated shutdown due
-    // to a fatal error like a parse error).
+    // Internal abort controller — aborting this shuts down the whole
+    // channel (the GET subscription and the PUT queue). It aborts when
+    // the caller calls close() or when shutdown() is called (self-
+    // initiated shutdown due to a fatal error like a parse error).
     var aborter = new AbortController()
     var shut_down = false
     var shutdown = (err) => {
@@ -1613,153 +1613,187 @@ function reliable_update_channel (url, {on_update,
     // ============================================================
     // Single channel: subscription + PUT queue
     //
-    // One reconnector manages both the GET subscription and the PUT
-    // queue. If anything fails (subscription error, PUT error,
-    // heartbeat timeout, PUT timeout) the entire channel is torn down
-    // and rebuilt: the subscription reconnects and any queued PUTs
-    // are re-fired.
+    // connect() manages both the GET subscription and the PUT queue.
+    // If anything fails (subscription error, PUT error, heartbeat
+    // timeout, PUT timeout) the entire channel is torn down and
+    // rebuilt: reconnect() aborts the current connection and schedules
+    // a fresh connect(), which re-establishes the subscription and
+    // re-fires any queued PUTs.
+    //
+    // Backoff: failure_count tracks consecutive failures so that the
+    // first retry waits delay(err, 1) and later retries delay(err, 2+).
+    // A successful subscription or PUT resets it to 0.
     // ============================================================
     var heartbeat_timeout_ms = (1.2 * timeout + 3) * 1000
     var put_queue = new Set()    // entries: {update, resolve, reject}
-    var fire                    // set to current connection's fire function once online
-    var reconnect               // set to current connection's reconnect function
+    var send_put                // current connection's PUT sender, set once online
+    var channel_reconnect       // current connection's reconnect function (for the manual reconnect() method)
+    var failure_count = 0
+    var conn_aborter = null     // current connection's abort controller
 
+    // Closing the channel: tear down the in-flight connection and reject
+    // anything still queued.
     aborter.signal.addEventListener('abort', () => {
+        conn_aborter?.abort()
         for (var entry of put_queue)
             entry.reject(new Error('reliable_update_channel aborted'))
         put_queue.clear()
         notify_status()
     })
 
-    reconnector(aborter.signal, delay, async (inner_signal, raw_reconnect, on_success) => {
+    connect()
 
-        reconnect = (err) => {
+    function connect () {
+        if (aborter.signal.aborted) return
+
+        // This connection's own abort controller, aborted by reconnect()
+        // to tear down the in-flight GET and any in-flight PUTs.
+        conn_aborter = new AbortController()
+        var inner_signal = conn_aborter.signal
+
+        // Tear down this connection and schedule a fresh connect().
+        // Captured into a local so the callbacks scheduled inside run()
+        // (heartbeat timer, subscribe/PUT error handlers, PUT timeout)
+        // always retire THIS connection — never a later one that has
+        // since reassigned the shared var. The two guards make it a
+        // no-op once the whole channel has been shut down, or once this
+        // connection has already torn down. channel_reconnect exposes
+        // the current connection's reconnect to the manual reconnect()
+        // method.
+        var reconnect = (err) => {
+            if (aborter.signal.aborted || inner_signal.aborted) return
             if (online) { online = false; notify_status() }
-            raw_reconnect(err)
+            conn_aborter.abort()
+            setTimeout(connect, delay(err, ++failure_count))
         }
+        channel_reconnect = reconnect
 
-        // ── Heartbeat timer ──────────────────────────────────────
-        // Starts as a no-op; armed after we confirm the server echoed
-        // the Heartbeats header.
-        var heartbeat_timer = null
-        var reset_heartbeat_timer = () => {}
-        inner_signal.addEventListener('abort', () => clearTimeout(heartbeat_timer))
+        run()
 
-        // ── Subscription (GET) ───────────────────────────────────
-        try {
-            var res = await braid_fetch(url, {
-                subscribe: true,
-                signal: inner_signal,
-                headers: {'Heartbeats': timeout, ...get_headers},
-                parents: reconnect_from_parents,
-                on_heartbeat: () => reset_heartbeat_timer()
-            })
+        async function run () {
+            // ── Heartbeat timer ──────────────────────────────────────
+            // Starts as a no-op; armed after we confirm the server echoed
+            // the Heartbeats header.
+            var heartbeat_timer = null
+            var reset_heartbeat_timer = () => {}
+            inner_signal.addEventListener('abort', () => clearTimeout(heartbeat_timer))
 
-            // Per the spec: any non-209 status is a failure. Some status
-            // codes (and any response with Retry-After) retry silently; the
-            // rest emit a warning including the status code, then retry.
-            if (res.status !== 209) {
-                var err = new Error(`status ${res.status}`)
-                if (no_retry_status_codes.has(res.status))
-                    return shutdown(err)
-                var ra = parseFloat(res.headers.get('retry-after'))
-                if (isFinite(ra)) err.retry_after_ms = ra * 1000
-                if (!silent_retry_codes.has(res.status) && !isFinite(ra))
-                    warn(`subscription to ${url} got unexpected status ${res.status}`)
-                return reconnect(err)
-            }
-
-            on_success()
-            online = true; notify_status()
-            if (res.headers.get('heartbeats')) {
-                reset_heartbeat_timer = () => {
-                    clearTimeout(heartbeat_timer)
-                    heartbeat_timer = setTimeout(() => {
-                        reconnect(new Error(`heartbeat not seen in ${heartbeat_timeout_ms / 1000}s`))
-                    }, heartbeat_timeout_ms)
-                }
-                reset_heartbeat_timer()
-            }
-            res.subscribe(
-                update => {
-                    // Mirror the server's content-type into PUT headers
-                    var type = update.extra_headers?.['content-type']
-                    if (type) put_headers['Content-Type'] = type
-                    on_update?.(update)
-                },
-                err => {
-                    if (inner_signal.aborted) return
-                    // dont_retry marks errors the stream code has flagged
-                    // as "won't be fixed by reconnecting" — primarily
-                    // subscription parse errors (corrupt stream) and
-                    // user-code exceptions thrown from on_update. Warn and
-                    // shut down the whole reliable_update_channel.
-                    if (err?.dont_retry) {
-                        warn('subscription error: ' + err.message)
-                        return shutdown(err)
-                    }
-                    reconnect(err)
-                }
-            )
-        } catch (err) {
-            if (inner_signal.aborted) return
-            note_fetch_error(err)
-            return reconnect(err)
-        }
-
-        // ── PUT queue ────────────────────────────────────────────
-        fire = async (entry) => {
-            if (inner_signal.aborted) return
-            // Per the spec: each PUT has a timeout. If it doesn't
-            // complete in time, trigger reconnect which aborts all
-            // in-flight PUTs and schedules a retry of the queue.
-            var timed_out = false
-            var timeout_handle = setTimeout(() => {
-                timed_out = true
-                reconnect(new Error(`put timeout after ${timeout}s`))
-            }, timeout * 1000)
+            // ── Subscription (GET) ───────────────────────────────────
             try {
-                var r = await braid_fetch(url, {
-                    method: 'PUT',
+                var res = await braid_fetch(url, {
+                    subscribe: true,
                     signal: inner_signal,
-                    ...entry.update,
-                    headers: {...put_headers, ...entry.update.headers}
+                    headers: {'Heartbeats': timeout, ...get_headers},
+                    parents: reconnect_from_parents,
+                    on_heartbeat: () => reset_heartbeat_timer()
                 })
-                if (timed_out) return
 
-                // Per the spec: 2xx is success. Any non-2xx is a failure
-                // — silent-retry codes (and any non-2xx response with
-                // Retry-After) reconnect silently; other non-2xx status
-                // codes warn and reconnect.
-                if (r.status < 200 || r.status >= 300) {
-                    var err = new Error(`status ${r.status}`)
-                    if (no_retry_status_codes.has(r.status))
+                // Per the spec: any non-209 status is a failure. Some status
+                // codes (and any response with Retry-After) retry silently; the
+                // rest emit a warning including the status code, then retry.
+                if (res.status !== 209) {
+                    var err = new Error(`status ${res.status}`)
+                    if (no_retry_status_codes.has(res.status))
                         return shutdown(err)
-                    var ra = parseFloat(r.headers.get('retry-after'))
+                    var ra = parseFloat(res.headers.get('retry-after'))
                     if (isFinite(ra)) err.retry_after_ms = ra * 1000
-                    if (!silent_retry_codes.has(r.status) && !isFinite(ra))
-                        warn(`put got unexpected status ${r.status}`)
+                    if (!silent_retry_codes.has(res.status) && !isFinite(ra))
+                        warn(`subscription to ${url} got unexpected status ${res.status}`)
                     return reconnect(err)
                 }
 
-                // Success! The server received it, so count it regardless
-                // of whether inner_signal was aborted in the meantime.
-                on_success()
-                put_queue.delete(entry)
-                notify_status()
-                entry.resolve(r)
+                failure_count = 0
+                online = true; notify_status()
+                if (res.headers.get('heartbeats')) {
+                    reset_heartbeat_timer = () => {
+                        clearTimeout(heartbeat_timer)
+                        heartbeat_timer = setTimeout(() => {
+                            reconnect(new Error(`heartbeat not seen in ${heartbeat_timeout_ms / 1000}s`))
+                        }, heartbeat_timeout_ms)
+                    }
+                    reset_heartbeat_timer()
+                }
+                res.subscribe(
+                    update => {
+                        // Mirror the server's content-type into PUT headers
+                        var type = update.extra_headers?.['content-type']
+                        if (type) put_headers['Content-Type'] = type
+                        on_update?.(update)
+                    },
+                    err => {
+                        if (inner_signal.aborted) return
+                        // dont_retry marks errors the stream code has flagged
+                        // as "won't be fixed by reconnecting" — primarily
+                        // subscription parse errors (corrupt stream) and
+                        // user-code exceptions thrown from on_update. Warn and
+                        // shut down the whole reliable_update_channel.
+                        if (err?.dont_retry) {
+                            warn('subscription error: ' + err.message)
+                            return shutdown(err)
+                        }
+                        reconnect(err)
+                    }
+                )
             } catch (err) {
-                if (inner_signal.aborted || timed_out) return
+                if (inner_signal.aborted) return
                 note_fetch_error(err)
-                reconnect(err)
-            } finally {
-                clearTimeout(timeout_handle)
+                return reconnect(err)
             }
-        }
 
-        // Fire any queued PUTs now that we're online.
-        for (var entry of put_queue) fire(entry)
-    })
+            // ── PUT queue ────────────────────────────────────────────
+            send_put = async (entry) => {
+                if (inner_signal.aborted) return
+                // Per the spec: each PUT has a timeout. If it doesn't
+                // complete in time, trigger reconnect which aborts all
+                // in-flight PUTs and schedules a retry of the queue.
+                var timed_out = false
+                var timeout_handle = setTimeout(() => {
+                    timed_out = true
+                    reconnect(new Error(`put timeout after ${timeout}s`))
+                }, timeout * 1000)
+                try {
+                    var r = await braid_fetch(url, {
+                        method: 'PUT',
+                        signal: inner_signal,
+                        ...entry.update,
+                        headers: {...put_headers, ...entry.update.headers}
+                    })
+                    if (timed_out) return
+
+                    // Per the spec: 2xx is success. Any non-2xx is a failure
+                    // — silent-retry codes (and any non-2xx response with
+                    // Retry-After) reconnect silently; other non-2xx status
+                    // codes warn and reconnect.
+                    if (r.status < 200 || r.status >= 300) {
+                        var err = new Error(`status ${r.status}`)
+                        if (no_retry_status_codes.has(r.status))
+                            return shutdown(err)
+                        var ra = parseFloat(r.headers.get('retry-after'))
+                        if (isFinite(ra)) err.retry_after_ms = ra * 1000
+                        if (!silent_retry_codes.has(r.status) && !isFinite(ra))
+                            warn(`put got unexpected status ${r.status}`)
+                        return reconnect(err)
+                    }
+
+                    // Success! The server received it, so count it regardless
+                    // of whether inner_signal was aborted in the meantime.
+                    failure_count = 0
+                    put_queue.delete(entry)
+                    notify_status()
+                    entry.resolve(r)
+                } catch (err) {
+                    if (inner_signal.aborted || timed_out) return
+                    note_fetch_error(err)
+                    reconnect(err)
+                } finally {
+                    clearTimeout(timeout_handle)
+                }
+            }
+
+            // Fire any queued PUTs now that we're online.
+            for (var entry of put_queue) send_put(entry)
+        }
+    }
 
     return {
         put (update) {
@@ -1767,44 +1801,11 @@ function reliable_update_channel (url, {on_update,
                 var entry = {update, resolve, reject}
                 put_queue.add(entry)
                 notify_status()
-                if (online) fire(entry)
+                if (online) send_put(entry)
             })
         },
         close () { aborter.abort() },
-        reconnect () { reconnect?.(new Error('manual reconnect')) }
-    }
-}
-
-// Calls func(inner_signal, reconnect, on_success) immediately and manages
-// reconnection.
-// - inner_signal: AbortSignal that aborts when reconnect() is called or
-//   outer_signal aborts
-// - reconnect(err): schedules a new call to func after
-//   get_delay(err, consecutive_failures) ms. Idempotent within one attempt.
-// - on_success(): resets the consecutive-failure count, so the next
-//   reconnect uses get_delay(err, 1)
-// - If outer_signal aborts, no further calls to func will occur
-function reconnector (outer_signal, get_delay, func) {
-    if (outer_signal?.aborted) return
-
-    var current_aborter = null
-    outer_signal?.addEventListener('abort', () => current_aborter?.abort())
-
-    var failure_count = 0
-    connect()
-    function connect () {
-        if (outer_signal?.aborted) return
-        var aborter = current_aborter = new AbortController()
-        var inner_signal = aborter.signal
-        func(
-            inner_signal,
-            (err) => {
-                if (outer_signal?.aborted || inner_signal.aborted) return
-                aborter.abort()
-                setTimeout(connect, get_delay(err, ++failure_count))
-            },
-            () => { failure_count = 0 }
-        )
+        reconnect () { channel_reconnect?.(new Error('manual reconnect')) }
     }
 }
 
