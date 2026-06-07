@@ -110,9 +110,8 @@ function create_test_server() {
 
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
-        if (is_mux) {
+        if (is_mux)
             var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
-        }
 
         if (is_mux && request) deleted_request_count[request] = (deleted_request_count[request] ?? 0) + 1
 
@@ -224,6 +223,25 @@ function create_test_server() {
             return braid_text_instance.serve(req, res, {key})
         }
 
+        // Internal mulltiplexer tests
+
+        // 1. Fake a duplication of multiplexer
+        //    Used in 'Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer'
+        if (req.url.startsWith('/.well-known/multiplexer')) {
+            if (global.send_duplicate_mux) {
+                console.log('Time to fake a 409 duplicate mux!')
+                res.statusCode = 409
+                res.setHeader('content-type', 'application/json')
+                res.end(`{
+  "error": "Multiplexer already exists",
+  "details": "Cannot create duplicate multiplexer with ID 'XXYY'"
+}`)
+                global.send_duplicate_mux = false
+                console.log('We just faked a 409')
+                return
+            }
+        }
+
         // Braidifies our server
         braidify(req, res)
         if (req.is_multiplexer) return
@@ -238,7 +256,20 @@ function create_test_server() {
         }
         if (is_mux) res.end('hm..')
 
-        // We'll serve Braid at the /json route!
+        // The server is ready to define normal test routes!
+
+        // 1. Serve the /duplicate_mux route
+        if (req.url.startsWith('/duplicate_mux')) {
+            if (req.headers['duplicate-next-mux']) {
+                console.log('Breaking the next multiplexer with 409. '
+                            + 'The next multiplex creation will be a duplicate!')
+                global.send_duplicate_mux = true
+            }
+            res.statusCode = 200
+            res.end('woopee')
+        }
+
+        // 2. Serve the /json route
         if (req.url.startsWith('/json') && req.method === 'GET') {
             res.setHeader('content-type', req.headers.charset ? 'application/json; charset=utf-8' : 'application/json')
 

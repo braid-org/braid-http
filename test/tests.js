@@ -190,88 +190,22 @@ run_test(
 )
 
 run_test(
-    "Test retrying MULTIPLEX if duplicate id (with new id).",
+    "Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer",
     async () => {
-        console.log('Test retrying MULTIPLEX if duplicate id (with new id).')
-        var a = new AbortController()
-        var m = Math.random().toString(36).slice(2)
-        var s = Math.random().toString(36).slice(2)
-        console.log('trying first /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            multiplex: true,
-            retry: true
-        })
-        console.log('got back from first /json', r.statusCode)
-        delete multiplex_fetch.multiplexers[m]
-        s = Math.random().toString(36).slice(2)
-        var st = Date.now()
-        var retried = false
-        console.log('sending the second /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            retry: true,
-            multiplex: {
-                onFetch: (url, params) => {
-                    if (m) {
-                        m = null
-                    } else {
-                        retried = true
-                    }
-                }
-            }
-        })
-        console.log('got the second /json res')
-        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 300}`
-    },
-    'is_mux=true, retried=true, fast=true'
-)
+        console.log('Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer')
 
-run_test(
-    "Test retrying MULTIPLEX-POST if duplicate id (with new id).",
-    async () => {
-        var a = new AbortController()
-        var m = Math.random().toString(36).slice(2)
-        var s = Math.random().toString(36).slice(2)
-        console.log('Doing first /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            retry: true,
-            multiplex: true
-        })
-        console.log('Got first /json res')
-        delete multiplex_fetch.multiplexers[m]
-        s = Math.random().toString(36).slice(2)
-        var st = Date.now()
-        var retried = false
-        console.log('Doing second /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            retry: true,
-            multiplex: {
-                via: 'POST',
-                onFetch: (url, params) => {
-                    if (m) {
-                        m = null
-                    } else {
-                        retried = true
-                    }
-                },
-                after: 0
-            }
-        })
-        console.log('Got second /json res')
-        return `is_mux=${!!r.multiplexed_through}, retried=${retried}, fast=${Date.now() < st + 600}`
+        var res1 = await fetch('/duplicate_mux', {headers: {'duplicate-next-mux': 'true'}})
+        console.log('Client set up the duplicate mux flag, and got:', await res1.text())
+
+        var res2 = await fetch('/duplicate_mux', {multiplex: true})
+        console.log('We got the second res!', await res2.clone().text())
+
+        console.log('reading the res2 text again')
+        var result = await res2.text()
+        console.log('read it as', result)
+        return result
     },
-    'is_mux=true, retried=true, fast=true'
+    'woopee'
 )
 
 run_test(
@@ -379,6 +313,39 @@ run_test(
         return r.headers.get('bad-multiplexer') === m
     },
     true
+)
+
+run_test(
+    "Test that multiplexer code handles a relative url (rather than an absolute url).",
+    async () => {
+        var a1 = new AbortController()
+        var r1 = await fetch(`/json`, {
+            signal: a1.signal,
+            subscribe: true,
+        })
+
+        var a2 = new AbortController()
+        var r2 = await fetch(`/json`, {
+            signal: a2.signal,
+            subscribe: true,
+        })
+
+        if (!r2.multiplexed_through) throw new Error('not multiplexed')
+
+        return await new Promise(async (outter_done, outter_fail) => {
+            var ret = await new Promise(done => r2.subscribe(u => {
+                u.body = u.body_text
+                done(JSON.stringify(u))
+            }, e => {
+                if (e.name === 'AbortError') outter_done(ret)
+                else outter_fail(e)
+            }))
+
+            a1.abort()
+            a2.abort()
+        })
+    },
+    JSON.stringify(test_update)
 )
 
 run_test(
@@ -866,22 +833,25 @@ run_test(
 );
 
 run_test(
-    "Test failing to establish multiplexed request.",
+    "Test random 500 error while multiplexing a request.",
     async () => {
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
         try {
-            var r = await fetch('/500', {
+            var res = await fetch('/500', {
                 signal: a.signal,
                 headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
                 retry: true
             })
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
+            console.log('We got a response of ', res.status, await res.text())
+        } catch (e) {
+            return '' + e
+        }
         return 'hm..'
     },
-    'Error: Could not establish multiplexed request'
-);
+    'hm..'
+)
 
 run_test(
     "Test failing to establish multiplexed request because of version.",
@@ -900,10 +870,13 @@ run_test(
                     res.end('ok')
                 `
             })
-        } catch (e) { return ('' + e).slice(0, 'Error: Could not establish multiplexed request'.length) }
+        } catch (e) {
+            console.log('We have an error of', e)
+            return ('' + e).slice(0, 'Error: Server created multiplexer, and then set a '.length)
+        }
         return 'hm..'
     },
-    'Error: Could not establish multiplexed request'
+    'Error: Server created multiplexer, and then set a '
 );
 
 run_test(
@@ -4973,7 +4946,7 @@ run_test(
 )
 
 run_test(
-    "reliable_update_channel no_retry_status_codes shuts down on matching GET status",
+    "reliable_update_channel failure_status_codes shuts down on matching GET status",
     async () => {
         var key_suffix = 'no_retry_get_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -4991,7 +4964,7 @@ run_test(
             channel = reliable_update_channel(url, {
                 on_update: () => {},
                 on_error: err => { errors.push(err); resolve() },
-                no_retry_status_codes: [403]
+                failure_status_codes: [403]
             })
         })
 
@@ -5004,7 +4977,7 @@ run_test(
 )
 
 run_test(
-    "reliable_update_channel no_retry_status_codes shuts down on matching PUT status",
+    "reliable_update_channel failure_status_codes shuts down on matching PUT status",
     async () => {
         var key_suffix = 'no_retry_put_' + Math.random().toString(36).slice(2)
         var full_key = '/braid-text-test/' + key_suffix
@@ -5022,7 +4995,7 @@ run_test(
             channel = reliable_update_channel(url, {
                 on_update: () => {},
                 on_error: err => { errors.push(err); resolve() },
-                no_retry_status_codes: [403]
+                failure_status_codes: [403]
             })
         })
 

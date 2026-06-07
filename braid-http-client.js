@@ -264,7 +264,7 @@ async function braid_fetch (url, params = {}) {
     // then we want to multiplex
     var subscription_counts_on_close = null
     if (params.headers.has('subscribe')) {
-        var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
+        var origin = get_origin(url)
         if (!braid_fetch.subscription_counts)
             braid_fetch.subscription_counts = {}
         braid_fetch.subscription_counts[origin] =
@@ -400,10 +400,11 @@ async function braid_fetch (url, params = {}) {
                     too_many_subs = (braid_fetch.subscription_counts?.[origin]
                                      > max_subs)
 
-                if (mux_params === true
-                    || (mux_params !== false
-                        && (params.headers.has('multiplex-through')
-                            || too_many_subs))) {
+                if (!disabled_multiplex_hosts.has(get_origin(url))
+                    && (mux_params === true
+                        || (mux_params !== false
+                            && (params.headers.has('multiplex-through')
+                                || too_many_subs)))) {
                     // Then multiplex!
                     res = await multiplex_fetch(url, params, mux_params)
                 } else
@@ -1108,6 +1109,11 @@ function random_base64url(n) {
     return result
 }
 
+function get_origin(url) {
+    // If url is relative like /foo, then we need to use the baseURI
+    var base_uri = typeof document !== 'undefined' ? document.baseURI : undefined
+    return new URL(url, base_uri).origin
+}
 
 // ****************************
 // Multiplexing
@@ -1116,7 +1122,7 @@ function random_base64url(n) {
 // multiplex_fetch provides a fetch-like experience for HTTP requests
 // where the result is actually being sent over a separate multiplexed connection.
 async function multiplex_fetch(url, params, mux_params) {
-    var origin = new URL(url, typeof document !== 'undefined' ? document.baseURI : undefined).origin
+    var origin = get_origin(url)
 
     // the mux_key is the same as the origin, unless it is being overriden
     // (the overriding is done by the tests)
@@ -1144,6 +1150,33 @@ async function multiplex_fetch(url, params, mux_params) {
         }
     }
 }
+
+async function duplicate_multiplexer_error(res, error_text) {
+    // Some 409 errors are for duplicate multiplexers, and look like this:
+    //
+    //    409 Conflict
+    //    
+    //    Content-Type: application/json
+    //    
+    //    {
+    //        "error": "Multiplexer already exists",  // or "Request already multiplexed"
+    //        "details": "Cannot create duplicate multiplexer with ID 'xyz'"
+    //    }
+
+    try {
+        if (res.status === 409) {
+            var e = await res.clone().json()
+            console.log('duplicate: we got a 409!!!!', e)
+            // Now look to see if the JSON matches our 409 error
+            return e.error === error_text
+        }
+    } catch (e) {}
+
+    // Then this is not a duplicate multiplexer error
+    return false
+}
+
+var disabled_multiplex_hosts = new Set([])
 
 // returns a function with a fetch-like interface that transparently multiplexes the fetch
 async function create_multiplexer(origin, mux_key, params, mux_params, attempt) {
@@ -1208,11 +1241,25 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
     //  - its value is undefined if successfully created
     //  - its value is false if creation failed
     var mux_created_promise = (async () => {
-        // attempt to establish a multiplexed connection
+        // Create the multiplexer!
+
+        // There are two ways to create multiplexer:
+        //   - MULTIPLEX method
+        //   - POST to /.well-know/multiplexer/<id>
+
         try {
-            // Disable MULTIPLEX method for now — go straight to POST
-            if (true || mux_params?.via === 'POST'
-                || multiplex_fetch.post_only?.has(origin)) throw 'skip multiplex method'
+            // First, try to create multiplexer via MULTIPLEX method.
+            // If it fails, we'll fall back to POST.
+            //
+            // Or if we are configured to use POST, we will do that.
+            //
+            // Note: MULTIPLEX is Disabled!  We always use POST.
+            if (true
+                || mux_params?.via === 'POST'
+                || multiplex_fetch.post_only?.has(origin))
+
+                throw 'skip multiplex method'
+
             var res = await braid_fetch(`${origin}/${multiplexer}`, {
                 signal: mux_aborter.signal,
                 method: 'MULTIPLEX',
@@ -1220,35 +1267,39 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 retry: true,
                 multiplex: false
             })
-            if (res.status === 409) {
-                var e = await res.json()
-                if (e.error === 'Multiplexer already exists')
-                    return cleanup_multiplexer('retry')
-            }
+            if (await duplicate_multiplexer_error(res, "Multiplexer already exists"))
+                return cleanup_multiplexer('retry')
+
             if (!res.ok || res.headers.get('Multiplex-Version') !== multiplex_version)
                 throw 'bad'
+
         } catch (e) {
-            // some servers don't like custom methods,
-            // so let's try with a well-known url;
-            // remember this so we skip MULTIPLEX next time
+            // Create multiplexer via POST /.well-known/multiplexer/<id>
+            //
+            // Remember this so we skip trying to MULTIPLEX next time.
             ;(multiplex_fetch.post_only ||= new Set()).add(origin)
             try {
                 res = await braid_fetch(`${origin}/.well-known/multiplexer/${multiplexer}`,
                                         {method: 'POST',
-                                        signal: mux_aborter.signal,
-                                        headers: {'Multiplex-Version': multiplex_version},
-                                        retry: true,
-                                        multiplex: false})
-                if (res.status === 409) {
-                    var e = await res.json()
-                    if (e.error === 'Multiplexer already exists')
-                        return cleanup_multiplexer('retry')
-                }
+                                         signal: mux_aborter.signal,
+                                         headers: {'Multiplex-Version': multiplex_version},
+                                         retry: true,
+                                         multiplex: false})
+                if (await duplicate_multiplexer_error(res, "Multiplexer already exists"))
+                    return cleanup_multiplexer('retry')
+
                 if (!res.ok) throw new Error('status not ok: ' + res.status)
-                if (res.headers.get('Multiplex-Version') !== multiplex_version)
-                    throw new Error('wrong multiplex version: '
-                                    + res.headers.get('Multiplex-Version')
-                                    + ', expected ' + multiplex_version)
+                if (res.headers.get('Multiplex-Version') !== multiplex_version) {
+                    // Warn the user that there is a multiplex mismatch, and
+                    // then we'll fall back to a regular non-multiplex
+                    // request.
+                    console.warn("Multiplexer version mismatch:",
+                                 {client: multiplex_version,
+                                  server: res.headers.get('Multiplex-Version')},
+                                 'Disabling multiplexing on host.')
+                    disabled_multiplex_hosts.add(origin)
+                    throw new Error()
+                }
             } catch (e) {
                 // fallback to normal fetch if multiplexed connection fails
                 // console.error(`Could not establish multiplexer.\n`
@@ -1266,15 +1317,16 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         }, e => cleanup_multiplexer(e))
     })()
 
-    // return a "fetch" for this multiplexer
-    var f = async (url, params, mux_params, attempt) => {
+    // This wrapper for fetch sends its request over the multiplexer
+    var fetch_wrapper = async (url, params, mux_params, attempt) => {
 
         // if we already know the multiplexer is not working,
         // then fallback to normal fetch
         if ((await promise_done(mux_created_promise)) && (await mux_created_promise) === false) {
             // if the user is specifically asking for multiplexing,
             // throw an error instead
-            if (params.headers.get('multiplex-through')) throw new Error('multiplexer failed')
+            if (params.headers.get('multiplex-through'))
+                throw new Error('multiplexer failed')
 
             return await normal_fetch(url, params)
         }
@@ -1337,30 +1389,30 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             if (e !== 'retry' && established) await try_deleting_request(request).catch(e => {})
         }
 
-        // do the underlying fetch
+        // Do the underlying fetch
         try {
             if (attempt > 1) await mux_created_promise
 
+            // Wait until we know that the multiplexer has been created!
             var mux_was_done = await promise_done(mux_created_promise)
 
-            // callback for testing
-            mux_params?.onFetch?.(url, params)
+            // Yay, now we know that the multiplexer exists!  We can use it
+            // now, and send a fetch over it.
 
+            mux_params?.onFetch?.(url, params)  // Used only in our test/test.js
+
+            // ==================================
+            // Do the actual fetch()!  Yay!
             var res = await normal_fetch(url, params)
+            // ===================================
 
             // The server received our request — if we need to tear it
             // down later, send a DELETE. (Skip for network errors, where
             // normal_fetch throws and we never reach here.)
             established = true
 
-            if (res.status === 409) {
-                var e = await res.json()
-                if (e.error === 'Request already multiplexed') {
-                    // the id is already in use,
-                    // so we want to retry right away with a different id
-                    throw "retry"
-                }
-            }
+            if (await duplicate_multiplexer_error(res, "Request already multiplexed"))
+                throw "retry"
 
             if (res.status === 424) {
                 // the multiplexer isn't there,
@@ -1381,23 +1433,30 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 throw "retry"
             }
 
-            // if the response says it's ok,
-            // but it's is not a multiplexed response,
-            // fall back to as if it was a normal fetch
-            if (res.ok && res.status !== 293) return res
+            // If this LOOKS like a successful multiplexer request, sanity check it:
+            if (res.status === 293 || res.headers.has('Multiplex-Version')) {
+                // Check for an eggregious multiplexing error: did the multiplexer
+                // give the right version when creating a multiplexer... but the
+                // WRONG version for this request?
+                if (res.headers.get('Multiplex-Version') !== multiplex_version)
+                    throw create_error(`Server created multiplexer, and then set a *different* `
+                                       + `Multiplex-Version ${res.headers.get('Multiplex-Version')} `
+                                       + `on a multiplexed request`,
+                                       { dont_retry: true })
 
-            if (res.status !== 293)
-                throw create_error('Could not establish multiplexed request '
-                                    + params.headers.get('multiplex-through')
-                                    + ', got status: ' + res.status,
-                                    { dont_retry: true })
+                if (res.status !== 293)
+                    throw create_error(`Multiplexed request status ${res.status} is not 293`)
+                if (!res.headers.has('Multiplex-Version'))
+                    throw create_error('Multiplexed request is missing Multiplex-Version header')
+            } else
+                // If we got a response that doesn't talk about multiplexing...
+                // then something probably went wrong before touching the server's
+                // multiplexer code.  Let's just return it.
+                return res
 
-            if (res.headers.get('Multiplex-Version') !== multiplex_version)
-                throw create_error('Could not establish multiplexed request '
-                                    + params.headers.get('multiplex-through')
-                                    + ', got unknown version: '
-                                    + res.headers.get('Multiplex-Version'),
-                                    { dont_retry: true })
+            // ===========================================================
+            // Now we have a functioning multiplex-through 293 response!
+            // ===========================================================
 
             // we want to present the illusion that the connection is still open,
             // and therefor closable with "abort",
@@ -1473,8 +1532,8 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             throw (e === 'retry' && e) || mux_error || e
         }
     }
-    f.cleanup = () => cleanup_multiplexer(new Error('manual cleanup'))
-    return f
+    fetch_wrapper.cleanup = () => cleanup_multiplexer(new Error('manual cleanup'))
+    return fetch_wrapper
 }
 
 // waits on reader for chunks like: 123 bytes for request ABC\r\n..123 bytes..
@@ -1556,25 +1615,86 @@ function concat_buffers(buffers) {
     return x
 }
 
-function reliable_update_channel (url, {on_update,
-                                        on_status,
-                                        on_warning,
-                                        on_error,
-                                        reconnect_from_parents,
-                                        get_headers,
-                                        put_headers = {},
-                                        timeout = 20,
+// Provides an abstraction over a GET Subscription and many PUTs as a single
+// channel that can be online or offline.
+//
+// Guarantees that the GET will resubscribe and the PUTs will send when they
+// can.
+//
+// Models there being a single network "connection" to the server, that can go
+// online and offline, even though it's actually sending multiple distinct
+// requests and responses, and doesn't get any information about an underlying
+// TCP or QUIC connection.
+//
+// Infers online or offline status as follows:
+//
+//   - Goes offline when:
+//     - Missing a heartbeat in N seconds
+//     - Missing a PUT acknowledgement in N seconds
+//     - Receiving HTTP status codes (408, 502, 503, 504) that indicate network problems
+//     - Receiving TLS errors that signal we're behind a captive portal
+//
+//   - When it goes offline:
+//     - It stops the GET and all PUTs
+//     - Then tries going online
+//
+//   - To go online, it repeatedly sends a GET subscription request
+//     - Once that connects, it sends all PUTs, in order
+//
+// Also will slow down PUTs, when receiving:
+//   - 429: Too many Requests
+//
+// [TODO] Will send a warning to the console on rate limit indicators:
+//   - 429: Too Many Requests
+//   - 503: Service Unavailable
+//
+function reliable_update_channel (url, params) {
+    var {
+        on_update,
+        on_status,
+        on_warning,
+        on_error,
+        reconnect_from_parents,
+        get_headers,
+        put_headers = {},
+        timeout = 20,
 
-                                        // undocumented:
-                                        no_retry_status_codes, // status codes that should error out
-                                       } = {}) {
+        // Used in simpleton to abort and crash if digests mismatch on the server
+        failure_status_codes = [],
+        no_retry_status_codes     // Deprecated rename of prior
+    } = params || {}
+
+    failure_status_codes = // Remove this in braid-http version 1.4+
+        no_retry_status_codes || failure_status_codes
 
     // Per the reliable-updates spec, these subscription response codes
     // indicate a transient failure we should retry without warning.
-    var silent_retry_codes = new Set([309, 408, 425, 429, 432, 502, 503, 504])
+    var silent_retry_codes = [
+        309,  // "Version Unknown Here" (deprecated? replaced with 432 in versions spec.)
+        432,  // "Version Not Found":
+              //  - Might be out of order.  Wait and retry after a delay.
+        408,  // Request Timeout
+              //  - The network is probably bad.
+        425,  // Too Early (for TLS 1.3 0-RTT)
+              //  - Network ok.  Just re-send after a delay.  Keep everything else going.
+        429,  // Too Many Requests:
+              //  - Network ok.  Perhaps send just one, until it goes through.
+        502,  // "Bad Gateway".  Origin server is broken/crashing.
+              //  - Server down.  Restart.
+        503,  // "Service Unavailable":  Server is answering that it is unavailable.
+              //  - Something is wrong.  Restart.
+              //  - It would be confusing if PUTs were getting 503, but GET was fine, and
+              //    we acted like everything is fine.  So let's go offline.
+        504   // "Gateway Timeout": Network path to server is down.
+              //  - Offline.
+    ]
+
+    // Todo:
+    //  - We need to console warn on rate limiting: 429 and 503.
+    //    - These could indicate that a rate limit variable needs changing somewhere.
+    //  - Handle 3xx redirects?
 
     // Status codes that we should NOT retry:
-    no_retry_status_codes = new Set(no_retry_status_codes || [])
 
     // Delay for the next reconnect attempt. If the server sent a Retry-After
     // header (seconds), honor that. Otherwise use our 1s / 3s backoff.
@@ -1586,11 +1706,10 @@ function reliable_update_channel (url, {on_update,
         else console.warn('reliable_update_channel:', msg)
     }
 
-    // Captive-portal-ish fetch failures get a plain console.log,
-    // not a warning, per reliable-updates spec
+    // Captive-portal-ish fetch failures get a plain console.log.
     var note_fetch_error = (err) => {
         if (err?.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
-            console.log('connection not up: TLS hostname mismatch, likely a captive portal')
+            console.warn('connection not up: TLS hostname mismatch, likely a captive portal')
     }
 
     // Internal abort controller — aborting this shuts down the whole
@@ -1625,7 +1744,7 @@ function reliable_update_channel (url, {on_update,
     // A successful subscription or PUT resets it to 0.
     // ============================================================
     var heartbeat_timeout_ms = (1.2 * timeout + 3) * 1000
-    var put_queue = new Set()    // entries: {update, resolve, reject}
+    var put_queue = new Set()   // entries: {update, resolve, reject}
     var send_put                // current connection's PUT sender, set once online
     var channel_reconnect       // current connection's reconnect function (for the manual reconnect() method)
     var failure_count = 0
@@ -1693,11 +1812,11 @@ function reliable_update_channel (url, {on_update,
                 // rest emit a warning including the status code, then retry.
                 if (res.status !== 209) {
                     var err = new Error(`status ${res.status}`)
-                    if (no_retry_status_codes.has(res.status))
+                    if (failure_status_codes.includes(res.status))
                         return shutdown(err)
                     var retry_after = parseFloat(res.headers.get('retry-after'))
                     if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
-                    if (!silent_retry_codes.has(res.status) && !isFinite(retry_after))
+                    if (!silent_retry_codes.includes(res.status) && !isFinite(retry_after))
                         warn(`subscription to ${url} got unexpected status ${res.status}`)
                     return reconnect(err)
                 }
@@ -1766,11 +1885,11 @@ function reliable_update_channel (url, {on_update,
                     // codes warn and reconnect.
                     if (res.status < 200 || res.status >= 300) {
                         var err = new Error(`status ${res.status}`)
-                        if (no_retry_status_codes.has(res.status))
+                        if (failure_status_codes.includes(res.status))
                             return shutdown(err)
                         var retry_after = parseFloat(res.headers.get('retry-after'))
                         if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
-                        if (!silent_retry_codes.has(res.status) && !isFinite(retry_after))
+                        if (!silent_retry_codes.includes(res.status) && !isFinite(retry_after))
                             warn(`put got unexpected status ${res.status}`)
                         return reconnect(err)
                     }
