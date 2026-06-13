@@ -1602,7 +1602,10 @@ run_test(
     async () => {
         var a = new AbortController()
         return '' + await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patch_buffer: true, giveup: true}}).then(
+            fetch('/json', {
+                subscribe: true, multiplex: false, signal: a.signal,
+                headers: {skip_first: true, send_binary_patch_buffer: true, giveup: true}
+            }).then(
                 res => res.subscribe(
                     (update) => {
                         resolve(update.patches[0].content)
@@ -1620,14 +1623,23 @@ run_test(
     async () => {
         var a = new AbortController()
         var x = await new Promise((resolve, reject) => {
-            fetch('/json', {subscribe: true, multiplex: false, signal: a.signal, headers: {skip_first: true, send_binary_patches_arraybuffer: true, giveup: true}}).then(
-                res => res.subscribe(
-                    (update) => {
-                        resolve(new Blob([update.patches[0].content, update.patches[1].content]))
-                        a.abort()
-                    },
-                    reject
-                )).catch(reject)
+            fetch('/json', {
+                subscribe: true, multiplex: false, signal: a.signal,
+                headers: {skip_first: true, send_binary_patches_arraybuffer: true, giveup: true}
+            }).then(
+                async res => {
+                    console.log('the res is', res, 'with',
+                                await (res.clone()).text())
+                    res.subscribe(
+                        (update) => {
+                            console.log('Got update', update)
+                            resolve(new Blob([update.patches[0].content, update.patches[1].content]))
+                            console.log('that was ok')
+                            a.abort()
+                        },
+                        reject
+                    )
+                }).catch(reject)
         })
         x = await x.arrayBuffer()
         return '' + new Uint8Array(x)
@@ -4216,6 +4228,33 @@ run_test(
         return got
     },
     '{"version":["v1"],"patches":[{"unit":"text","range":"[0:0]","content":"a"},{"unit":"text","range":"[1:1]","content":"b"}],"status":"200"}'
+)
+
+add_section_header("Parsing updates from a single 200 response body")
+run_test(
+    "Parse a single 200 response body snapshot",
+    async () => {
+        var res = await fetch(base_url + '/single-update-snapshot')
+        var update = await res.update()
+        return JSON.stringify({version: update.version,
+                               parents: update.parents,
+                               body: JSON.parse(update.body_text)})
+    },
+    '{"version":["3"],"parents":["1"],"body":{"hello":"world"}}'
+)
+run_test(
+    "Parse a single 200 response body with patches",
+    async () => {
+        var res = await fetch(base_url + '/single-update-patches')
+        var update = await res.update()
+        update.patches.forEach(p =>
+            p.content = p.content_text
+        )
+        return JSON.stringify({version: update.version,
+                               parents: update.parents,
+                               patches: update.patches})
+    },
+    '{"version":["4"],"parents":["3"],"patches":[{"unit":"json","range":".hello","content":"worlds"},{"unit":"json","range":".and","content":"wonderverses"}]}'
 )
 
 add_section_header("Server patch: vs patches: wire format")

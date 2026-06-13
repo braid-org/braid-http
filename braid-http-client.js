@@ -285,8 +285,9 @@ async function braid_fetch (url, params = {}) {
             let on_error = e => {
                 on_error = () => {}
 
-                // The fetch is probably down already, but there are some other errors that could have happened,
-                // and in those cases, we want to make sure to close the fetch
+                // The fetch is probably down already, but there are some
+                // other errors that could have happened, and in those cases,
+                // we want to make sure to close the fetch
                 underlying_aborter?.abort()
 
                 // Notify subscription went offline
@@ -296,9 +297,9 @@ async function braid_fetch (url, params = {}) {
                 }
 
                 // see if we should retry..
-                var retry = params.retry &&    // only try to reconnect if the user has chosen to
-                    e.name !== "AbortError" && // don't retry if the user has chosen to abort
-                    !e.dont_retry              // some errors are unlikely to be fixed by retrying
+                var retry = params.retry &&    // Only try to reconnect if the user has chosen to.
+                    e.name !== "AbortError" && // Don't retry if the user has chosen to abort.
+                    !e.dont_retry              // Some errors are unlikely to be fixed by retrying.
 
                 if (retry && !original_signal?.aborted) {
                     // retry after some time..
@@ -311,7 +312,8 @@ async function braid_fetch (url, params = {}) {
                 } else {
                     // if we would have retried except that original_signal?.aborted,
                     // then we want to return that as the error..
-                    if (retry && original_signal?.aborted) e = create_error('already aborted', {name: 'AbortError'})
+                    if (retry && original_signal?.aborted)
+                        e = create_error('already aborted', {name: 'AbortError'})
 
                     // let people know things are shutting down..
                     subscription_counts_on_close?.()
@@ -321,7 +323,8 @@ async function braid_fetch (url, params = {}) {
             }
 
             try {
-                if (original_signal?.aborted) throw create_error('already aborted', {name: 'AbortError'})
+                if (original_signal?.aborted)
+                    throw create_error('already aborted', {name: 'AbortError'})
 
                 // We need a fresh underlying abort controller each time we connect
                 underlying_aborter = new AbortController()
@@ -331,7 +334,8 @@ async function braid_fetch (url, params = {}) {
                 // call it now to get the latest parents
                 if (typeof params.parents === 'function') {
                     let parents = await params.parents()
-                    if (parents) params.headers.set('parents', parents.map(JSON.stringify).join(', '))
+                    if (parents)
+                        params.headers.set('parents', parents.map(JSON.stringify).join(', '))
                 }
 
                 // Work around Chrome bug where when you restore a closed tab,
@@ -413,12 +417,15 @@ async function braid_fetch (url, params = {}) {
 
                 braid_fetch.emit('response', {req: params, res})
 
-                // And customize the response with a couple methods for getting
-                // the braid subscription data:
+                // And customize the response with a few methods:
+                // ...for parsing an update from the response:
+                res.update       = () => parse_standalone_update(res)
+
+                // ...and for getting the braid subscription data:
                 res.subscribe    = start_subscription
                 res.subscription = {[Symbol.asyncIterator]: iterator}
 
-                // Now we define the subscription function we just used:
+                // Now define the subscription function we just used:
                 function start_subscription (cb, error) {
                     subscription_cb = cb
                     subscription_error = error
@@ -577,9 +584,15 @@ async function braid_fetch (url, params = {}) {
                     if (give_up) {
                         if (params.onSubscriptionStatus && subscription_online) {
                             subscription_online = false
-                            params.onSubscriptionStatus({online: false, error: new Error(`giving up because of http status: ${res.status}`)})
+                            params.onSubscriptionStatus({
+                                online: false,
+                                error: new Error(`giving up because of http status: ${res.status}`)
+                            })
                         }
-                        if (subscription_cb) subscription_error?.(new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`))
+                        if (subscription_cb)
+                            subscription_error?.(
+                                new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`)
+                            )
                     } else if (!res.ok) throw new Error(`status not ok: ${res.status}`)
                 }
 
@@ -594,9 +607,14 @@ async function braid_fetch (url, params = {}) {
                 retry_count = 0
 
                 // parse version if it exists
-                var version_header = res.headers.get('version') || res.headers.get('current-version')
+                var version_header = res.headers.get('version')
+                                  || res.headers.get('current-version')
                 if (version_header)
-                    try { res.version = JSON.parse('[' + version_header + ']') } catch (e) { console.log('error parsing version: ' + version_header) }
+                    try {
+                        res.version = JSON.parse('[' + version_header + ']')
+                    } catch (e) {
+                        console.log('error parsing version: ' + version_header)
+                    }
 
                 done(res)
             } catch (e) { on_error(e) }
@@ -638,7 +656,45 @@ async function handle_fetch_stream (stream, cb, on_bytes) {
     }
 }
 
+function extract_update (parser_state) {
+    var update = {
+        version:      parser_state.version,
+        parents:      parser_state.parents,
+        body:         parser_state.body,
+        patches:      parser_state.patches,
+        status:       parser_state.status,
+        content_type: parser_state.content_type,
 
+        // Output extra_headers if there are some
+        extra_headers: extra_headers(parser_state.headers)
+    }
+    for (var k in update)
+        if (update[k] === undefined) delete update[k]
+
+    // Install .body_text helper on body
+    var body_text_cache = null
+    Object.defineProperty(update, 'body_text', {
+        get: function () {
+            if (body_text_cache !== null) return body_text_cache
+            return body_text_cache = this.body != null ?
+                new TextDecoder('utf-8').decode(this.body.buffer) : undefined
+        }
+    })
+
+    // Install content_text helpers on each patch content
+    for (let p of update.patches ?? []) {
+        let content_text_cache = null
+        Object.defineProperty(p, 'content_text', {
+            get: () => {
+                if (content_text_cache !== null) return content_text_cache
+                return content_text_cache =
+                    new TextDecoder('utf-8').decode(p.content)
+            }
+        })
+    }
+
+    return update
+}
 
 // ****************************
 // Braid-HTTP Subscription Parser
@@ -671,39 +727,7 @@ var subscription_parser = (cb) => ({
 
             // Maybe we parsed an update!  That's cool!
             if (this.state.result === 'success') {
-                var update = {
-                    version:      this.state.version,
-                    parents:      this.state.parents,
-                    body:         this.state.body,
-                    patches:      this.state.patches,
-                    status:       this.state.status,
-                    content_type: this.state.content_type,
-
-                    // Output extra_headers if there are some
-                    extra_headers: extra_headers(this.state.headers)
-                }
-                for (var k in update)
-                    if (update[k] === undefined) delete update[k]
-
-                var body_text_cache = null
-                Object.defineProperty(update, 'body_text', {
-                    get: function () {
-                        if (body_text_cache !== null) return body_text_cache
-                        return body_text_cache = this.body != null ?
-                            new TextDecoder('utf-8').decode(this.body.buffer) : undefined
-                    }
-                })
-
-                for (let p of update.patches ?? []) {
-                    let content_text_cache = null
-                    Object.defineProperty(p, 'content_text', {
-                        get: () => {
-                            if (content_text_cache !== null) return content_text_cache
-                            return content_text_cache =
-                                new TextDecoder('utf-8').decode(p.content)
-                        }
-                    })
-                }
+                var update = extract_update(this.state)
 
                 // Reset the parser for the next version!
                 this.state = {input: this.state.input}
@@ -757,6 +781,8 @@ function parse_update (state) {
             return state
         }
 
+        parse_header_values(parsed.headers)
+
         state.headers       = parsed.headers
         state.version       = state.headers.version
         state.parents       = state.headers.parents
@@ -775,12 +801,41 @@ function parse_update (state) {
     return parse_body(state)
 }
 
-// Parsing helpers
-function parse_headers (input, check_for_encoding_blocks, dont_parse_special_headers) {
+// This one parses a standalone response, that doesn't appear within a
+// subscription.  The headers are already parsed, here, so we fake the parse
+// state halfway through.
+async function parse_standalone_update (res) {
+    var headers = parse_header_values(
+        Object.fromEntries(res.headers.entries())
+    )
+    var parsed = parse_body({
+        headers: {
+            version: headers.version,
+            parents: headers.parents,
+            patches: headers.patches,
+            ':status': res.status,
+            'content-type': headers['content-type'],
+            'content-length': headers['content-length'],
+        },
+
+        // The parse_update() function pulls some headers out
+        // explicitly for parse_body() to use
+        version: headers.version,
+        parents: headers.parents,
+        status: res.status,
+        content_type: headers['content-type'],
+
+        input: new Uint8Array(await res.arrayBuffer())
+    })
+
+    return extract_update(parsed)
+}
+
+function parse_headers (input, check_for_encoding_blocks) {
 
     // Find the start of the headers
     var start = 0
-    while (input[start] === 13 || input[start] === 10) start++
+    while (input[start] === 13 || input[start] === 10) start++  // Skip newlines
     if (start === input.length) return {result: 'waiting'}
 
     // Check for an "Encoding" block like this:
@@ -838,7 +893,8 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
         ? headers_source.map(x => String.fromCharCode(x)).join('')
         : new TextDecoder().decode(headers_source)
 
-    // Convert "HTTP 200 OK" or "200 OK" to a :status: 200 header
+    // Convert status line into a ":status" header, so we can parse it as a header.
+    // Accepts both the "HTTP 200 OK" and "200 OK" forms.
     headers_source = headers_source.replace(/^(?:HTTP\/?\d*\.?\d* )?(\d\d\d).*\r?\n/,
                                             ':status: $1\r\n')
 
@@ -870,15 +926,7 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
             last_index: header_regex.lastIndex, headers_length
         }
 
-    // Success!  Let's parse special headers
-    if (!dont_parse_special_headers) {
-        if ('version' in headers)
-            headers.version = JSON.parse('['+headers.version+']')
-        if ('parents' in headers)
-            headers.parents = JSON.parse('['+headers.parents+']')
-        if ('patches' in headers)
-            headers.patches = JSON.parse(headers.patches)
-    }
+    // Success!
 
     // // If we have Patches: N, verify that we have the right content-type set
     // if ('patches' in headers
@@ -891,6 +939,17 @@ function parse_headers (input, check_for_encoding_blocks, dont_parse_special_hea
 
     // And return the parsed result
     return { result: 'success', headers, input }
+}
+
+// Parse the Version, Parents, and Patches values into JS primitves
+function parse_header_values (headers) {
+    if ('version' in headers)
+        headers.version = JSON.parse('['+headers.version+']')
+    if ('parents' in headers)
+        headers.parents = JSON.parse('['+headers.parents+']')
+    if ('patches' in headers)
+        headers.patches = JSON.parse(headers.patches)
+    return headers
 }
 
 // Content-range is of the form '<unit> <range>' e.g. 'json .index'
@@ -983,6 +1042,9 @@ function parse_body (state) {
                     state.result = 'waiting'
                     return state
                 }
+
+                // Now parse the values within the headers
+                parse_header_values(parsed)
 
                 // We parsed patch headers!  Update state.
                 last_patch.headers = parsed.headers
@@ -1479,17 +1541,17 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 if (request_ended) buffers.push(null)
 
                 // try parsing what we got so far as headers..
-                var x = parse_headers(headers_buffer, false, true)
+                var headers = parse_headers(headers_buffer, false)
 
                 // how did it go?
-                if (x.result === 'error') {
+                if (headers.result === 'error') {
                     // if we got an error, give up
                     // console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
                     throw new Error('error parsing headers')
-                } else if (x.result === 'waiting') {
+                } else if (headers.result === 'waiting') {
                     if (request_ended)
                         throw new Error('Multiplexed request ended before headers received.')
-                } else return x
+                } else return headers
             })
 
             // put the bytes left over from the header back
@@ -1644,10 +1706,25 @@ function concat_buffers(buffers) {
 // Also will slow down PUTs, when receiving:
 //   - 429: Too many Requests
 //
+// Will silently swallow and retry on:
+//   - 432 (version unknown, might just need to wait until it reaches)
+//     - But maybe we should eventually give up?  Or print error?
+//   - ??
+
 // [TODO] Will send a warning to the console on rate limit indicators:
 //   - 429: Too Many Requests
 //   - 503: Service Unavailable
 //
+// [TODO] Handle 3XX redirects
+//   - 301 Moved Permanently and 306 Permanent Redirect:
+//     - Move channel to this other URL instead, and remember it
+//   - 302 Found and 307 Temporary Redirect:
+//     - Redo just this request, at this other URL instead
+//   - Weird ones, we don't expect -- likely indicate some kind of error:
+//     - 300 Multiple Choices.  Not sure what to do.  Warn user, and retry?
+//     - 403 Not Modified.  Only happens if client issues If-None-Match, and we won't.
+//     - 303 See Other.  Only happens from POST.  Says where the URL now lives.
+
 function reliable_update_channel (url, params) {
     var {
         on_update,
@@ -1675,6 +1752,7 @@ function reliable_update_channel (url, params) {
               //  - Might be out of order.  Wait and retry after a delay.
         408,  // Request Timeout
               //  - The network is probably bad.
+              //  - But maybe rebooting will just overload it
         425,  // Too Early (for TLS 1.3 0-RTT)
               //  - Network ok.  Just re-send after a delay.  Keep everything else going.
         429,  // Too Many Requests:
@@ -1716,12 +1794,12 @@ function reliable_update_channel (url, params) {
     // channel (the GET subscription and the PUT queue). It aborts when
     // the caller calls close() or when shutdown() is called (self-
     // initiated shutdown due to a fatal error like a parse error).
-    var aborter = new AbortController()
+    var total_aborter = new AbortController()
     var shut_down = false
     var shutdown = (err) => {
         if (shut_down) return
         shut_down = true
-        aborter.abort()
+        total_aborter.abort()
         on_error?.(err)
     }
 
@@ -1752,7 +1830,7 @@ function reliable_update_channel (url, params) {
 
     // Closing the channel: tear down the in-flight connection and reject
     // anything still queued.
-    aborter.signal.addEventListener('abort', () => {
+    total_aborter.signal.addEventListener('abort', () => {
         conn_aborter?.abort()
         for (var entry of put_queue)
             entry.reject(new Error('reliable_update_channel aborted'))
@@ -1760,10 +1838,9 @@ function reliable_update_channel (url, params) {
         notify_status()
     })
 
-    connect()
-
-    function connect () {
-        if (aborter.signal.aborted) return
+    subscribe()
+    async function subscribe () {
+        if (total_aborter.signal.aborted) return
 
         // This connection's own abort controller, aborted by reconnect()
         // to tear down the in-flight GET and any in-flight PUTs.
@@ -1776,142 +1853,138 @@ function reliable_update_channel (url, params) {
         // always retire THIS connection — never a later one that has
         // since reassigned the shared var. The two guards make it a
         // no-op once the whole channel has been shut down, or once this
-        // connection has already torn down. channel_reconnect exposes
-        // the current connection's reconnect to the manual reconnect()
+        // connection has already torn down. channel_reboot exposes
+        // the current connection's reboot to the manual reboot()
         // method.
-        var reconnect = (err) => {
-            if (aborter.signal.aborted || inner_signal.aborted) return
+        var reboot = (err) => {
+            if (total_aborter.signal.aborted || inner_signal.aborted) return
             if (online) { online = false; notify_status() }
             conn_aborter.abort()
-            setTimeout(connect, delay(err, ++failure_count))
+            setTimeout(subscribe, delay(err, ++failure_count))
         }
-        channel_reconnect = reconnect
+        channel_reboot = reboot
 
-        run()
+        // ── Heartbeat timer ──────────────────────────────────────
+        // Starts as a no-op; armed after we confirm the server echoed
+        // the Heartbeats header.
+        var heartbeat_timer = null
+        var reset_heartbeat_timer = () => {}
+        inner_signal.addEventListener('abort', () => clearTimeout(heartbeat_timer))
 
-        async function run () {
-            // ── Heartbeat timer ──────────────────────────────────────
-            // Starts as a no-op; armed after we confirm the server echoed
-            // the Heartbeats header.
-            var heartbeat_timer = null
-            var reset_heartbeat_timer = () => {}
-            inner_signal.addEventListener('abort', () => clearTimeout(heartbeat_timer))
+        // ── Subscription (GET) ───────────────────────────────────
+        try {
+            var res = await braid_fetch(url, {
+                subscribe: true,
+                signal: inner_signal,
+                headers: {'Heartbeats': timeout, ...get_headers},
+                parents: reconnect_from_parents,
+                on_heartbeat: () => reset_heartbeat_timer()
+            })
 
-            // ── Subscription (GET) ───────────────────────────────────
+            // Per the spec: any non-209 status is a failure. Some status
+            // codes (and any response with Retry-After) retry silently; the
+            // rest emit a warning including the status code, then retry.
+            if (res.status !== 209) {
+                var err = new Error(`status ${res.status}`)
+                if (failure_status_codes.includes(res.status))
+                    return shutdown(err)
+                var retry_after = parseFloat(res.headers.get('retry-after'))
+                if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
+                if (!silent_retry_codes.includes(res.status) && !isFinite(retry_after))
+                    warn(`subscription to ${url} got unexpected status ${res.status}`)
+                return reboot(err)
+            }
+
+            failure_count = 0
+            online = true; notify_status()
+            if (res.headers.get('heartbeats')) {
+                reset_heartbeat_timer = () => {
+                    clearTimeout(heartbeat_timer)
+                    heartbeat_timer = setTimeout(() => {
+                        reboot(new Error(`heartbeat not seen in ${heartbeat_timeout_ms / 1000}s`))
+                    }, heartbeat_timeout_ms)
+                }
+                reset_heartbeat_timer()
+            }
+            res.subscribe(
+                update => {
+                    // Mirror the server's content-type into PUT headers
+                    var type = update.extra_headers?.['content-type']
+                    if (type) put_headers['Content-Type'] = type
+                    on_update?.(update)
+                },
+                err => {
+                    if (inner_signal.aborted) return
+                    // dont_retry marks errors the stream code has flagged
+                    // as "won't be fixed by reconnecting" — primarily
+                    // subscription parse errors (corrupt stream) and
+                    // user-code exceptions thrown from on_update. Warn and
+                    // shut down the whole reliable_update_channel.
+                    if (err?.dont_retry) {
+                        warn('subscription error: ' + err.message)
+                        return shutdown(err)
+                    }
+                    reboot(err)
+                }
+            )
+        } catch (err) {
+            if (inner_signal.aborted) return
+            note_fetch_error(err)
+            return reboot(err)
+        }
+
+        // ── PUT queue ────────────────────────────────────────────
+        send_put = async (entry) => {
+            if (inner_signal.aborted) return
+            // Per the spec: each PUT has a timeout. If it doesn't
+            // complete in time, trigger reboot which aborts all
+            // in-flight PUTs and schedules a retry of the queue.
+            var timed_out = false
+            var timeout_handle = setTimeout(() => {
+                timed_out = true
+                reboot(new Error(`put timeout after ${timeout}s`))
+            }, timeout * 1000)
             try {
                 var res = await braid_fetch(url, {
-                    subscribe: true,
+                    method: 'PUT',
                     signal: inner_signal,
-                    headers: {'Heartbeats': timeout, ...get_headers},
-                    parents: reconnect_from_parents,
-                    on_heartbeat: () => reset_heartbeat_timer()
+                    ...entry.update,
+                    headers: {...put_headers, ...entry.update.headers}
                 })
+                if (timed_out) return
 
-                // Per the spec: any non-209 status is a failure. Some status
-                // codes (and any response with Retry-After) retry silently; the
-                // rest emit a warning including the status code, then retry.
-                if (res.status !== 209) {
+                // Per the spec: 2xx is success. Any non-2xx is a failure
+                // — silent-retry codes (and any non-2xx response with
+                // Retry-After) reconnect silently; other non-2xx status
+                // codes warn and reconnect.
+                if (res.status < 200 || res.status >= 300) {
                     var err = new Error(`status ${res.status}`)
                     if (failure_status_codes.includes(res.status))
                         return shutdown(err)
                     var retry_after = parseFloat(res.headers.get('retry-after'))
                     if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
                     if (!silent_retry_codes.includes(res.status) && !isFinite(retry_after))
-                        warn(`subscription to ${url} got unexpected status ${res.status}`)
-                    return reconnect(err)
+                        warn(`put got unexpected status ${res.status}`)
+                    return reboot(err)
                 }
 
+                // Success! The server received it, so count it regardless
+                // of whether inner_signal was aborted in the meantime.
                 failure_count = 0
-                online = true; notify_status()
-                if (res.headers.get('heartbeats')) {
-                    reset_heartbeat_timer = () => {
-                        clearTimeout(heartbeat_timer)
-                        heartbeat_timer = setTimeout(() => {
-                            reconnect(new Error(`heartbeat not seen in ${heartbeat_timeout_ms / 1000}s`))
-                        }, heartbeat_timeout_ms)
-                    }
-                    reset_heartbeat_timer()
-                }
-                res.subscribe(
-                    update => {
-                        // Mirror the server's content-type into PUT headers
-                        var type = update.extra_headers?.['content-type']
-                        if (type) put_headers['Content-Type'] = type
-                        on_update?.(update)
-                    },
-                    err => {
-                        if (inner_signal.aborted) return
-                        // dont_retry marks errors the stream code has flagged
-                        // as "won't be fixed by reconnecting" — primarily
-                        // subscription parse errors (corrupt stream) and
-                        // user-code exceptions thrown from on_update. Warn and
-                        // shut down the whole reliable_update_channel.
-                        if (err?.dont_retry) {
-                            warn('subscription error: ' + err.message)
-                            return shutdown(err)
-                        }
-                        reconnect(err)
-                    }
-                )
+                put_queue.delete(entry)
+                notify_status()
+                entry.resolve(res)
             } catch (err) {
-                if (inner_signal.aborted) return
+                if (inner_signal.aborted || timed_out) return
                 note_fetch_error(err)
-                return reconnect(err)
+                reboot(err)
+            } finally {
+                clearTimeout(timeout_handle)
             }
-
-            // ── PUT queue ────────────────────────────────────────────
-            send_put = async (entry) => {
-                if (inner_signal.aborted) return
-                // Per the spec: each PUT has a timeout. If it doesn't
-                // complete in time, trigger reconnect which aborts all
-                // in-flight PUTs and schedules a retry of the queue.
-                var timed_out = false
-                var timeout_handle = setTimeout(() => {
-                    timed_out = true
-                    reconnect(new Error(`put timeout after ${timeout}s`))
-                }, timeout * 1000)
-                try {
-                    var res = await braid_fetch(url, {
-                        method: 'PUT',
-                        signal: inner_signal,
-                        ...entry.update,
-                        headers: {...put_headers, ...entry.update.headers}
-                    })
-                    if (timed_out) return
-
-                    // Per the spec: 2xx is success. Any non-2xx is a failure
-                    // — silent-retry codes (and any non-2xx response with
-                    // Retry-After) reconnect silently; other non-2xx status
-                    // codes warn and reconnect.
-                    if (res.status < 200 || res.status >= 300) {
-                        var err = new Error(`status ${res.status}`)
-                        if (failure_status_codes.includes(res.status))
-                            return shutdown(err)
-                        var retry_after = parseFloat(res.headers.get('retry-after'))
-                        if (isFinite(retry_after)) err.retry_after_ms = retry_after * 1000
-                        if (!silent_retry_codes.includes(res.status) && !isFinite(retry_after))
-                            warn(`put got unexpected status ${res.status}`)
-                        return reconnect(err)
-                    }
-
-                    // Success! The server received it, so count it regardless
-                    // of whether inner_signal was aborted in the meantime.
-                    failure_count = 0
-                    put_queue.delete(entry)
-                    notify_status()
-                    entry.resolve(res)
-                } catch (err) {
-                    if (inner_signal.aborted || timed_out) return
-                    note_fetch_error(err)
-                    reconnect(err)
-                } finally {
-                    clearTimeout(timeout_handle)
-                }
-            }
-
-            // Fire any queued PUTs now that we're online.
-            for (var entry of put_queue) send_put(entry)
         }
+
+        // Fire any queued PUTs now that we're online.
+        for (var entry of put_queue) send_put(entry)
     }
 
     return {
@@ -1923,10 +1996,179 @@ function reliable_update_channel (url, params) {
                 if (online) send_put(entry)
             })
         },
-        close () { aborter.abort() },
-        reconnect () { channel_reconnect?.(new Error('manual reconnect')) }
+        close () { total_aborter.abort() },
+
+        // Mike: Where is the following used?  I don't think it should be necessary.
+        reconnect () { channel_reboot?.(new Error('manual reconnect')) }
     }
 }
+
+// XXX ============================
+// XXX Not yet working.  WIP.
+// XXX ============================
+function http_statebus (cb) {
+    var online = false,
+        subscribed = {},
+
+        abort_get,
+        abort_puts,
+
+        // Timeout periods
+        heartbeat_period = 20,
+        polling_interval = 30,
+        version_not_found_delay = 5,  // When waiting for a version to appear
+        cooloff_delay = 10            // When server told us to chill
+
+    function we_are_online (true_false) {
+        cb('online', true_false)
+        online = true_false
+    }
+    function announce_update (url, update) {
+        cb(url. update)
+    }
+
+
+    async function GET (url, options) {
+        var GET_again = () => GET(url, options)
+        try {
+
+            // Prepare for abortions
+            var aborter = new AbortController()
+            abort_get = aborter.abort
+
+            // Do the fetch
+            var res = await braid_fetch(url, {
+                subscribe: true,
+                headers: {'Heartbeats': heartbeat_period},
+                parents: options.last_known_parents,
+                signal: aborter.signal,
+                on_heartbeat: got_heartbeat
+            })
+
+            // Process the response
+
+            // Log warnings to the user
+            switch (res.status) {
+            case 500:
+                // Automatically already logged in JS console by browser, I
+                // think?
+                break;
+            }
+
+            // Change online/offline state
+            switch (res.status) {
+            case 200: // OK
+            case 209: // Multiresponse
+            case 404: // Not Found
+                // Go online
+                we_are_online(true)
+                break;
+
+            case 500:
+            case 502:
+            case 503:
+            case 504:
+                // Go offline
+                we_are_online(false)
+                break;
+            }
+
+            // Publish new state of resource
+            switch (res.status) {
+            case 200:
+                var update = res.update()
+            case 404:
+                // Give an update!
+                announce_update(url, update)
+                break;
+            }
+
+            // Retry behavior
+            switch (res.status) {
+            case 404: // Not Found
+            case 200: // OK
+                // Retry at the polling interval
+                setTimeout(GET_again, polling_interval * 1000)
+                break;
+
+            case 309: // Version Unknown Here (deprecated)
+            case 432: // Version Not Found
+                // Might be out of order.  Wait and retry, and see if it appears.
+                setTimeout(GET_again, version_not_found_delay * 1000)
+                // Todo: consider throwing an error upstream after N attempts
+                // or T seconds
+                break;
+
+            case 425: // Too Early (for TLS 1.3 0-RTT)
+                // Just need to restart after a very short delay
+                setTimeout(GET_again, 2 * 1000)
+                break;
+
+            case 429: // Too Many Requests
+                // Retry after an extended delay
+                // Grab the delay from Retry-After header, if it exists.
+                var retry_after = parseFloat(res.headers.get('retry-after'))
+                if (isFinite(retry_after))
+                    setTimeout(GET_again, retry_after * 1000)
+                else
+                    setTimeout(GET_again, cooloff_delay * 1000)
+                break;
+            }
+
+            // Setup subscription
+            if (res.status === 209)
+                res.subscribe(
+                    update => announce_update(url, update),
+                    err => {
+                        // TODO: What do we do here?
+                    }
+                )
+                
+        } catch (e) {
+            if (e?.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
+                console.warn('connection not up: TLS hostname mismatch, likely a captive portal')
+        }
+
+        //  - Mark offlne, and retry after short delay:
+        //    - 404
+        //    - connection down
+        //  - Retry after longer (perhaps variable) delay
+        //  - Send error upstream
+        //  - Print warning to js console
+        //  - Redirect to new URL
+        //    - Perhaps saving for later
+        //  - Go offline
+        //    - Or success: [get: setup subscription handler!, put: give cb/clear promise]
+    }
+
+    async function PUT (url, value, options) {
+        
+    }
+
+
+    // Return the statebus interface to this HTTP state!
+    return {
+        get(url, options) {
+            if (subscribed[url])
+                throw 'Already subscribed to ' + url
+            subscribed[url] = true
+
+            // Start the GET
+            get_url(url, options)
+        },
+        forget(url) {
+            if (!subscribed[url])
+                throw 'Not subscribed to ' + url
+            delete subscribed[url]
+        },
+        set(url, update) {
+            PUT(url, JSON.stringify(update))
+        },
+        delete(url, params) {
+        }
+    }
+}
+
 
 // ****************************
 // Exports
@@ -1940,6 +2182,8 @@ if (typeof module !== 'undefined' && module.exports)
         subscription_parser,
         parse_update,
         parse_headers,
+        parse_header_values,
         parse_body,
-        reliable_update_channel
+        reliable_update_channel,
+        http_statebus
     }

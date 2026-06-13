@@ -159,6 +159,7 @@ function create_test_server() {
         if (req.url.startsWith('/eval_pre_braidify') && req.method === 'POST')
             if ((await eval_func()) !== 'keep going') return res.end('ok')
 
+
         // Braid-text test endpoint
         if (req.url.startsWith('/braid-text-test')) {
             var key = req.url.split('?')[0]
@@ -269,7 +270,35 @@ function create_test_server() {
             res.end('woopee')
         }
 
-        // 2. Serve the /json route
+        // 2. Serve the /single-update* routes
+
+        // Updates expressed within a single response body
+        if (req.url === '/single-update-snapshot') {
+            // Return a snapshot with a version and parents
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/json')
+            res.sendUpdate({
+                version: ['3'],
+                parents: ['1'],
+                body: JSON.stringify({hello: 'world'})
+            })
+            res.end()
+        }
+        if (req.url.startsWith('/single-update-patches')) {
+            // Return a set of patches
+            res.statusCode = 200
+            //res.setHeader('Content-Type', 'application/json')
+            res.sendUpdate({
+                version: ['4'],
+                parents: ['3'],
+                patches: [{unit: 'json', range: '.hello', content: 'worlds'},
+                          {unit: 'json', range: '.and',   content: 'wonderverses'}]
+            })
+            res.end()
+        }
+
+
+        // 3. Serve the /json route
         if (req.url.startsWith('/json') && req.method === 'GET') {
             res.setHeader('content-type', req.headers.charset ? 'application/json; charset=utf-8' : 'application/json')
 

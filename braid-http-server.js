@@ -2,7 +2,7 @@ var assert = require('assert')
 
 // Writes patches in pseudoheader format.
 //
-//   If using_patches_n, we generate patches like:
+//   If as_multiple_patches, we generate patches like:
 //
 //       Patches: n
 //
@@ -21,17 +21,19 @@ var assert = require('assert')
 //
 //       {"some": "json object"}
 //
-function write_patches (res, patches, using_patches_n) {
+function write_patches (res, patches, as_multiple_patches, set_headers) {
     // `patches` must be an array of patch objects
     //  - Array:  [{unit, range, content}, ...]
 
     assert(patches)
     assert(typeof patches === 'object' && Array.isArray(patches))
 
-    if (using_patches_n) {
+    if (as_multiple_patches) {
         // Add `Patches: N` and `Content-Type: application/http-patches' if array
-        res.write(`Content-Type: application/http-patches; count=${patches.length}\r\n`)
-        res.write(`Patches: ${patches.length}\r\n\r\n`)
+        set_headers({
+            'Content-Type': `application/http-patches; count=${patches.length}`,
+            'Patches': `${patches.length}`
+        })
     }
     else
         // Else, we'll output a single patch
@@ -912,6 +914,12 @@ async function send_update(res, update, url, peer) {
         else
             res.setHeader(key, val)
     }
+    function set_headers (headers) {
+        for (key in headers)
+            set_header(key, headers[key])
+        if (res.isSubscription)
+            res.write('\r\n')
+    }
     function write_body (body) {
         if (res.isSubscription && !encoding) res.write('\r\n')
         write_binary(res, body)
@@ -930,7 +938,7 @@ async function send_update(res, update, url, peer) {
     // Now the caller has specified EITHER `patch:` or `patches:`.  IFF he
     // specified the latter, we will ultimately output a "Patches: N" block,
     // rather than a single inlined patch.
-    var using_patches_n = !!patches
+    var as_multiple_patches = !!patches
 
     // Now we will stop using the `patch` form, and only use `patches`.
     if (patch) {
@@ -958,13 +966,13 @@ async function send_update(res, update, url, peer) {
             if (typeof Blob !== 'undefined' && p.content instanceof Blob)
                 p.content = await p.content.arrayBuffer()
 
-            // //   - Move content-type onto each patch if using_patches_n
-            // if (using_patches_n && content_type)
+            // //   - Move content-type onto each patch if as_multiple_patches
+            // if (as_multiple_patches && content_type)
             //     p['content-type'] = content_type
         }
     }
 
-    if (using_patches_n && update['content-type']) {
+    if (as_multiple_patches && update['content-type']) {
         // Clear content_type, because it will get clobbered in write_patches()
         console.warn('braid-http: content-type ' + update['content-type']
                      + ' ignored on update with multiple patches'
@@ -972,7 +980,7 @@ async function send_update(res, update, url, peer) {
         delete update['content-type']
     }
 
-    // if (using_patches_n) {
+    // if (as_multiple_patches) {
     //     // Clear content_type, because we moved it onto the patches
     //     content_type = undefined
     //     delete update.content_type
@@ -1024,9 +1032,9 @@ async function send_update(res, update, url, peer) {
         set_header(encoding ? 'Length' : 'Content-Length', length)
         write_body(binary)
     } else
-        write_patches(res, patches, using_patches_n)
+        write_patches(res, patches, as_multiple_patches, set_headers)
 
-    // Add a newline to prepare for the next version
+    // Add a newline to prepare for the next update
     // See also https://github.com/braid-org/braid-spec/issues/73
     if (res.isSubscription) {
         var extra_newlines = 1
