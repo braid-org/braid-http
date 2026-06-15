@@ -898,12 +898,13 @@ async function send_update(res, update, url, peer) {
 
     var {version, parents, patches, patch, body, status} = update
 
+    // A status of false/null means "don't print a status line at all".
+    // Leaving status undefined defaults it to 200.
+    if (status === undefined) status = 200
     if (status) {
         assert(typeof status === 'number', 'sendUpdate: status must be a number')
         assert(status > 100 && status < 600, 'sendUpdate: status must be a number between 100 and 600')
     }
-    else
-        status = 200
 
     function set_header (key, val) {
         if (res.isSubscription)
@@ -987,11 +988,13 @@ async function send_update(res, update, url, peer) {
     if (!patches && !body)
         body = ''
 
-    var reason =
-        status === 200 ? 'OK'
-        : status === 404 ? 'Not Found'
-        : 'Unknown'
-    if (res.isSubscription) res.write(`HTTP ${status} ${reason}\r\n`)
+    if (res.isSubscription && status) {
+        var reason =
+            status === 200 ? 'OK'
+            : status === 404 ? 'Not Found'
+            : 'Unknown'
+        res.write(`HTTP ${status} ${reason}\r\n`)
+    }
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(update)) {

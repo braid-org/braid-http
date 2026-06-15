@@ -4191,6 +4191,30 @@ run_test(
     JSON.stringify({has_patches_2: true, has_message_http_patches: true})
 )
 
+run_test(
+    "status: false suppresses the HTTP status line in a subscription update",
+    async () => {
+        var raw = ''
+        var r = await og_fetch(base_url + '/status_false_test', {headers: {subscribe: 'true'}})
+        var reader = r.body.getReader()
+        while (true) {
+            var {done, value} = await reader.read()
+            if (done) break
+            raw += new TextDecoder().decode(value)
+        }
+        // Two updates are sent: the first with status:false (no status line),
+        // the second with the default 200 (prints `HTTP 200 OK`). So we should
+        // see exactly one status line, and both bodies should arrive.
+        var status_line_count = (raw.match(/HTTP \d+ /g) || []).length
+        return JSON.stringify({
+            status_line_count,
+            got_hidden: raw.includes('"hidden"'),
+            got_shown: raw.includes('"shown"')
+        })
+    },
+    JSON.stringify({status_line_count: 1, got_hidden: true, got_shown: true})
+)
+
 add_section_header("reliable_update_channel Tests")
 
 run_test(

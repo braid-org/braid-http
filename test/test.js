@@ -511,6 +511,27 @@ function create_test_server() {
             return
         }
 
+        // Test status: false suppressing the `HTTP <status> <reason>` line
+        if (req.url === '/status_false_test' && req.method === 'GET' && req.subscribe) {
+            res.startSubscription()
+
+            // This update suppresses its status line
+            res.sendUpdate({
+                version: ['no-status'],
+                status: false,
+                body: '"hidden"'
+            })
+
+            // This update prints a normal `HTTP 200 OK` status line
+            res.sendUpdate({
+                version: ['with-status'],
+                body: '"shown"'
+            })
+
+            setTimeout(() => res.end(), 100)
+            return
+        }
+
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
             if (req.headers.check_patch_content_text) {
