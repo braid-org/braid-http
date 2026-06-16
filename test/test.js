@@ -97,17 +97,6 @@ function create_test_server() {
     }, async (req, res) => {
         console.log('Request:', req.url, req.method)
 
-        // Only allow connections from localhost
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            console.log(`connection attempt from: ${req.socket.remoteAddress}`)
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
         if (is_mux)
@@ -630,17 +619,6 @@ function create_test_server() {
 function create_express_middleware_server() {
     var express_app = require("express")()
 
-    express_app.use((req, res, next) => {
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-        next()
-    })
 
     express_app.use(braidify)
 
@@ -680,15 +658,6 @@ function create_wrapper_server() {
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
     }, braidify(async (req, res) => {
         if (mode === 'browser') console.log('Wrapped-Handler-Request:', req.url, req.method)
-
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
 
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
@@ -748,14 +717,6 @@ function create_wrapped_server() {
     braidify.server(server)
 
     server.on('request', (req, res) => {
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
@@ -1022,10 +983,10 @@ async function run_console_tests() {
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
 
-    await new Promise(resolve => main_server.listen(port, resolve))
-    await new Promise(resolve => express_server.listen(port + 1, resolve))
-    await new Promise(resolve => wrapper_server.listen(port + 2, resolve))
-    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
+    await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
+    await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
+    await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
 
@@ -1125,10 +1086,10 @@ async function run_browser_mode() {
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
 
-    await new Promise(resolve => main_server.listen(port, resolve))
-    await new Promise(resolve => express_server.listen(port + 1, resolve))
-    await new Promise(resolve => wrapper_server.listen(port + 2, resolve))
-    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
+    await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
+    await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
+    await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
     console.log(`Express middleware test server running on port ${port + 1}`)
