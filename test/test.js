@@ -84,6 +84,7 @@ global.braid_text_hang_first_put = {}     // key -> true, first PUT hangs foreve
 global.braid_text_headers_log = {}        // key -> [{method, headers}, ...]
 
 function create_test_server() {
+    var added_handlers = new Map()
     var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
@@ -239,6 +240,23 @@ function create_test_server() {
             return res.end(`ok`)
         }
         if (is_mux) res.end('hm..')
+
+        // Lets tests register their own handlers on the fly: POST the source of
+        // a (req, res) => {...} function, and we eval it, mount it at a fresh
+        // path, and return that path for the test to hit.
+        if (req.url === '/add-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
+                var path = '/added-handler/' + Math.random().toString(36).slice(2)
+                added_handlers.set(path, handler)
+                res.end(path)
+            })
+            return
+        }
+        if (added_handlers.has(req.url.split('?')[0]))
+            return added_handlers.get(req.url.split('?')[0])(req, res)
 
         // The server is ready to define normal test routes!
 

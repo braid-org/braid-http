@@ -16,6 +16,11 @@ function define_tests(run_test, context) {
         return `${server_url}${await r.text()}`
     }
 
+    // Adds a handler to the main test server (port).
+    function add_main_handler(handler) {
+        return add_handler(base_url, handler)
+    }
+
     // Adds a handler to the Express middleware server (port + 1).
     function add_express_handler(handler) {
         return add_handler(`https://localhost:${port + 1}`, handler)
@@ -124,27 +129,43 @@ run_test(
 run_test(
     "Test that when DELETE gets 404 for multiplexer, it kills the multiplexer",
     async () => {
+        // add a handler that holds a subscription open
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hi' })
+        })
+
+        // add a handler that makes the server forget a multiplexer (named in a
+        // header), so it will 404 the next time the client talks to it about it
+        var forget_endpoint = await add_main_handler((req, res) => {
+            braidify.multiplexers.delete(req.headers.forget_mux)
+            res.end('ok')
+        })
+
+        // open a subscription multiplexed through a multiplexer of our choosing
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {
+        await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
 
-        await fetch('/eval_pre_braidify', {
-            method: 'POST',
-            body: `braidify.multiplexers.delete(${JSON.stringify(m)})`
-        })
+        // tell the server to forget the multiplexer
+        await fetch(forget_endpoint, { headers: { forget_mux: m } })
 
+        // abort the subscription -- this makes the client send a DELETE to
+        // cancel its request on the multiplexer, which the server 404s,
+        // tipping the client off that the whole multiplexer is dead
         a.abort()
 
-        await new Promise(done => setTimeout(done, 300))
-
-        return '' + !!multiplex_fetch.multiplexers[m]
-    },
-    `false`
+        // wait for the client to clean up the now-dead multiplexer -- if it
+        // never does, this loop spins until the test runner's timeout fails the
+        // test; getting past it means the client really did drop the multiplexer
+        while (multiplex_fetch.multiplexers[m])
+            await new Promise(done => setTimeout(done, 10))
+    }
 )
 
 run_test(
