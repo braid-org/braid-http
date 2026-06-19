@@ -978,12 +978,6 @@ async function run_console_tests() {
         add_section_header.current_section = header_text
     }
 
-    // In console mode, wait_for_tests queues a callback to run after all previous tests
-    // We store it as a special entry in tests_to_run
-    function wait_for_tests(cb) {
-        tests_to_run.push({ is_wait_callback: true, callback: cb })
-    }
-
     function assert(condition, message) {
         if (!condition) throw new Error(message || 'Assertion failed')
     }
@@ -1024,7 +1018,6 @@ async function run_console_tests() {
         og_fetch,  // Already configured with base_url
         port,
         add_section_header,
-        wait_for_tests,
         test_update: { ...test_update, status: "200" },
         multiplex_fetch,
         braid_fetch: wrapped_braid_fetch,
@@ -1036,12 +1029,6 @@ async function run_console_tests() {
     // Run tests sequentially
     var current_section = null
     for (var item of tests_to_run) {
-        // Handle wait_for_tests callbacks
-        if (item.is_wait_callback) {
-            item.callback()
-            continue
-        }
-
         var { test_name, test_function, expected_result, section } = item
         if (section && section !== current_section) {
             current_section = section

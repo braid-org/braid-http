@@ -2,14 +2,14 @@
 // This file exports a function that takes a test runner and context
 
 function define_tests(run_test, context) {
-    var { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url, assert } = context
+    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url, assert } = context
     // base_url is empty in browser, 'https://localhost:${port}' in console tests
     base_url = base_url || ''
 
 add_section_header("Multiplexing Tests")
 
 var multiplex_version = '1.0'
-braid_fetch.enable_multiplex = {}
+braid_fetch.enable_multiplex = {after: Infinity}
 
 run_test(
     "Basic MULTIPLEX method test.",
@@ -20,8 +20,6 @@ run_test(
         assert(r.ok && value, 'MULTIPLEX request should respond ok with a non-empty body')
     }
 )
-
-wait_for_tests(() => {})
 
 run_test(
     "Test multiplexing with Express middleware endpoint",
@@ -313,12 +311,14 @@ run_test(
         var r1 = await fetch(`/json`, {
             signal: a1.signal,
             subscribe: true,
+            multiplex: {}
         })
 
         var a2 = new AbortController()
         var r2 = await fetch(`/json`, {
             signal: a2.signal,
             subscribe: true,
+            multiplex: {}
         })
 
         if (!r2.multiplexed_through) throw new Error('not multiplexed')
@@ -346,12 +346,14 @@ run_test(
         var r1 = await fetch(`https://localhost:${port}/json`, {
             signal: a1.signal,
             subscribe: true,
+            multiplex: {}
         })
 
         var a2 = new AbortController()
         var r2 = await fetch(`https://localhost:${port}/json`, {
             signal: a2.signal,
             subscribe: true,
+            multiplex: {}
         })
 
         if (!r2.multiplexed_through) throw new Error('not multiplexed')
@@ -627,7 +629,6 @@ run_test(
 run_test(
     "Test aborting multiplexed subscription.",
     async () => {
-        await fetch('/json', {subscribe: true})
         var good = false
         var a = new AbortController()
         try {
@@ -635,6 +636,7 @@ run_test(
                 signal: a.signal,
                 retry: true,
                 subscribe: true,
+                multiplex: true
             })
             await new Promise((done, fail) => {
                 setTimeout(() => a.abort(), 30)
@@ -944,14 +946,12 @@ run_test(
         var r = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-
-            multiplex: true
+            multiplex: {}
         })
         var r2 = await fetch('/json', {
             signal: a.signal,
             subscribe: true,
-
-            multiplex: true
+            multiplex: {}
         })
         setTimeout(() => a.abort(), 0)
         return '' + !!r2.multiplexed_through
@@ -1041,8 +1041,6 @@ run_test(
     },
     '404'
 )
-
-wait_for_tests(() => {})
 
 // Note: The following multiplex_wait tests rely on tight timing (e.g. 5ms
 // delays, 50ms windows) and may fail intermittently in the browser due to
@@ -1217,8 +1215,6 @@ run_test(
     'status=424, fast=true'
 )
 
-wait_for_tests(() => {})
-
 run_test(
     "Test client asking for multiplexing, but server doesn't realize it.",
     async () => {
@@ -1243,8 +1239,6 @@ run_test(
     },
     'another!'
 )
-
-wait_for_tests(() => braid_fetch.enable_multiplex = false)
 
 add_section_header("Express Middleware Tests")
 
