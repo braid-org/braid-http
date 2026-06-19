@@ -640,6 +640,24 @@ function create_express_middleware_server() {
         }
     })
 
+    // Lets tests register their own express handlers on the fly: POST the
+    // source of a (req, res) => {...} function, and we eval it, mount it at a
+    // fresh path, and return that path for the test to hit.
+    var added_handlers = new Map()
+    express_app.post("/add-express-handler", (req, res) => {
+        var chunks = []
+        req.on('data', chunk => chunks.push(chunk))
+        req.on('end', () => {
+            var body = Buffer.concat(chunks).toString()
+            var handler = eval('(' + body + ')')
+            var path = '/added-handler/' + Math.random().toString(36).slice(2)
+            added_handlers.set(path, handler)
+            res.end(path)
+        })
+    })
+    express_app.all("/added-handler/*", (req, res) =>
+        added_handlers.get(req.path)(req, res))
+
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))

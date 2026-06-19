@@ -185,11 +185,6 @@ function setSummaryBoxRunning(box) {
 var wait_for_me = Promise.resolve()
 var wait_list = []
 
-function wait_for_tests(cb) {
-    wait_for_me = Promise.all([wait_for_me, ...wait_list]).then(() => cb())
-    wait_list = []    
-}
-
 // Parse URL for filter parameter
 const urlParams = new URLSearchParams(window.location.search)
 const filter_arg = urlParams.get('filter') || urlParams.get('grep')
@@ -243,6 +238,6 @@ function run_test(test_name, test_function, expected_result) {
 }
 
 // Load and run all tests from the shared tests.js file
-define_tests(run_test, { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, assert })
+define_tests(run_test, { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, assert })
 
 </script>

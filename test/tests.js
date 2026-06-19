@@ -6,6 +6,18 @@ function define_tests(run_test, context) {
     // base_url is empty in browser, 'https://localhost:${port}' in console tests
     base_url = base_url || ''
 
+    // Registers a new handler on the Express middleware server (port + 1) and
+    // returns the full URL to hit it. The handler runs server-side, so we send
+    // its source over the wire.
+    async function add_express_handler(handler) {
+        var express_url = `https://localhost:${port + 1}`
+        var r = await og_fetch(`${express_url}/add-express-handler`, {
+            method: 'POST',
+            body: handler.toString()
+        })
+        return `${express_url}${await r.text()}`
+    }
+
 add_section_header("Multiplexing Tests")
 
 var multiplex_version = '1.0'
@@ -37,28 +49,33 @@ run_test(
 run_test(
     "Test multiplexing with Express middleware endpoint",
     async () => {
-        var a = new AbortController()
-        var r = await fetch(`https://localhost:${port + 1}/middleware-test`, {
-            signal: a.signal,
-            subscribe: true,
-            multiplex: {via: 'POST', after: 0},
-            retry: true
+        // add handler to express server that
+        // sends a subscription update
+        var endpoint = await add_express_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hello' })
         })
 
-        if (!r.multiplexed_through) throw new Error('not multiplexed')
-        var result = await new Promise(async done => {
-            r.subscribe(u => {
-                u.body = u.body_text
-                done(JSON.stringify({
-                    multiplexed: !!r.multiplexed_through,
-                    message: u.body
-                }))
-            })
+        // subscribe to the endpoint we added,
+        // forcing the request to be multiplexed
+        var a = new AbortController()
+        var r = await fetch(endpoint, {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: true,
         })
+
+        // make sure the request was actually multiplexed
+        assert(r.multiplexed_through, 'expected request to be multiplexed')
+
+        // grab the first update off the subscription
+        var update = await new Promise(done => r.subscribe(done))
+
+        // make sure we got the body we expected
+        assert(update.body_text === 'hello', 'got unexpected body')
+
         a.abort()
-        return result
-    },
-    '{"multiplexed":true,"message":"Braidify works as Express middleware!"}'
+    }
 )
 
 run_test(
