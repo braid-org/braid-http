@@ -70,24 +70,15 @@ process.on("uncaughtException", (x) =>
 
 var braid_text_instance = create_braid_text()
 braid_text_instance.db_folder = null
-var braid_text_fail_first_get = {}     // key -> true, returns 500
-var braid_text_fail_first_put = {}     // key -> true, returns 500
-var braid_text_first_get_status = {}   // key -> {status, retry_after?}
-var braid_text_first_put_status = {}   // key -> {status, retry_after?}
-var braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
-var braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
-var braid_text_put_concurrency = {}    // key -> {current, max}
-var braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
-var braid_text_headers_log = {}        // key -> [{method, headers}, ...]
-global.braid_text_fail_first_get = braid_text_fail_first_get
-global.braid_text_fail_first_put = braid_text_fail_first_put
-global.braid_text_first_get_status = braid_text_first_get_status
-global.braid_text_first_put_status = braid_text_first_put_status
-global.braid_text_get_parents_log = braid_text_get_parents_log
-global.braid_text_put_delay_ms = braid_text_put_delay_ms
-global.braid_text_put_concurrency = braid_text_put_concurrency
-global.braid_text_hang_first_put = braid_text_hang_first_put
-global.braid_text_headers_log = braid_text_headers_log
+global.braid_text_fail_first_get = {}     // key -> true, returns 500
+global.braid_text_fail_first_put = {}     // key -> true, returns 500
+global.braid_text_first_get_status = {}   // key -> {status, retry_after?}
+global.braid_text_first_put_status = {}   // key -> {status, retry_after?}
+global.braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
+global.braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
+global.braid_text_put_concurrency = {}    // key -> {current, max}
+global.braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
+global.braid_text_headers_log = {}        // key -> [{method, headers}, ...]
 
 function create_test_server() {
     var server = require('http2').createSecureServer({
