@@ -984,6 +984,10 @@ async function run_console_tests() {
         tests_to_run.push({ is_wait_callback: true, callback: cb })
     }
 
+    function assert(condition, message) {
+        if (!condition) throw new Error(message || 'Assertion failed')
+    }
+
     function run_test(test_name, test_function, expected_result) {
         // Apply filter if specified
         if (filter_arg && !test_name.toLowerCase().includes(filter_arg.toLowerCase())) {
@@ -1025,7 +1029,8 @@ async function run_console_tests() {
         multiplex_fetch,
         braid_fetch: wrapped_braid_fetch,
         reliable_update_channel,
-        base_url: `https://localhost:${port}`  // For building expected values in tests
+        base_url: `https://localhost:${port}`,  // For building expected values in tests
+        assert
     })
 
     // Run tests sequentially
@@ -1050,7 +1055,13 @@ async function run_console_tests() {
                 new Promise((_, reject) =>
                     setTimeout(() => reject(new Error(`Test timed out after ${timeout_ms/1000}s`)), timeout_ms))
             ])
-            if (result == expected_result) {
+            if (expected_result === undefined) {
+                // Assertion-style test: success simply means it returned
+                // (without throwing). An assert() failure throws and is
+                // handled by the catch below.
+                passed_tests++
+                console.log(`✓ ${test_name}`)
+            } else if (result == expected_result) {
                 passed_tests++
                 console.log(`✓ ${test_name}`)
             } else if (result === 'old node version') {

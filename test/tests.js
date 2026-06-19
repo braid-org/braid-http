@@ -2,7 +2,7 @@
 // This file exports a function that takes a test runner and context
 
 function define_tests(run_test, context) {
-    var { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url } = context
+    var { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url, assert } = context
     // base_url is empty in browser, 'https://localhost:${port}' in console tests
     base_url = base_url || ''
 
@@ -17,9 +17,8 @@ run_test(
         var m = Math.random().toString(36).slice(2)
         var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         var {done, value} = await r.body.getReader().read()
-        return !!(r.ok && value)
-    },
-    true
+        assert(r.ok && value, 'MULTIPLEX request should respond ok with a non-empty body')
+    }
 )
 
 wait_for_tests(() => {})
