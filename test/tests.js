@@ -14,10 +14,23 @@ braid_fetch.enable_multiplex = {after: Infinity}
 run_test(
     "Basic MULTIPLEX method test.",
     async () => {
+        // do a MULTIPLEX request
+        var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
-        var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
-        var {done, value} = await r.body.getReader().read()
-        assert(r.ok && value, 'MULTIPLEX request should respond ok with a non-empty body')
+        var r = await og_fetch(`/${m}`, {
+            signal: a.signal,
+            method: 'MULTIPLEX',
+            headers: {'Multiplex-Version': multiplex_version}
+        })
+
+        // make sure the request succeeded
+        assert(r.ok, 'expected ok response')
+
+        // we check for some content with getReader,
+        // because the stream will remain open
+        assert((await r.body.getReader().read()).value, 'expected body')
+        
+        a.abort()
     }
 )
 
