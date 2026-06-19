@@ -5,6 +5,9 @@ var fs = require('fs')
 var path = require('path')
 var define_tests = require('./tests.js')
 var {braidify, free_cors} = require('../braid-http-server.js')
+delete require.cache[require.resolve('../braid-http-server.js')]
+var {braidify: braidify_no_mux} = require('../braid-http-server.js')
+braidify_no_mux.enable_multiplex = false
 var https = require('../braid-http-client.js').http(require('https'))
 var braid_fetch = require('../braid-http-client.js').fetch
 var multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
@@ -26,7 +29,7 @@ Options:
   --browser, -b          Start server for browser testing (default: console mode)
   --filter=PATTERN       Only run tests matching pattern (case-insensitive)
   --grep=PATTERN         Alias for --filter
-  --port=N               Base port (uses N, N+1, N+2, N+3). Default 9000. Or set PORT env.
+  --port=N               Base port (uses N, N+1, N+2, N+3, N+4). Default 9000. Or set PORT env.
   --help, -h             Show this help message
 
 Examples:
@@ -766,6 +769,33 @@ function create_wrapped_server() {
     return server
 }
 
+function create_no_mux_server() {
+    var server = require('http2').createSecureServer({
+        key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
+        cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
+        allowHTTP1: true
+    }, async (req, res) => {
+        free_cors(res)
+        if (req.method === 'OPTIONS') return res.end()
+        
+        braidify_no_mux(req, res)
+
+        if (req.url === '/json' && req.method === 'GET') {
+            res.setHeader('content-type', 'application/json')
+            if (req.subscribe) res.startSubscription()
+            res.sendUpdate(test_update)
+            // Simulate an update after the fact
+            setTimeout(() => res.sendUpdate({version: ['another!'], body: '"!"'}), 200)
+            return
+        }
+
+        res.writeHead(404)
+        res.end('Not found')
+    })
+
+    return server
+}
+
 function allow_self_signed_certs() {
     fetch().catch(() => { })
     var globalDispatcherSymbol = Symbol.for('undici.globalDispatcher.1')
@@ -973,11 +1003,13 @@ async function run_console_tests() {
     var express_server = create_express_middleware_server()
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
+    var no_mux_server = create_no_mux_server()
 
     await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
     await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
     await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
     await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
+    await new Promise(resolve => no_mux_server.listen(port + 4, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
 
@@ -1055,6 +1087,7 @@ async function run_console_tests() {
     express_server.close()
     wrapper_server.close()
     wrapped_server.close()
+    no_mux_server.close()
 
     // Close all connections if available (Node 18.2+)
     if (typeof main_server.closeAllConnections === 'function') {
@@ -1062,6 +1095,7 @@ async function run_console_tests() {
         express_server.closeAllConnections()
         wrapper_server.closeAllConnections()
         wrapped_server.closeAllConnections()
+        no_mux_server.closeAllConnections()
     }
 
     setTimeout(() => process.exit(failed_tests > 0 ? 1 : 0), 100)
@@ -1076,11 +1110,13 @@ async function run_browser_mode() {
     var express_server = create_express_middleware_server()
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
+    var no_mux_server = create_no_mux_server()
 
     await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
     await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
     await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
     await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
+    await new Promise(resolve => no_mux_server.listen(port + 4, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
     console.log(`Express middleware test server running on port ${port + 1}`)

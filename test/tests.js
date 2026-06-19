@@ -14,14 +14,6 @@ braid_fetch.enable_multiplex = {}
 run_test(
     "Basic MULTIPLEX method test.",
     async () => {
-        await fetch('/eval', {
-            method: 'POST',
-            body: `
-                braidify.enable_multiplex = true
-                res.end('ok')
-            `
-        })
-
         var m = Math.random().toString(36).slice(2)
         var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
         var {done, value} = await r.body.getReader().read()
@@ -1231,38 +1223,24 @@ wait_for_tests(() => {})
 run_test(
     "Test client asking for multiplexing, but server doesn't realize it.",
     async () => {
-        await fetch('/eval', {
-            method: 'POST',
-            body: `
-                braidify.enable_multiplex = false
-                res.end('ok')
-            `
-        })
-
+        // This hits a dedicated server (port+4) whose braidify has
+        // multiplexing permanently disabled
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {
+        var r = await fetch(`https://localhost:${port + 4}/json`, {
             signal: a.signal,
             subscribe: true,
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
-        try {
-            return await new Promise(done => {
-                r.subscribe(u => {
-                    if (u.version[0] === 'another!') {
-                        done('another!')
-                        a.abort()
-                    }
-                })
+        return await new Promise(done => {
+            r.subscribe(u => {
+                if (u.version[0] === 'another!') {
+                    done('another!')
+                    a.abort()
+                }
             })
-        } finally {
-            // Re-enable multiplex on the server (it's a shared global).
-            await fetch('/eval', {
-                method: 'POST',
-                body: `braidify.enable_multiplex = true; res.end('ok')`
-            })
-        }
+        })
     },
     'another!'
 )
