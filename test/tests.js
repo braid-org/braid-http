@@ -6,16 +6,24 @@ function define_tests(run_test, context) {
     // base_url is empty in browser, 'https://localhost:${port}' in console tests
     base_url = base_url || ''
 
-    // Registers a new handler on the Express middleware server (port + 1) and
-    // returns the full URL to hit it. The handler runs server-side, so we send
-    // its source over the wire.
-    async function add_express_handler(handler) {
-        var express_url = `https://localhost:${port + 1}`
-        var r = await og_fetch(`${express_url}/add-express-handler`, {
+    // Registers a new handler on a test server and returns the full URL to hit
+    // it. The handler runs server-side, so we send its source over the wire.
+    async function add_handler(server_url, handler) {
+        var r = await og_fetch(`${server_url}/add-handler`, {
             method: 'POST',
             body: handler.toString()
         })
-        return `${express_url}${await r.text()}`
+        return `${server_url}${await r.text()}`
+    }
+
+    // Adds a handler to the Express middleware server (port + 1).
+    function add_express_handler(handler) {
+        return add_handler(`https://localhost:${port + 1}`, handler)
+    }
+
+    // Adds a handler to the braidify-wrapper server (port + 2).
+    function add_wrapper_handler(handler) {
+        return add_handler(`https://localhost:${port + 2}`, handler)
     }
 
 add_section_header("Multiplexing Tests")
@@ -81,29 +89,36 @@ run_test(
 run_test(
     "Test multiplexing with wrapper function endpoint",
     async () => {
-        var a = new AbortController()
-        var r = await fetch(`https://localhost:${port + 2}/wrapper-test`, {
-            signal: a.signal,
-            subscribe: true,
-            multiplex: {via: 'POST', after: 0},
-            retry: true
-        })
-        if (!r.multiplexed_through) throw new Error('not multiplexed')
-        var result = await new Promise(async done => {
-            r.subscribe(u => {
-                u.body = u.body_text
-                var parsed = JSON.parse(u.body)
-                done(JSON.stringify({
-                    multiplexed: !!r.multiplexed_through,
-                    message: parsed.message,
-                    version: u.version[0]
-                }))
+        // add handler to the wrapper server that sends a subscription update
+        var endpoint = await add_wrapper_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({
+                version: ['v123'],
+                body: 'hello'
             })
         })
+
+        // subscribe to the endpoint we added,
+        // forcing the request to be multiplexed
+        var a = new AbortController()
+        var r = await fetch(endpoint, {
+            signal: a.signal,
+            subscribe: true,
+            multiplex: true,
+        })
+
+        // make sure the request was actually multiplexed
+        assert(r.multiplexed_through, 'expected request to be multiplexed')
+
+        // grab the first update off the subscription
+        var update = await new Promise(done => r.subscribe(done))
+
+        // make sure we got the body and version we expected
+        assert(update.version[0] === 'v123', 'got unexpected version')
+        assert(update.body_text === 'hello', 'got unexpected body')
+
         a.abort()
-        return result
-    },
-    '{"multiplexed":true,"message":"Braidify works as a wrapper function!","version":"wrapper-test-version"}'
+    }
 )
 
 run_test(

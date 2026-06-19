@@ -644,7 +644,7 @@ function create_express_middleware_server() {
     // source of a (req, res) => {...} function, and we eval it, mount it at a
     // fresh path, and return that path for the test to hit.
     var added_handlers = new Map()
-    express_app.post("/add-express-handler", (req, res) => {
+    express_app.post("/add-handler", (req, res) => {
         var chunks = []
         req.on('data', chunk => chunks.push(chunk))
         req.on('end', () => {
@@ -665,6 +665,7 @@ function create_express_middleware_server() {
 }
 
 function create_wrapper_server() {
+    var added_handlers = new Map()
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
@@ -673,6 +674,23 @@ function create_wrapper_server() {
 
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
+
+        // Lets tests register their own handlers on the fly: POST the source of
+        // a (req, res) => {...} function, and we eval it, mount it at a fresh
+        // path, and return that path for the test to hit.
+        if (req.url === '/add-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
+                var path = '/added-handler/' + Math.random().toString(36).slice(2)
+                added_handlers.set(path, handler)
+                res.end(path)
+            })
+            return
+        }
+        if (added_handlers.has(req.url.split('?')[0]))
+            return added_handlers.get(req.url.split('?')[0])(req, res)
 
         if (req.url === '/wrapper-test' && req.method === 'GET') {
             res.setHeader('content-type', 'application/json')
