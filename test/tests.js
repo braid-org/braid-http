@@ -171,96 +171,133 @@ run_test(
 run_test(
     "Test that multiplex request sets cache-control: no-store.",
     async () => {
+        // add a handler that holds a subscription open
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hi' })
+        })
+
+        // open a subscription, creating a multiplexer of our choosing
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await fetch('/json', {
+        await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
 
+        // make a second multiplexed request through that same multiplexer,
+        // and make sure its response is marked cache-control: no-store
         var s2 = Math.random().toString(36).slice(2)
-        var r2 = await og_fetch('/json', {
-            subscribe: true,
+        var r = await og_fetch(endpoint, {
             headers: {
                 'Subscribe': 'true',
                 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s2}`,
-                'Multiplex-Version': multiplex_version                
+                'Multiplex-Version': multiplex_version
             }
         })
-        console.log(`r2 status = ${r2.status}`)
-        return r2.headers.get('cache-control')
-    },
-    `no-store`
+        assert(r.headers.get('cache-control') === 'no-store', 'expected no-store')
+
+        a.abort()
+    }
 )
 
 run_test(
     "Test multiplexer timing out because of no requests.",
     async () => {
-        var a = new AbortController()
+        // a multiplexer with no active requests should die after an idle
+        // period (not_used_timeout), and each new request should reset that
+        // idle timer -- so the multiplexer only dies once it has been idle
+        // for the full timeout
+
+        // add a handler that holds a subscription open
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hi' })
+        })
+
         var m = Math.random().toString(36).slice(2)
-        var s = Math.random().toString(36).slice(2)
-        console.log('Sending first /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            multiplex: {not_used_timeout: 1000},
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            retry: true
-        })
-        console.log('Got first /json res')
-        var t1 = !!multiplex_fetch.multiplexers[m]
-        a.abort()
-        console.log('Waiting 800ms')
-        await new Promise(done => setTimeout(done, 800))
-        console.log('Waited 800ms')
-        var t2 = !!multiplex_fetch.multiplexers[m]
+        var sleep = ms => new Promise(done => setTimeout(done, ms))
 
-        var a = new AbortController()
-        var s = Math.random().toString(36).slice(2)
-        console.log('Sending second /json req')
-        var r = await fetch('/json', {
-            signal: a.signal,
-            subscribe: true,
-            multiplex: {not_used_timeout: 1000},
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
-            retry: true
-        })
-        console.log('Got second /json res')
-        a.abort()
-        console.log('Waiting 800ms')
-        await new Promise(done => setTimeout(done, 800))
-        console.log('Waited 800ms')
-        var t3 = !!multiplex_fetch.multiplexers[m]
+        // open a subscription through a multiplexer of our choosing, with a
+        // 1000ms idle timeout, then abort it (leaving the multiplexer idle)
+        var subscribe_then_abort = async () => {
+            var a = new AbortController()
+            var s = Math.random().toString(36).slice(2)
+            await fetch(endpoint, {
+                signal: a.signal,
+                subscribe: true,
+                multiplex: {not_used_timeout: 1000},
+                headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
+            })
+            a.abort()
+        }
 
-        console.log('Waiting 400ms')
-        await new Promise(done => setTimeout(done, 400))
-        console.log('Waited 400ms')
-        var t4 = !!multiplex_fetch.multiplexers[m]
+        // first request: the multiplexer now exists
+        await subscribe_then_abort()
+        assert(multiplex_fetch.multiplexers[m], 'expected multiplexer after first request')
 
-        return `t1=${t1}, t2=${t2}, t3=${t3}, t4=${t4}`
-    },
-    `t1=true, t2=true, t3=true, t4=false`
+        // 800ms < 1000ms idle timeout, so it is still alive
+        await sleep(800)
+        assert(multiplex_fetch.multiplexers[m], 'expected multiplexer to survive 800ms idle')
+
+        // second request resets the idle timer; 800ms later it is still alive
+        await subscribe_then_abort()
+        await sleep(800)
+        assert(multiplex_fetch.multiplexers[m], 'expected idle timer to reset on second request')
+
+        // another 400ms (1200ms total idle since the second request) exceeds
+        // the timeout, so the multiplexer finally dies
+        await sleep(400)
+        assert(!multiplex_fetch.multiplexers[m], 'expected multiplexer to time out')
+    }
 )
 
 run_test(
     "Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer",
     async () => {
-        console.log('Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer')
+        // add a handler that just answers with a known body
+        var endpoint = await add_main_handler((req, res) => res.end('woopee'))
 
-        var res1 = await fetch('/duplicate_mux', {headers: {'duplicate-next-mux': 'true'}})
-        console.log('Client set up the duplicate mux flag, and got:', await res1.text())
+        // pick our own multiplexer id, so the duplicate below is scoped to
+        // *our* multiplexer (and not race with other tests' multiplexers)
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
 
-        var res2 = await fetch('/duplicate_mux', {multiplex: true})
-        console.log('We got the second res!', await res2.clone().text())
+        // pre-register a multiplexer with our chosen id directly in the
+        // server's multiplexers Map. Now when the client tries to create a
+        // multiplexer with this id, the real server code sees it already
+        // exists and answers with a genuine 409 Conflict. The client should
+        // retry with a fresh random id (which won't collide) and ultimately
+        // get our handler's body.
+        await og_fetch('/eval', {
+            method: 'POST',
+            body: `
+                if (!braidify.multiplexers) braidify.multiplexers = new Map()
+                braidify.multiplexers.set(${JSON.stringify(m)}, {requests: new Map(), res})
+                res.end('ok')
+            `
+        })
 
-        console.log('reading the res2 text again')
-        var result = await res2.text()
-        console.log('read it as', result)
-        return result
-    },
-    'woopee'
+        // make a multiplexed request through our chosen multiplexer: the client
+        // should hit the 409, retry with a fresh multiplexer id, and ultimately
+        // get our handler's body
+        var res = await fetch(endpoint, {
+            multiplex: true,
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
+        })
+        assert(await res.text() === 'woopee', 'expected request to succeed after 409 retry')
+
+        // make sure the request was actually multiplexed, and that the retry
+        // moved it onto a *different* multiplexer than the colliding id we asked
+        // for (the client should have picked a fresh one after the 409)
+        assert(res.multiplexed_through, 'expected request to be multiplexed')
+        assert(res.multiplexed_through.split('/')[3] !== m, 'expected a different multiplexer id after retry')
+
+        // clean up the multiplexer we pre-registered
+        await og_fetch('/kill_mux', {headers: {mux: m}})
+    }
 )
 
 run_test(
