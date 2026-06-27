@@ -896,17 +896,15 @@ async function send_update(res, update, url, peer) {
             .map(([k, v]) => [k.toLowerCase(), v])
     )
 
-    var {version, parents, patches, patch, body, status, encoding} = update
-    // Note: This ^^ `encoding` field is wrong!  It's used for the dt encoding
-    // in braid-text, but that should be content-encoding or transfer-encoding
-    // or x-transfer-encoding.
+    var {version, parents, patches, patch, body, status} = update
 
+    // A status of false/null means "don't print a status line at all".
+    // Leaving status undefined defaults it to 200.
+    if (status === undefined) status = 200
     if (status) {
         assert(typeof status === 'number', 'sendUpdate: status must be a number')
         assert(status > 100 && status < 600, 'sendUpdate: status must be a number between 100 and 600')
     }
-    else
-        status = 200
 
     function set_header (key, val) {
         if (res.isSubscription)
@@ -921,7 +919,7 @@ async function send_update(res, update, url, peer) {
             res.write('\r\n')
     }
     function write_body (body) {
-        if (res.isSubscription && !encoding) res.write('\r\n')
+        if (res.isSubscription) res.write('\r\n')
         write_binary(res, body)
     }
 
@@ -990,11 +988,13 @@ async function send_update(res, update, url, peer) {
     if (!patches && !body)
         body = ''
 
-    var reason =
-        status === 200 ? 'OK'
-        : status === 404 ? 'Not Found'
-        : 'Unknown'
-    if (res.isSubscription && !encoding) res.write(`HTTP ${status} ${reason}\r\n`)
+    if (res.isSubscription && status) {
+        var reason =
+            status === 200 ? 'OK'
+            : status === 404 ? 'Not Found'
+            : 'Unknown'
+        res.write(`HTTP ${status} ${reason}\r\n`)
+    }
 
     // Write the headers or virtual headers
     for (var [header, value] of Object.entries(update)) {
@@ -1029,7 +1029,7 @@ async function send_update(res, update, url, peer) {
         let binary = typeof body === 'string' ? new TextEncoder().encode(body) : body,
             length = get_binary_length(binary)
         assert(length !== undefined && length !== 'undefined')
-        set_header(encoding ? 'Length' : 'Content-Length', length)
+        set_header('Content-Length', length)
         write_body(binary)
     } else
         write_patches(res, patches, as_multiple_patches, set_headers)

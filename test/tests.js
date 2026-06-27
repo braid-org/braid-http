@@ -3674,136 +3674,6 @@ run_test(
     '' + new Array(256).fill(0).map((x, i) => i)
 )
 
-add_section_header('Encoding Block Tests')
-
-run_test(
-    "Basic encoding block test",
-    async () => {
-        var r = await fetch('/eval', {
-            method: 'POST',
-            body: `
-                res.startSubscription()
-                res.sendUpdate({
-                    encoding: 'dt',
-                    body: 'hello'
-                })
-            `
-        })
-        return await new Promise(done => {
-            r.subscribe(u => {
-                done(u.body_text)
-            })
-        })
-    },
-    'hello'
-)
-
-run_test(
-    "Test multiple block types in stream",
-    async () => {
-        var stream1 = `
-
-
-HTTP 200 OK\r
-Yo: hi\r
-Content-Length: 2
-
-yo
-
-encoding: d`
-
-        var stream2 = `t
-length: 5\r
-HELLO
-
-
-HTTP 300 OK\r
-Content-Length: 3
-
-abc
-
-        `
-
-        var r = await fetch('/eval', {
-            method: 'POST',
-            body: `
-                void (async () => {
-                    res.statusCode = 209
-                    res.write(${JSON.stringify(stream1)})
-                    await new Promise(done => setTimeout(done, 200))
-                    res.write(${JSON.stringify(stream2)})
-                })()
-            `
-        })
-        var result = ''
-        return await new Promise(done => {
-            r.subscribe(u => {
-                if (u.status === '200') {
-                    result += u.body_text
-                } else if (!u.status) {
-                    result += u.body_text
-                } else if (u.status === '300') {
-                    result += u.body_text
-                    done(result)
-                }
-            })
-        })
-    },
-    'yoHELLOabc'
-)
-
-run_test(
-    "Test malformed encoding block",
-    async () => {
-        var r = await fetch('/eval', {
-            method: 'POST',
-            body: `
-                res.statusCode = 209
-                res.write('Encoing: dt\\r\\nLength: 5\\r\\nhello')
-            `
-        })
-        return await new Promise(done => {
-            r.subscribe(u => {}, e => done(e.message.slice(0, 'Parse error in encoding block'.length)))
-        })
-    },
-    'Parse error in encoding block'
-)
-
-run_test(
-    "Test that Patches with a Length header still works",
-    async () => {
-        var stream = `
-
-
-HTTP 200 OK\r
-Length: 1\r
-Patches: 1\r
-
-Version: "me-0"
-Parents: "mom-0"
-Content-Range: "[0:0]"
-Content-Length: 8
-
-my patch`
-
-        var r = await fetch('/eval', {
-            method: 'POST',
-            body: `
-                void (async () => {
-                    res.statusCode = 209
-                    res.write(${JSON.stringify(stream)})
-                })()
-            `
-        })
-        return await new Promise(done => {
-            r.subscribe(u => {
-                done(u.patches[0].content_text)
-            })
-        })
-    },
-    'my patch'
-)
-
 add_section_header("onSubscriptionStatus Tests")
 
 run_test(
@@ -4319,6 +4189,30 @@ run_test(
         return JSON.stringify({has_patches_2, has_message_http_patches})
     },
     JSON.stringify({has_patches_2: true, has_message_http_patches: true})
+)
+
+run_test(
+    "status: false suppresses the HTTP status line in a subscription update",
+    async () => {
+        var raw = ''
+        var r = await og_fetch(base_url + '/status_false_test', {headers: {subscribe: 'true'}})
+        var reader = r.body.getReader()
+        while (true) {
+            var {done, value} = await reader.read()
+            if (done) break
+            raw += new TextDecoder().decode(value)
+        }
+        // Two updates are sent: the first with status:false (no status line),
+        // the second with the default 200 (prints `HTTP 200 OK`). So we should
+        // see exactly one status line, and both bodies should arrive.
+        var status_line_count = (raw.match(/HTTP \d+ /g) || []).length
+        return JSON.stringify({
+            status_line_count,
+            got_hidden: raw.includes('"hidden"'),
+            got_shown: raw.includes('"shown"')
+        })
+    },
+    JSON.stringify({status_line_count: 1, got_hidden: true, got_shown: true})
 )
 
 add_section_header("reliable_update_channel Tests")

@@ -785,7 +785,7 @@ function format_update (parser_state) {
 function parse_update (state) {
     // If we don't have headers yet, let's try to parse some
     if (!state.headers) {
-        var parsed = parse_headers(state.input, true)
+        var parsed = parse_headers(state.input)
 
         if (parsed.result === 'waiting') {
             // Gotta wait if we don't have enoug input yet
@@ -850,52 +850,12 @@ async function parse_update_in_solo_response (res) {
     return parse_body(state)
 }
 
-function parse_headers (input, check_for_encoding_blocks) {
+function parse_headers (input) {
 
     // Find the start of the headers
     var start = 0
     while (input[start] === 13 || input[start] === 10) start++  // Skip newlines
     if (start === input.length) return {result: 'waiting'}
-
-    // Check for an "Encoding" block like this:
-    //
-    //   Encoding: dt
-    //   Length: 411813
-    //   <binary dt file>
-    //
-    // Such a block will start with an "e", not an "h"
-    if (check_for_encoding_blocks &&
-        (input[start] === 101 || input[start] === 69)) {
-
-        // Look for two newlines
-        var end = start
-        var count = 0
-        while (++end) {
-            if (end > input.length) return {result: 'waiting'}
-            if (input[end - 1] === 10) count++
-            if (count === 2) break
-        }
-
-        // Extract the header string
-        var headers_source = input.slice(start, end).map(x => String.fromCharCode(x)).join('')
-
-        // Parse
-        var m = headers_source.match(/Encoding:\s*(\w+)\r?\nLength:\s*(\d+)\r?\n/i)
-        if (!m) throw Err({
-            type: 'parse',
-            message: `Parse error in encoding block: ${JSON.stringify(headers_source)}`
-        })
-        var headers = {
-            encoding: m[1],
-            length: m[2]
-        }
-
-        // Update the input
-        input = input.slice(end)
-
-        // And return the parsed result
-        return { result: 'success', headers, input }
-    }
 
     // Look for the double-newline at the end of the headers.
     var end = start
@@ -996,8 +956,7 @@ function parse_body (state) {
 
     // Parse Body Snapshot
 
-    var content_length = parseInt(state.headers['content-length'] ??
-        (state.headers.patches === undefined && state.headers['length'])),
+    var content_length = parseInt(state.headers['content-length']),
         num_patches = num_patches_in(state.headers)
 
     if (!isNaN(content_length)) {
@@ -1587,7 +1546,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
 
                 // try parsing what we got so far as headers..
                 try {
-                    var headers = parse_headers(headers_buffer, false)
+                    var headers = parse_headers(headers_buffer)
                 } catch (e) {
                     // A malformed multiplex header — give up on this request.
                     throw new Error('error parsing headers')
