@@ -304,7 +304,9 @@ async function braid_fetch (url, params = {}) {
 
                 // see if we should retry..
                 var retry = params.retry &&    // Only try to reconnect if the user has chosen to.
-                    e.name !== "AbortError" && // Don't retry if the user has chosen to abort.
+                    e.name !== "AbortError" && // Don't retry if intentionally aborted.
+                    e.type !== 'parse' &&      // Malformed stream.  Don't retry.
+                    e.type !== 'app' &&        // Bug in app's callback.  Don't retry.
                     !e.dont_retry              // Some errors are unlikely to be fixed by retrying.
 
                 if (retry && !original_signal?.aborted) {
@@ -425,16 +427,10 @@ async function braid_fetch (url, params = {}) {
                 braid_fetch.emit('response', {req: params, res})
 
                 // And customize the response with a few methods:
+
                 // ...for parsing an update from the response:
-                res.update = async () => {
-                    var state = await parse_update_in_solo_response(res)
-                    if (state.result === 'error') {
-                        handle_connect_error(state.message)
-                        throw state.message
-                    }
-                    // Otherwise it's good.  Let's ship it!
-                    return format_update(state)
-                }
+                res.update = async () =>
+                    format_update(await parse_update_in_solo_response(res))
 
                 // ...and for getting the braid subscription data:
                 res.subscribe    = start_subscription
@@ -494,17 +490,18 @@ async function braid_fetch (url, params = {}) {
                         async (update) => {
                             // check whether we aborted
                             if (original_signal?.aborted)
-                                throw create_error('already aborted', {name: 'AbortError'})
+                                throw create_error('already aborted', {name: 'AbortError', type: 'abort'})
 
                             // Yay!  We got a new update!  Tell the callback!
                             braid_fetch.emit('update-in', {req: params, res, update})
                             try {
                                 await cb(update)
                             } catch (e) {
-                                // This error is happening in the users code,
-                                // so retrying the connection will probably
-                                // still fail.
-                                e.dont_retry = true
+                                // This error is happening in the user's code, so
+                                // tag it 'app': surface it verbatim (keeping their
+                                // stack) and don't retry — a reconnect would just
+                                // re-trigger their bug.
+                                e.type = 'app'
                                 throw e
                             }
                         },
@@ -668,12 +665,19 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_
         for (let v of value)
             state.input.push(v)
 
-        // Run the parser on the new state
-        state = await parse_multiresponse(state, on_update)
-
-        // Or maybe there's an error to report upstream
-        if (state.result === 'error')
-            return await on_error(create_error(state.message, {dont_retry: true}))
+        // Run the parser on the new state.
+        try {
+            state = await parse_multiresponse(state, on_update)
+        } catch (e) {
+            // All handled errors set .type
+            if (e.type)
+                // So we send those to the upstream error handler
+                return await on_error(e)
+            else
+                // Otherwise, this must be a bug in our code.  Let it fly, so
+                // that we can crash and see it!
+                throw e
+        }
     }
 }
 
@@ -695,19 +699,12 @@ async function parse_multiresponse (state, on_update) {
             // Reset the parser for the next update!
             state = {input: state.input}
 
-            try {
-                await on_update(update)
-            } catch (e) {
-                return {result: 'error', message: e}
-            }
+            // And tell the application!
+            await on_update(update)
         }
 
-        // Or maybe there's an error to report upstream
-        else if (state.result === 'error')
-            return state
-
         // We stop once we've run out of parseable input.
-        if (state.result === 'waiting')
+        else if (state.result === 'waiting')
             break
     }
     return state
@@ -840,17 +837,13 @@ function parse_update (state) {
     if (!state.headers) {
         var parsed = parse_headers(state.input, true)
 
-        // If header-parsing fails, send the error upstream
-        if (parsed.result === 'error')
-            return parsed
         if (parsed.result === 'waiting') {
+            // Gotta wait if we don't have enoug input yet
             state.result = 'waiting'
             return state
         }
 
-        parsed = parse_header_values(parsed)
-        if (parsed.result === 'error')
-            return parsed
+        parse_header_values(parsed)  // Parse the version strings and whatnot
 
         state.headers       = parsed.headers
         state.version       = state.headers.version
@@ -889,9 +882,7 @@ async function parse_update_in_solo_response (res) {
     }
 
     // Parse the header values
-    state = parse_header_values(state)
-    if (state.result === 'error')
-        return state
+    parse_header_values(state)
 
     // And now prepare the parser state for parse_body:
     Object.assign(state, {
@@ -906,8 +897,7 @@ async function parse_update_in_solo_response (res) {
     })
 
     // Now parse the body of this update!
-    state = parse_body(state)
-    return state
+    return parse_body(state)
 }
 
 function parse_headers (input, check_for_encoding_blocks) {
@@ -941,10 +931,10 @@ function parse_headers (input, check_for_encoding_blocks) {
 
         // Parse
         var m = headers_source.match(/Encoding:\s*(\w+)\r?\nLength:\s*(\d+)\r?\n/i)
-        if (!m) return {
-            result: 'error',
+        if (!m) throw Err({
+            type: 'parse',
             message: `Parse error in encoding block: ${JSON.stringify(headers_source)}`
-        }
+        })
         var headers = {
             encoding: m[1],
             length: m[2]
@@ -996,13 +986,13 @@ function parse_headers (input, check_for_encoding_blocks) {
 
     // If the regex failed before we got to the end of the block, throw error:
     if (!found_last_match)
-        return {
-            result: 'error',
-            message: 'Parse error in headers: "'
-                + JSON.stringify(headers_source.substr(header_regex.lastIndex)) + '"',
-            headers_so_far: headers,
-            last_index: header_regex.lastIndex, headers_length
-        }
+        throw Err({
+            type: 'parse',
+            message: 'Parse error in headers: '
+                + JSON.stringify(
+                    headers_source.substr(header_regex.lastIndex),
+                )
+        })
 
     // Success!
 
@@ -1030,10 +1020,10 @@ function parse_header_values (state) {
         if (headers.patches !== undefined)
             headers.patches = JSON.parse(headers.patches)
     } catch (e) {
-        return {
-            result: 'error',
+        throw Err({
+            type: 'parse',
             message: 'Parsing bad header values: ' + JSON.stringify(headers)
-        }
+        })
     }
     return state
 }
@@ -1076,11 +1066,11 @@ function parse_body (state) {
         if (state.headers['content-range']) {
             var match = parse_content_range(state.headers['content-range'])
             if (!match)
-                return {
-                    result: 'error',
-                    message: 'cannot parse content-range',
-                    range: state.headers['content-range']
-                }
+                throw Err({
+                    type: 'parse',
+                    message: 'Cannot parse content-range: '
+                        + JSON.stringify(state.headers['content-range'])
+                })
             state.patches = [{
                 unit: match.unit,
                 range: match.range,
@@ -1121,18 +1111,13 @@ function parse_body (state) {
             if (!('headers' in last_patch)) {
                 var parsed = parse_headers(state.input)
 
-                // If header-parsing fails, send the error upstream
-                if (parsed.result === 'error')
-                    return parsed
                 if (parsed.result === 'waiting') {
                     state.result = 'waiting'
                     return state
                 }
 
                 // Now parse the values within the headers
-                parsed = parse_header_values(parsed)
-                if (parsed.result === 'error')
-                    return parsed
+                parse_header_values(parsed)
 
                 // We parsed patch headers!  Update state.
                 last_patch.headers = parsed.headers
@@ -1147,18 +1132,24 @@ function parse_body (state) {
                     new TextDecoder('utf-8').decode(new Uint8Array(bytes))
 
                 if (!('content-length' in last_patch.headers))
-                    return {
-                        result: 'error',
-                        message: 'no content-length in patch',
-                        patch: last_patch, input: to_text(state.input)
-                    }
+                    throw Err({
+                        type: 'parse',
+                        message: 'Missing content-length in patch: '
+                            + JSON.stringify({
+                                patch: last_patch,
+                                input: to_text(state.input)
+                            })
+                    })
 
                 if (!('content-range' in last_patch.headers))
-                    return {
-                        result: 'error',
-                        message: 'no content-range in patch',
-                        patch: last_patch, input: to_text(state.input)
-                    }
+                    throw Err({
+                        type: 'parse',
+                        message: 'Missing content-range in patch: '
+                            + JSON.stringify({
+                                patch: last_patch,
+                                input: to_text(state.input)
+                            })
+                    })
 
                 var content_length = parseInt(last_patch.headers['content-length'])
 
@@ -1170,11 +1161,14 @@ function parse_body (state) {
 
                 var match = parse_content_range(last_patch.headers['content-range'])
                 if (!match)
-                    return {
-                        result: 'error',
-                        message: 'cannot parse content-range in patch',
-                        patch: last_patch, input: to_text(state.input)
-                    }
+                    throw Err({
+                        type: 'parse',
+                        message: 'Cannot parse content-range in patch: '
+                            + JSON.stringify({
+                                patch: last_patch,
+                                input: to_text(state.input)
+                            })
+                    })
 
                 last_patch.unit = match.unit
                 last_patch.range = match.range
@@ -1191,10 +1185,10 @@ function parse_body (state) {
         return state
     }
 
-    return {
-        result: 'error',
-        message: 'cannot parse body without content-length or patches header'
-    }
+    throw Err({
+        type: 'parse',
+        message: 'Cannot parse body without content-length or patches header'
+    })
 }
 
 
@@ -1239,6 +1233,11 @@ function ascii_ify(s) {
     return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
+function Err ({message, type}) {
+    var e = Error(message)
+    e.type = type
+    return e
+}
 function create_error(msg, override) {
     var e = new Error(msg)
     if (override) Object.assign(e, override)
@@ -1634,14 +1633,14 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 if (request_ended) buffers.push(null)
 
                 // try parsing what we got so far as headers..
-                var headers = parse_headers(headers_buffer, false)
-
-                // how did it go?
-                if (headers.result === 'error') {
-                    // if we got an error, give up
-                    // console.log(`headers_buffer: ` + new TextDecoder().decode(headers_buffer))
+                try {
+                    var headers = parse_headers(headers_buffer, false)
+                } catch (e) {
+                    // A malformed multiplex header — give up on this request.
                     throw new Error('error parsing headers')
-                } else if (headers.result === 'waiting') {
+                }
+
+                if (headers.result === 'waiting') {
                     if (request_ended)
                         throw new Error('Multiplexed request ended before headers received.')
                 } else return headers
@@ -2012,12 +2011,11 @@ function reliable_update_channel (url, params) {
                 },
                 err => {
                     if (inner_signal.aborted) return
-                    // dont_retry marks errors the stream code has flagged
-                    // as "won't be fixed by reconnecting" — primarily
-                    // subscription parse errors (corrupt stream) and
-                    // user-code exceptions thrown from on_update. Warn and
-                    // shut down the whole reliable_update_channel.
-                    if (err?.dont_retry) {
+                    // Some errors won't be fixed by reconnecting — a corrupt
+                    // stream ('parse') or a bug in on_update ('app'), plus
+                    // anything the stream code flags dont_retry. Warn and shut
+                    // the whole reliable_update_channel down.
+                    if (err?.dont_retry || err?.type === 'parse' || err?.type === 'app') {
                         warn('subscription error: ' + err.message)
                         return shutdown(err)
                     }
@@ -2244,7 +2242,7 @@ function old_http_updates (cb) {
 // XXX ========================== XXX
 // XXX   Not yet working.  WIP.   XXX
 // XXX ========================== XXX
-function http_updates (cb) {
+function update_pipe (cb) {
     // Constants
     var // Timeout periods
         heartbeat_period = 20,
@@ -2594,5 +2592,5 @@ if (typeof module !== 'undefined' && module.exports)
         parse_header_values,
         parse_body,
         reliable_update_channel,
-        http_updates
+        update_pipe
     }

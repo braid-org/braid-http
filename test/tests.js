@@ -993,7 +993,7 @@ run_test(
 
         })
     },
-    'Parse error in headers: ""HTP 555\\r\\n\\r\\n""'
+    'Parse error in headers: "HTP 555\\r\\n\\r\\n"'
 );
 
 run_test(
@@ -2126,7 +2126,7 @@ run_test(
             }, 1000)
         })
     },
-    'Error: My Error'
+    'My Error'
 )
 
 run_test(
@@ -2171,7 +2171,7 @@ run_test(
             }, 1000)
         })
     },
-    'Error: My Error'
+    'My Error'
 )
 
 run_test(
@@ -3413,7 +3413,7 @@ run_test(
             res.subscribe((u) => {}, done)
         })
     },
-    'Error: Parse error in headers: ""hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n""'
+    'Error: Parse error in headers: "hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n"'
 )
 
 run_test(
