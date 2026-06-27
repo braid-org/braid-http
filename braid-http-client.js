@@ -62,20 +62,16 @@ function braidify_http (http) {
                     // If we have an 'update' handler, let's remember it
                     on_update = f
 
-                    // And set up a subscription parser
-                    var parser = subscription_parser(async (update, error) => {
-                        if (!error)
-                            on_update && (await on_update(update))
-                        else
-                            on_error && on_error(error)
-                    })
-
-                    // That will run each time we get new data
+                    // Go through the incoming bytes to parse them...
+                    var state = {input: []}
                     var chain = Promise.resolve()
                     res.orig_on('data', (chunk) => {
                         chain = chain.then(async () => {
-                            await parser.read(chunk)
-                        })
+                            for (let b of chunk) state.input.push(b)
+
+                            // Parse and find some updates!
+                            state = await parse_multiresponse(state, on_update)
+                        }).catch(e => on_error?.(e))
                     })
                 }
 
@@ -516,11 +512,6 @@ async function braid_fetch (url, params = {}) {
                             }
                         },
 
-                        // This error handler runs if:
-                        // - The fetch() connection closes
-                        // - Unparseable stuff appears in the streamed response
-                        handle_connect_error,
-
                         // This runs on all new bytes input
                         (chunk) => {
                             on_heartbeat()
@@ -528,7 +519,7 @@ async function braid_fetch (url, params = {}) {
                             params.onBytes?.(chunk)
                             braid_fetch.emit('bytes-in', {req: params, res, bytes: chunk})
                         }
-                    )
+                    ).catch(handle_connect_error)
                 }
 
                 // And the iterator for use with "for async (...)"
@@ -645,12 +636,14 @@ async function braid_fetch (url, params = {}) {
 }
 
 // Parse a stream of updates from the body of a fetch() multiresponse
-async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_bytes) {
+async function handle_fetch_multiresponse (stream_body, on_update, on_bytes) {
     // Set up a reader
     var reader = stream_body.getReader(),
         // Initialize parser state
         state = {input: []}
-    
+
+    // Every error here — a read failure, a closed connection, a parse error, or
+    // a throw from on_update — bubbles up to our caller's .catch().
     while (true) {
         // Read the next chunk of stream!
         try {
@@ -660,15 +653,13 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_
             // A read failure means the connection broke — a pipe error, unless
             // it's an abort.
             e.type = e.name === 'AbortError' ? 'abort' : 'pipe'
-            await on_error(e)
-            return
+            throw e
         }
 
         // Check if this connection has been closed!
         if (done) {
             console.debug("Connection closed.")
-            await on_error(Err({type: 'pipe', message: 'Connection closed'}))
-            return
+            throw Err({type: 'pipe', message: 'Connection closed'})
         }
 
         if (on_bytes)
@@ -679,18 +670,7 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_
             state.input.push(v)
 
         // Run the parser on the new state.
-        try {
-            state = await parse_multiresponse(state, on_update)
-        } catch (e) {
-            // All handled errors set .type
-            if (e.type)
-                // So we send those to the upstream error handler
-                return await on_error(e)
-            else
-                // Otherwise, this must be a bug in our code.  Let it fly, so
-                // that we can crash and see it!
-                throw e
-        }
+        state = await parse_multiresponse(state, on_update)
     }
 }
 
@@ -728,61 +708,6 @@ async function parse_multiresponse (state, on_update) {
 // Braid-HTTP Parser
 // ******************************
 
-
-// Parse a subscription
-//
-// Todo: Remove the OOP style of this function.
-//
-//  - Instead of: {state, async read(chunk) } = subscription_parser(cb)
-//  - Make it:    state = parse_multiresponse(state, input, cb)
-var subscription_parser = (cb) => ({
-    // A parser keeps some parse state
-    state: {input: []},
-
-    // You give it new input information as soon as you get it, and it will
-    // report back with new versions as soon as it finds them.
-    async read (input) {
-
-        // Store the new input!
-        for (let x of input) this.state.input.push(x)
-
-        // Now loop through the input and parse until we hit a dead end
-        while (this.state.input.length) {
-
-            // Try to parse an update
-            try {
-                this.state = parse_update (this.state)
-            } catch (e) {
-                await cb(null, e)
-                return
-            }
-
-            // Maybe we parsed an update!  That's cool!
-            if (this.state.result === 'success') {
-                var update = format_update(this.state)
-
-                // Reset the parser for the next version!
-                this.state = {input: this.state.input}
-
-                try {
-                    await cb(update)
-                } catch (e) {
-                    await cb(null, e)
-                    return
-                }
-            }
-
-            // Or maybe there's an error to report upstream
-            else if (this.state.result === 'error') {
-                await cb(null, Err({type: 'parse', message: this.state.message}))
-                return
-            }
-
-            // We stop once we've run out of parseable input.
-            if (this.state.result == 'waiting') break
-        }
-    }
-})
 
 // Format an update object for presentation, from the parsed update state.
 function format_update (parser_state) {
@@ -2602,7 +2527,6 @@ if (typeof module !== 'undefined' && module.exports)
         fetch: braid_fetch,
         multiplex_fetch,
         http: braidify_http,
-        subscription_parser,
         parse_update,
         parse_headers,
         parse_header_values,
