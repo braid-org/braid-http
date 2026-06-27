@@ -339,9 +339,15 @@ async function braid_fetch (url, params = {}) {
                 // If parents is a function,
                 // call it now to get the latest parents
                 if (typeof params.parents === 'function') {
-                    let parents = await params.parents()
-                    if (parents)
-                        params.headers.set('parents', parents.map(JSON.stringify).join(', '))
+                    try {
+                        let parents = await params.parents()
+                        if (parents)
+                            params.headers.set('parents', parents.map(JSON.stringify).join(', '))
+                    } catch (e) {
+                        // The app's parents() callback threw — its problem, not ours.
+                        e.type = 'app'
+                        throw e
+                    }
                 }
 
                 // Work around Chrome bug where when you restore a closed tab,
@@ -375,7 +381,13 @@ async function braid_fetch (url, params = {}) {
                 // are being sent to the underlying fetch().  The Braid
                 // devtools wants to be able to display these in its devtools
                 // panel.
-                params.onFetch?.(url, params, underlying_aborter)
+                try {
+                    params.onFetch?.(url, params, underlying_aborter)
+                } catch (e) {
+                    // The app's onFetch() callback threw — its problem, not ours.
+                    e.type = 'app'
+                    throw e
+                }
 
                 // Global debug events
                 braid_fetch.emit('bytes-out', {req: params})
