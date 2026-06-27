@@ -937,6 +937,7 @@ async function run_console_tests() {
     var passed_tests = 0
     var failed_tests = 0
     var skipped_tests = 0
+    var failed_test_names = []
 
     // Store tests to run sequentially
     var tests_to_run = []
@@ -1052,12 +1053,14 @@ async function run_console_tests() {
                 console.log(`○ ${test_name} (skipped: old node version)`)
             } else {
                 failed_tests++
+                failed_test_names.push(test_name)
                 console.log(`✗ ${test_name}`)
                 console.log(`  Expected: ${expected_result}`)
                 console.log(`  Got: ${result}`)
             }
         } catch (error) {
             failed_tests++
+            failed_test_names.push(test_name)
             console.log(`✗ ${test_name}`)
             console.log(`  Error: ${error.message || error}`)
         }
@@ -1067,6 +1070,12 @@ async function run_console_tests() {
     console.log('\n' + '='.repeat(50))
     console.log(`Total: ${total_tests} | ✓ : ${passed_tests} | ✗ : ${failed_tests} | Skipped: ${skipped_tests}`)
     console.log('='.repeat(50))
+
+    if (failed_test_names.length) {
+        console.log('\nFailed tests:')
+        for (var name of failed_test_names)
+            console.log(`  ✗ ${name}`)
+    }
 
     // Close servers
     main_server.close()

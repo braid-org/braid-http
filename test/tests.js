@@ -2126,7 +2126,7 @@ run_test(
             }, 1000)
         })
     },
-    'My Error'
+    'Error: My Error'
 )
 
 run_test(
@@ -2171,7 +2171,7 @@ run_test(
             }, 1000)
         })
     },
-    'My Error'
+    'Error: My Error'
 )
 
 run_test(

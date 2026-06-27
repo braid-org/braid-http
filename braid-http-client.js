@@ -1,7 +1,7 @@
 
-// ***************************
-// http
-// ***************************
+// **********************************
+// Braidifying the node 'http' module
+// **********************************
 
 function braidify_http (http) {
     http.normal_get = http.get
@@ -114,7 +114,7 @@ function braidify_http (http) {
 
 
 // ***************************
-// Fetch
+// Braidifying the fetch() API
 // ***************************
 
 var normal_fetch,
@@ -281,9 +281,15 @@ async function braid_fetch (url, params = {}) {
     return await new Promise((done, fail) => {
         connect()
         async function connect() {
-            // we direct all error paths here so we can make centralized retry decisions
-            let on_error = e => {
-                on_error = () => {}
+            // When something is wrong in a subscription, multiple errors can
+            // get thrown.  So we handle all the errors with a centralized
+            // error handler, here:
+            function handle_connect_error (e) {
+                // We only want to handle the error once:
+                if (handle_connect_error.already_ran)
+                    return
+                else
+                    handle_connect_error.already_ran = true
 
                 // The fetch is probably down already, but there are some
                 // other errors that could have happened, and in those cases,
@@ -322,6 +328,7 @@ async function braid_fetch (url, params = {}) {
                 }
             }
 
+            // Now let's set up the fetch()
             try {
                 if (original_signal?.aborted)
                     throw create_error('already aborted', {name: 'AbortError'})
@@ -419,7 +426,15 @@ async function braid_fetch (url, params = {}) {
 
                 // And customize the response with a few methods:
                 // ...for parsing an update from the response:
-                res.update       = () => parse_standalone_update(res)
+                res.update = async () => {
+                    var state = await parse_update_in_solo_response(res)
+                    if (state.result === 'error') {
+                        handle_connect_error(state.message)
+                        throw state.message
+                    }
+                    // Otherwise it's good.  Let's ship it!
+                    return format_update(state)
+                }
 
                 // ...and for getting the braid subscription data:
                 res.subscribe    = start_subscription
@@ -440,7 +455,7 @@ async function braid_fetch (url, params = {}) {
                                 clearTimeout(timeout)
                                 let wait_seconds = 1.2 * heartbeats + 3
                                 timeout = setTimeout(() => {
-                                    on_error(new Error(`heartbeat not seen in ${wait_seconds.toFixed(2)}s`))
+                                    handle_connect_error(new Error(`heartbeat not seen in ${wait_seconds.toFixed(2)}s`))
                                 }, wait_seconds * 1000)
                             }
                             on_heartbeat()
@@ -470,41 +485,41 @@ async function braid_fetch (url, params = {}) {
                             bytes: new TextEncoder().encode(response_line)
                         })
                     }
-
+                    
                     // Parse the streamed response
-                    handle_fetch_stream(
+                    handle_fetch_multiresponse(
                         res.body,
 
-                        // Each time something happens, we'll either get a new
-                        // update back, or an error.
-                        async (result, err) => {
-                            if (!err) {
-                                // check whether we aborted
-                                if (original_signal?.aborted)
-                                    throw create_error('already aborted', {name: 'AbortError'})
+                        // Handle update
+                        async (update) => {
+                            // check whether we aborted
+                            if (original_signal?.aborted)
+                                throw create_error('already aborted', {name: 'AbortError'})
 
-                                // Yay!  We got a new update!  Tell the callback!
-                                braid_fetch.emit('update-in', {req: params, res, update: result})
-                                try {
-                                    await cb(result)
-                                } catch (e) {
-                                    // This error is happening in the users code,
-                                    // so retrying the connection will probably
-                                    // still fail.
-                                    e.dont_retry = true
-                                    throw e
-                                }
-                            } else
-                                // This error handling code runs if the connection
-                                // closes, or if there is unparseable stuff in the
-                                // streamed response.
-                                on_error(err)
+                            // Yay!  We got a new update!  Tell the callback!
+                            braid_fetch.emit('update-in', {req: params, res, update})
+                            try {
+                                await cb(update)
+                            } catch (e) {
+                                // This error is happening in the users code,
+                                // so retrying the connection will probably
+                                // still fail.
+                                e.dont_retry = true
+                                throw e
+                            }
                         },
-                        (...args) => {
+
+                        // This error handler runs if:
+                        // - The fetch() connection closes
+                        // - Unparseable stuff appears in the streamed response
+                        handle_connect_error,
+
+                        // This runs on all new bytes input
+                        (chunk) => {
                             on_heartbeat()
                             params.on_heartbeat?.()
-                            params.onBytes?.(...args)
-                            braid_fetch.emit('bytes-in', {req: params, res, bytes: args[0]})
+                            params.onBytes?.(chunk)
+                            braid_fetch.emit('bytes-in', {req: params, res, bytes: chunk})
                         }
                     )
                 }
@@ -617,46 +632,150 @@ async function braid_fetch (url, params = {}) {
                     }
 
                 done(res)
-            } catch (e) { on_error(e) }
+            } catch (e) { handle_connect_error(e) }
         }
     })
 }
 
-// Parse a stream of versions from the incoming bytes
-async function handle_fetch_stream (stream, cb, on_bytes) {
+// Parse a stream of updates from the body of a fetch() multiresponse
+async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_bytes) {
     // Set up a reader
-    var reader = stream.getReader(),
-        parser = subscription_parser(cb)
+    var reader = stream_body.getReader(),
+        // Initialize parser state
+        state = {input: []}
     
     while (true) {
-        var versions = []
-
         // Read the next chunk of stream!
         try {
             var {done, value} = await reader.read()
         }
         catch (e) {
-            await cb(null, e)
+            await on_error(e)
             return
         }
 
         // Check if this connection has been closed!
         if (done) {
             console.debug("Connection closed.")
-            await cb(null, 'Connection closed')
+            await on_error('Connection closed')
             return
         }
 
-        on_bytes?.(value)
+        if (on_bytes)
+            on_bytes(value)
 
-        // Tell the parser to process some more stream
-        await parser.read(value)
-        if (parser.state.result === 'error')
-            return await cb(null, new Error(parser.state.message))
+        // Add the new chunk to the parser input stream
+        for (let v of value)
+            state.input.push(v)
+
+        // Run the parser on the new state
+        state = await parse_multiresponse(state, on_update)
+
+        // Or maybe there's an error to report upstream
+        if (state.result === 'error')
+            return await on_error(create_error(state.message, {dont_retry: true}))
     }
 }
 
-function extract_update (parser_state) {
+
+// The general multiresponse handler.  Parses a multiresponse into a stream of
+// updates.  Reports each update as it comes in.
+async function parse_multiresponse (state, on_update) {
+
+    // Loop through the input and parse until we hit a dead end
+    while (state.input.length) {
+
+        // Try to parse an update
+        state = parse_update (state)
+
+        // Maybe we parsed an update!  That's cool!
+        if (state.result === 'success') {
+            var update = format_update(state)
+
+            // Reset the parser for the next update!
+            state = {input: state.input}
+
+            try {
+                await on_update(update)
+            } catch (e) {
+                return {result: 'error', message: e}
+            }
+        }
+
+        // Or maybe there's an error to report upstream
+        else if (state.result === 'error')
+            return state
+
+        // We stop once we've run out of parseable input.
+        if (state.result === 'waiting')
+            break
+    }
+    return state
+}
+
+
+// ******************************
+// Braid-HTTP Parser
+// ******************************
+
+
+// Parse a subscription
+//
+// Todo: Remove the OOP style of this function.
+//
+//  - Instead of: {state, async read(chunk) } = subscription_parser(cb)
+//  - Make it:    state = parse_multiresponse(state, input, cb)
+var subscription_parser = (cb) => ({
+    // A parser keeps some parse state
+    state: {input: []},
+
+    // You give it new input information as soon as you get it, and it will
+    // report back with new versions as soon as it finds them.
+    async read (input) {
+
+        // Store the new input!
+        for (let x of input) this.state.input.push(x)
+
+        // Now loop through the input and parse until we hit a dead end
+        while (this.state.input.length) {
+
+            // Try to parse an update
+            try {
+                this.state = parse_update (this.state)
+            } catch (e) {
+                await cb(null, e)
+                return
+            }
+
+            // Maybe we parsed an update!  That's cool!
+            if (this.state.result === 'success') {
+                var update = format_update(this.state)
+
+                // Reset the parser for the next version!
+                this.state = {input: this.state.input}
+
+                try {
+                    await cb(update)
+                } catch (e) {
+                    await cb(null, e)
+                    return
+                }
+            }
+
+            // Or maybe there's an error to report upstream
+            else if (this.state.result === 'error') {
+                await cb(null, create_error(this.state.message, {dont_retry: true}))
+                return
+            }
+
+            // We stop once we've run out of parseable input.
+            if (this.state.result == 'waiting') break
+        }
+    }
+})
+
+// Format an update object for presentation, from the parsed update state.
+function format_update (parser_state) {
     var update = {
         version:      parser_state.version,
         parents:      parser_state.parents,
@@ -696,77 +815,25 @@ function extract_update (parser_state) {
     return update
 }
 
-// ****************************
-// Braid-HTTP Subscription Parser
-// ****************************
-
-var subscription_parser = (cb) => ({
-    // A parser keeps some parse state
-    state: {input: []},
-
-    // And reports back new versions as soon as they are ready
-    cb: cb,
-
-    // You give it new input information as soon as you get it, and it will
-    // report back with new versions as soon as it finds them.
-    async read (input) {
-
-        // Store the new input!
-        for (let x of input) this.state.input.push(x)
-
-        // Now loop through the input and parse until we hit a dead end
-        while (this.state.input.length) {
-
-            // Try to parse an update
-            try {
-                this.state = parse_update (this.state)
-            } catch (e) {
-                await this.cb(null, e)
-                return
-            }
-
-            // Maybe we parsed an update!  That's cool!
-            if (this.state.result === 'success') {
-                var update = extract_update(this.state)
-
-                // Reset the parser for the next version!
-                this.state = {input: this.state.input}
-
-                try {
-                    await this.cb(update)
-                } catch (e) {
-                    await this.cb(null, e)
-                    return
-                }
-            }
-
-            // Or maybe there's an error to report upstream
-            else if (this.state.result === 'error') {
-                await this.cb(null, create_error(this.state.message, {dont_retry: true}))
-                return
-            }
-
-            // We stop once we've run out of parseable input.
-            if (this.state.result == 'waiting') break
-        }
-    }
-})
-
 
 // ****************************
 // General parsing functions
 // ****************************
 //
-// Each of these functions takes parsing state as input, mutates the state,
-// and returns the new state.
+// Each of these functions takes parsing state as input and returns the new
+// state.  They often mutate the input state; so don't rely on the state you
+// pass in.
 //
 // Depending on the parse result, each parse function returns:
 //
 //  parse_<thing> (state)
-//  => {result: 'waiting', ...}  If it parsed part of an item, but neeeds more input
+//  => {result: 'waiting', ...}  If it parsed part of an item, but needs more input
 //  => {result: 'success', ...}  If it parses an entire item
 //  => {result: 'error', ...}    If there is a syntax error in the input
-
+//
+// Keep in mind the parser state is:
+//   - *reset* after parsing each update.
+//   - *thrown away* after a parse error.
 
 function parse_update (state) {
     // If we don't have headers yet, let's try to parse some
@@ -781,7 +848,9 @@ function parse_update (state) {
             return state
         }
 
-        parse_header_values(parsed.headers)
+        parsed = parse_header_values(parsed)
+        if (parsed.result === 'error')
+            return parsed
 
         state.headers       = parsed.headers
         state.version       = state.headers.version
@@ -801,14 +870,14 @@ function parse_update (state) {
     return parse_body(state)
 }
 
-// This one parses a standalone response, that doesn't appear within a
-// subscription.  The headers are already parsed, here, so we fake the parse
-// state halfway through.
-async function parse_standalone_update (res) {
-    var headers = parse_header_values(
-        Object.fromEntries(res.headers.entries())
-    )
-    var parsed = parse_body({
+// This one parses an update from a standalone response; not in a 209
+// subscription multiresponse body.  The headers are already parsed, here, so
+// we fake the parse state halfway through.
+async function parse_update_in_solo_response (res) {
+    var headers = Object.fromEntries(res.headers.entries())
+
+    // Create a parser state from the already-parsed headers...
+    var state = {
         headers: {
             version: headers.version,
             parents: headers.parents,
@@ -816,19 +885,29 @@ async function parse_standalone_update (res) {
             ':status': res.status,
             'content-type': headers['content-type'],
             'content-length': headers['content-length'],
-        },
+        }
+    }
 
-        // The parse_update() function pulls some headers out
-        // explicitly for parse_body() to use
-        version: headers.version,
-        parents: headers.parents,
-        status: res.status,
-        content_type: headers['content-type'],
+    // Parse the header values
+    state = parse_header_values(state)
+    if (state.result === 'error')
+        return state
 
-        input: new Uint8Array(await res.arrayBuffer())
+    // And now prepare the parser state for parse_body:
+    Object.assign(state, {
+        // It will parse the response body as input
+        input: new Uint8Array(await res.arrayBuffer()),
+
+        // It will want these headers pulled out for it to use
+        version: state.headers.version,
+        parents: state.headers.parents,
+        content_type: state.headers['content-type'],
+        status: res.status
     })
 
-    return extract_update(parsed)
+    // Now parse the body of this update!
+    state = parse_body(state)
+    return state
 }
 
 function parse_headers (input, check_for_encoding_blocks) {
@@ -908,7 +987,6 @@ function parse_headers (input, check_for_encoding_blocks) {
 
     // And now loop through the block, matching one line at a time
     while (match = header_regex.exec(headers_source)) {
-        // console.log('Header match:', match && [match[1], match[2]])
         headers[match[1].toLowerCase()] = match[2]
 
         // This might be the last line of the headers block!
@@ -942,14 +1020,22 @@ function parse_headers (input, check_for_encoding_blocks) {
 }
 
 // Parse the Version, Parents, and Patches values into JS primitves
-function parse_header_values (headers) {
-    if ('version' in headers)
-        headers.version = JSON.parse('['+headers.version+']')
-    if ('parents' in headers)
-        headers.parents = JSON.parse('['+headers.parents+']')
-    if ('patches' in headers)
-        headers.patches = JSON.parse(headers.patches)
-    return headers
+function parse_header_values (state) {
+    var headers = state.headers
+    try {
+        if (headers.version !== undefined)
+            headers.version = JSON.parse('['+headers.version+']')
+        if (headers.parents !== undefined)
+            headers.parents = JSON.parse('['+headers.parents+']')
+        if (headers.patches !== undefined)
+            headers.patches = JSON.parse(headers.patches)
+    } catch (e) {
+        return {
+            result: 'error',
+            message: 'Parsing bad header values: ' + JSON.stringify(headers)
+        }
+    }
+    return state
 }
 
 // Content-range is of the form '<unit> <range>' e.g. 'json .index'
@@ -1044,7 +1130,9 @@ function parse_body (state) {
                 }
 
                 // Now parse the values within the headers
-                parse_header_values(parsed)
+                parsed = parse_header_values(parsed)
+                if (parsed.result === 'error')
+                    return parsed
 
                 // We parsed patch headers!  Update state.
                 last_patch.headers = parsed.headers
@@ -1445,10 +1533,15 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         var unset = async e => {
             unset = () => {}
             requests.delete(request)
-            if (!requests.size) not_used_timeout = setTimeout(() => mux_aborter.abort(), mux_params?.not_used_timeout ?? 1000 * 20)
+            if (!requests.size)
+                not_used_timeout = setTimeout(() =>
+                    mux_aborter.abort(),
+                    mux_params?.not_used_timeout ?? 1000 * 20
+                )
             request_error = e
             bytes_available()
-            if (e !== 'retry' && established) await try_deleting_request(request).catch(e => {})
+            if (e !== 'retry' && established)
+                await try_deleting_request(request).catch(e => {})
         }
 
         // Do the underlying fetch
@@ -1631,8 +1724,12 @@ async function parse_multiplex_stream(reader, cb, on_error) {
                         }
                     }
                     if (headerComplete) {
-                        var headerStr = new TextDecoder().decode(buffers[0].slice(0, header_length))
-                        var m = headerStr.match(/^[\r\n]*((\d+) bytes for|close|start) response ([A-Za-z0-9_-]+)\r\n$/)
+                        var headerStr = new TextDecoder().decode(
+                            buffers[0].slice(0, header_length)
+                        )
+                        var m = headerStr.match(
+                            /^[\r\n]*((\d+) bytes for|close|start) response ([A-Za-z0-9_-]+)\r\n$/
+                        )
 
                         if (!m) throw new Error('invalid multiplex header')
                         request_id = m[3]
@@ -2003,33 +2100,314 @@ function reliable_update_channel (url, params) {
     }
 }
 
-// XXX ============================
-// XXX Not yet working.  WIP.
-// XXX ============================
-function http_statebus (cb) {
-    var online = false,
-        subscribed = {},
+function old_http_updates (cb) {
+    // Multi-Host Request Queue!
+    //
+    // Ensures:
+    //  - When reconnecting to whole internet, only one request is tried per 3s
+    //  - When reconnecting to a downed host, only one request is tried per 3s
+    //
+    // Otherwise, sends requests immediately.
+    var request_queue = {
 
-        abort_get,
-        abort_puts,
+        // State of network
+        network: {
+            status: 'offline', // 'online | 'online' | 'connecting'
+            num_open_requests: 0,
+            reconnector
+        },
 
-        // Timeout periods
+        // Per-host state
+        hosts: {
+            // "hostname": {
+            //    status: 'online' | 'offline' | 'connecting'
+            //    num_open_requests: 0,
+            //    last_reconnect_failed,
+            //    pending_requests: [{url, method, params}, ...],
+            //    reconnector
+            // },
+            // ...
+        },
+        new_host: () => ({
+            status: 'offline',
+            num_open_requests: 0,
+            last_reconnect_failed: false,
+            pending_requests: [],
+        }),
+        initialize_host (hostname) {
+            if (!(hostname in this.hosts))
+                this.hosts[hostname] = new_host()
+        },
+
+        new_request (url, method, params) {
+            var hostname = new URL(url).host
+            this.initialize_host(hostname)
+
+            // If connecting, just enqueue it
+            if (this.network.status === 'connecting'
+                || this.hosts[hostname].status === 'connecting')
+                this.hosts[hostname].pending_requests.push({url, method, params})
+
+            // If network offline, try reconnecting
+            else if (this.network.status === 'offline')
+                this.try_reconnect()
+            // If host offline, fire it and go to connecting
+            else if (this.hosts[hostname].status === 'offline')
+                this.try_reconnect(hostname)
+
+            // Otherwise, we must be online!  So run the request directly
+            console.assert(this.network.status === 'online'
+                           && this.hosts[hostname].status === 'online')
+
+            this.run_request(request)
+        },
+
+        try_to_reconnect () {
+            // If network.status === 'connecting', choose one host and try to
+            // reconnect it.
+
+            // If network.status === 'online', then:
+            //   - run through all hosts
+            //   - if it's offline / connecting
+            //     - then kill the last connecting request, and make another one
+
+            // Store the request on that host in {reconnecting: {abort: aborter}}
+
+            // Run this whole thing every 3 seconds in a setInterval.
+        },
+
+        try_reconnect (hostname) {
+            var random_array_choice = (array) =>
+                array[Math.floor(Math.random() * array.length)]
+
+            // Pick (or inherit) a host
+            var host = hostname || random_array_choice(Object.keys(this.hosts))
+
+            // Run a request on the host
+            run_request(random_array_choice(this.hosts[host].pending_requests))
+
+            // Live to try another day!
+            setTimeout(() => this.try_reconnect(hostname), 3000)
+        },
+
+        handle_request_open(url, aborter) {
+            var hostname = new URL(url).host
+            initialize_host(hostname)
+
+            this.network.num_open_requests++
+            this.hosts[hostname].num_open_requests++
+
+            // If we're reconnecting, kill the previous reconnector and
+            // replace with this one
+            if (this.hosts[hostname].status === 'offline') {
+                this.hosts[hostname].reconnecting?.abort()
+                this.hosts[hostname].reconnecting = {abort: aborter}
+            }
+        },
+        handle_request_closed(url) {
+            var hostname = new URL(url).host
+
+            this.network.num_open_requests--
+            this.hosts[hostname].num_open_requests--
+
+            // Garbage collect host if this is our last request
+            if (this.hosts[hostname].num_open_requests === 0
+                && this.hosts[hostname].pending_requests.length === 0)
+                delete this.hosts[hostname]
+        },
+        handle_url_up (url) {
+            var hostname = new URL(url).host
+            this.initialize_host(hostname)
+
+            // The network must be up.
+
+            // If we weren't online before, let's start trying all our hosts
+            if (this.network.status !== 'online') {
+                console.assert(this.network.status === 'connecting',
+                               'Error: missed a transition from offline->connecting')
+                //...
+            }
+
+            this.network.status = 'online'
+            this.hosts[hostname].status = 'online'
+
+            
+        },
+        handle_url_down (url) {
+            // If method == 'GET'
+        }
+    }
+}
+
+
+
+// XXX ========================== XXX
+// XXX   Not yet working.  WIP.   XXX
+// XXX ========================== XXX
+function http_updates (cb) {
+    // Constants
+    var // Timeout periods
         heartbeat_period = 20,
         polling_interval = 30,
         version_not_found_delay = 5,  // When waiting for a version to appear
         cooloff_delay = 10            // When server told us to chill
 
-    function we_are_online (true_false) {
-        cb('online', true_false)
-        online = true_false
-    }
-    function announce_update (url, update) {
-        cb(url. update)
+    // Network throttling
+    {
+
+        // Network state models:
+        //   - One internet pipe, that can go offline
+        //   - Multiple host pipes, that can go offline
+        var network = {
+            online: false,
+            hosts: {
+                // "hostname": {
+                //    online: false,
+                //    // Pending requests are waiting to run fetch() on
+                //    pending_requests: [{url, method, params}, ...],
+                //    // Active requests we've called fetch() on
+                //    active_requests: [...]
+                // },
+            }
+        }
+
+        // Helper
+        var nothing_to_do = () => Object.keys(network.hosts).length === 0
+        var hostname = (url) => new URL(url).host
+
+        // When a pipe goes offline, we probe it every 3s until it comes online
+        setInterval(reconnection_poll, 3000)
+        function reconnection_poll () {
+            function reconnect_to (hostname) {
+                var random_array_choice = (array) =>
+                    array[Math.floor(Math.random() * array.length)]
+
+                if (nothing_to_do())
+                    return
+
+                // Pick (or inherit) a host
+                var hostnm = hostname || random_array_choice(Object.keys(network.hosts))
+
+                // Run a request on the host
+                run_request(random_array_choice(network.hosts[hostnm].pending_requests))
+            }
+
+            // Every 3 seconds, try to go online
+            if (network.online === false)
+                // Pick a random hosts to try
+                reconnect_to()
+            else
+                // Or go through offline hosts, and try one for each
+                for (var hostname in network.hosts)
+                    if (network.hosts[hostname].online === false)
+                        reconnect_to(hostname)
+        }
+
+        function run_request (request) {
+            if (request.method === 'GET')
+                GET(request.url, request.params)
+            else if (request.method === 'PUT')
+                PUT(request.url, request.params)
+            else if (request.method === 'DELETE')
+                PUT(request.url, 'delete')
+        }
+
+        function schedule_request (url, method, params) {
+            var name = hostname(url)
+
+            // If not tried yet, send the request, and make a host
+            if (nothing_to_do() || !network.hosts[name]) {
+                initialize_host(name)
+                run_request({url, method, params})
+            }
+
+            // If offline, add to the queue
+            else if (network.hosts[name].online === false)
+                hosts[name].pending_requests.push({url, method, params})
+
+            // If online, launch it
+            else if (network.online && network.hosts[name].online)
+                run_request({url, method, params})
+            else
+                throw "This can't happen!"
+        }
+
+        function forget_subscription (url) {
+            var name = hostname(url)
+
+            // Iterate through the active_requests and kill the subscription
+            // Abort it
+            // Remove it from the array
+
+            // Then delete the host if pending and active requests is empty
+        }
+
+        function completed_request (url) {
+            network.online = true
+
+            var name = hostname(url),
+                host = network.hosts[name]
+            console.assert(host, 'Host should exist now!')
+            if (host.online === false) {
+                network.hosts[name].online = true
+                // And flush the queue
+                for (var req in host.pending_requests)
+                    run_request(host.pending_requests[req])
+            }
+        }
+            
+        function broken_request (url) {
+            var host = network.hosts[hostname(url)]
+
+            // Mark the host down
+            host.online = false
+
+            // Reboot all requests on this host
+            for (var req of host.active_requests) {
+                req.abort()
+                delete req.abort
+                host.pending_requests.push(req)
+            }
+
+            // Clear active_requests
+            host.active_requests = []
+
+            // 
+        }
     }
 
+    // ========================================
+    // Network Requests
+    
+    /* Behavior:
 
-    async function GET (url, options) {
-        var GET_again = () => GET(url, options)
+       - GET fails once: try quick reconnect
+       - GET fails twice: we are offline on this host.
+       - PUT fails: we are offline on this host.
+
+       - Host goes offline:
+         - Abort GET on this host
+         - Abort all PUTs on this host
+
+       - All hosts have gone offline:
+         - We are entirely offline
+         - Send one request at a time
+
+       - First request on an offline host:
+         - Wait for it to go through before sending more
+       - Host goes from offline to online:
+         - Send all other requests on host
+
+     */
+
+    
+    var latest_connect_failed = false   // Heuristic for setting reconnect time
+
+    async function GET (url, params) {
+        console.log('GET', {url, params})
+        var retry_get_after = (seconds) =>
+            setTimeout(() => { GET(url, params)}, seconds * 1000)
+
         try {
 
             // Prepare for abortions
@@ -2040,16 +2418,18 @@ function http_statebus (cb) {
             var res = await braid_fetch(url, {
                 subscribe: true,
                 headers: {'Heartbeats': heartbeat_period},
-                parents: options.last_known_parents,
+                parents: params?.last_known_parents,
                 signal: aborter.signal,
-                on_heartbeat: got_heartbeat
+                //on_heartbeat: got_heartbeat
             })
 
             // Process the response
 
+            console.log('we got a response', res)
+
             // Log warnings to the user
             switch (res.status) {
-            case 500:
+            case 500:    // 500: Server error
                 // Automatically already logged in JS console by browser, I
                 // think?
                 break;
@@ -2057,9 +2437,9 @@ function http_statebus (cb) {
 
             // Change online/offline state
             switch (res.status) {
-            case 200: // OK
-            case 209: // Multiresponse
-            case 404: // Not Found
+            case 200:    // 200 OK
+            case 209:    // 209 Multiresponse
+            case 404:    // 404 Not Found
                 // Go online
                 we_are_online(true)
                 break;
@@ -2083,50 +2463,58 @@ function http_statebus (cb) {
                 break;
             }
 
-            // Retry behavior
+            // Retry the fetch
             switch (res.status) {
-            case 404: // Not Found
-            case 200: // OK
+            case 404:    // 404 Not Found
+            case 200:    // 200 OK
                 // Retry at the polling interval
-                setTimeout(GET_again, polling_interval * 1000)
+                retry_get_after(polling_interval)
                 break;
 
-            case 309: // Version Unknown Here (deprecated)
-            case 432: // Version Not Found
+            case 309:    // 309 Version Unknown Here (deprecated)
+            case 432:    // 432 Version Not Found
                 // Might be out of order.  Wait and retry, and see if it appears.
-                setTimeout(GET_again, version_not_found_delay * 1000)
+                retry_get_after(version_not_found_delay)
                 // Todo: consider throwing an error upstream after N attempts
                 // or T seconds
                 break;
 
-            case 425: // Too Early (for TLS 1.3 0-RTT)
+            case 425:    // 425 Too Early (for TLS 1.3 0-RTT)
                 // Just need to restart after a very short delay
-                setTimeout(GET_again, 2 * 1000)
+                retry_get_after(2)
                 break;
 
-            case 429: // Too Many Requests
+            case 429:    // 429 Too Many Requests
                 // Retry after an extended delay
                 // Grab the delay from Retry-After header, if it exists.
                 var retry_after = parseFloat(res.headers.get('retry-after'))
                 if (isFinite(retry_after))
-                    setTimeout(GET_again, retry_after * 1000)
+                    retry_get_after(retry_after)
                 else
-                    setTimeout(GET_again, cooloff_delay * 1000)
+                    retry_get_after(cooloff_delay)
                 break;
             }
 
             // Setup subscription
             if (res.status === 209)
                 res.subscribe(
-                    update => announce_update(url, update),
+                    update => {
+                        latest_connect_failed = false
+                        announce_update(url, update)}
+                    ,
                     err => {
-                        // TODO: What do we do here?
+                        console.log('GET: res.subscribe err', err, 'retrying...') 
+                        retry_get_after(latest_connect_failed ? 3 : 1)
+                        latest_connect_failed = true
                     }
                 )
                 
         } catch (e) {
+            console.error('GET: error', e)
             if (e?.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
                 console.warn('connection not up: TLS hostname mismatch, likely a captive portal')
+            retry_get_after(latest_connect_failed ? 3 : 1)
+            latest_connect_failed = true
         }
 
         //  - Mark offlne, and retry after short delay:
@@ -2141,30 +2529,51 @@ function http_statebus (cb) {
         //    - Or success: [get: setup subscription handler!, put: give cb/clear promise]
     }
 
-    async function PUT (url, value, options) {
-        
+    async function PUT (url, update) {
+        // Needs to put them in order, using put-order
+        //   - or a localtime counter, once we upgrade verison IDs
     }
 
 
-    // Return the statebus interface to this HTTP state!
+    // ========================================
+    // External API
+
+    function we_are_online (url, true_false) {
+        console.log('we_are_online:', true_false)
+        cb('online', {body: true_false})
+        online = true_false
+    }
+    function announce_update (url, update) {
+        console.log('announce_update:', url, update)
+        cb(url, update)
+    }
+
+    var subscribed = {}
+
+    // The statebus interface to this HTTP state
     return {
-        get(url, options) {
+        get(url, params) {
+            console.log('http_bus.get()', url, params)
             if (subscribed[url])
                 throw 'Already subscribed to ' + url
             subscribed[url] = true
 
             // Start the GET
-            get_url(url, options)
+            schedule_request({url, method: 'GET', params})
         },
         forget(url) {
+            console.log('http_bus.forget()', url)
             if (!subscribed[url])
                 throw 'Not subscribed to ' + url
-            delete subscribed[url]
+            abort_get(url)
         },
         set(url, update) {
-            PUT(url, JSON.stringify(update))
+            console.log('http_bus.set()', url, update)
+            schedule_request({url, method: 'PUT', update})
         },
         delete(url, params) {
+            console.log('http_bus.delete()', url, params)
+            schedule_request({url, method: 'DELETE'})
         }
     }
 }
@@ -2185,5 +2594,5 @@ if (typeof module !== 'undefined' && module.exports)
         parse_header_values,
         parse_body,
         reliable_update_channel,
-        http_statebus
+        http_updates
     }
