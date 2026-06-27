@@ -227,7 +227,7 @@ async function braid_fetch (url, params = {}) {
                 if (typeof patch.content === 'string')
                     patch.content = te.encode(patch.content)
 
-                var length = `content-length: ${get_binary_length(patch.content)}`
+                var length = `content-length: ${get_binary_num_bytes(patch.content)}`
                 var range = `content-range: ${patch.unit} ${patch.range}`
                 bufs.push(te.encode(`${length}\r\n${range}\r\n\r\n`))
                 bufs.push(patch.content)
@@ -302,12 +302,13 @@ async function braid_fetch (url, params = {}) {
                     params.onSubscriptionStatus({online: false, error: e})
                 }
 
-                // see if we should retry..
-                var retry = params.retry &&    // Only try to reconnect if the user has chosen to.
-                    e.name !== "AbortError" && // Don't retry if intentionally aborted.
-                    e.type !== 'parse' &&      // Malformed stream.  Don't retry.
-                    e.type !== 'app' &&        // Bug in app's callback.  Don't retry.
-                    !e.dont_retry              // Some errors are unlikely to be fixed by retrying.
+                // If the error lacks a type, then it's a bug in our own code.
+                if (!e.type)
+                    // Launch it back into the universe!
+                    throw e
+
+                // We retry pipe errors.
+                var retry = params.retry && e.type === 'pipe'
 
                 if (retry && !original_signal?.aborted) {
                     // retry after some time..
@@ -321,7 +322,7 @@ async function braid_fetch (url, params = {}) {
                     // if we would have retried except that original_signal?.aborted,
                     // then we want to return that as the error..
                     if (retry && original_signal?.aborted)
-                        e = create_error('already aborted', {name: 'AbortError'})
+                        e = Err({type: 'abort', message: 'already aborted'})
 
                     // let people know things are shutting down..
                     subscription_counts_on_close?.()
@@ -333,7 +334,7 @@ async function braid_fetch (url, params = {}) {
             // Now let's set up the fetch()
             try {
                 if (original_signal?.aborted)
-                    throw create_error('already aborted', {name: 'AbortError'})
+                    throw Err({type: 'abort', message: 'already aborted'})
 
                 // We need a fresh underlying abort controller each time we connect
                 underlying_aborter = new AbortController()
@@ -413,16 +414,25 @@ async function braid_fetch (url, params = {}) {
                     too_many_subs = (braid_fetch.subscription_counts?.[origin]
                                      > max_subs)
 
-                if (!disabled_multiplex_hosts.has(get_origin(url))
-                    && (mux_params === true
-                        || (mux_params !== false
-                            && (params.headers.has('multiplex-through')
-                                || too_many_subs)))) {
-                    // Then multiplex!
-                    res = await multiplex_fetch(url, params, mux_params)
-                } else
-                    // Or do a regular fetch.
-                    res = await normal_fetch(url, params)
+                try {
+                    if (!disabled_multiplex_hosts.has(get_origin(url))
+                        && (mux_params === true
+                            || (mux_params !== false
+                                && (params.headers.has('multiplex-through')
+                                    || too_many_subs)))) {
+                        // Then multiplex!
+                        res = await multiplex_fetch(url, params, mux_params)
+                    } else
+                        // Or do a regular fetch.
+                        res = await normal_fetch(url, params)
+                } catch (e) {
+                    // An exception from the underlying fetch is, by definition, a
+                    // pipe error — unless it's an abort, or the multiplexer already
+                    // classified it.
+                    if (typeof e === 'object' && e && !e.type)
+                        e.type = e.name === 'AbortError' ? 'abort' : 'pipe'
+                    throw e
+                }
 
                 braid_fetch.emit('response', {req: params, res})
 
@@ -451,7 +461,7 @@ async function braid_fetch (url, params = {}) {
                                 clearTimeout(timeout)
                                 let wait_seconds = 1.2 * heartbeats + 3
                                 timeout = setTimeout(() => {
-                                    handle_connect_error(new Error(`heartbeat not seen in ${wait_seconds.toFixed(2)}s`))
+                                    handle_connect_error(Err({type: 'pipe', message: `heartbeat not seen in ${wait_seconds.toFixed(2)}s`}))
                                 }, wait_seconds * 1000)
                             }
                             on_heartbeat()
@@ -459,11 +469,11 @@ async function braid_fetch (url, params = {}) {
                     }
 
                     if (res.status !== 209)
-                        throw new Error(`Got unexpected subscription status code: ${res.status}. Expected 209.`)
+                        throw Err({type: 'protocol', message: `Got unexpected subscription status code: ${res.status}. Expected 209.`})
 
                     if (res.bodyUsed)
                         // TODO: check if this needs a return
-                        throw new Error('This response\'s body has already been read', res)
+                        throw Err({type: 'app', message: 'This response\'s body has already been read'})
 
                     {
                         // Emit synthetic bytes for the initial response headers
@@ -490,7 +500,7 @@ async function braid_fetch (url, params = {}) {
                         async (update) => {
                             // check whether we aborted
                             if (original_signal?.aborted)
-                                throw create_error('already aborted', {name: 'AbortError', type: 'abort'})
+                                throw Err({type: 'abort', message: 'already aborted'})
 
                             // Yay!  We got a new update!  Tell the callback!
                             braid_fetch.emit('update-in', {req: params, res, update})
@@ -605,7 +615,7 @@ async function braid_fetch (url, params = {}) {
                             subscription_error?.(
                                 new Error(`giving up because of http status: ${res.status}${(res.status === 401 || res.status === 403) ? ` (access denied)` : ''}`)
                             )
-                    } else if (!res.ok) throw new Error(`status not ok: ${res.status}`)
+                    } else if (!res.ok) throw Err({type: 'pipe', message: `status not ok: ${res.status}`})
                 }
 
                 if (subscription_cb && res.ok) start_subscription(subscription_cb, subscription_error)
@@ -647,6 +657,9 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_
             var {done, value} = await reader.read()
         }
         catch (e) {
+            // A read failure means the connection broke — a pipe error, unless
+            // it's an abort.
+            e.type = e.name === 'AbortError' ? 'abort' : 'pipe'
             await on_error(e)
             return
         }
@@ -654,7 +667,7 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_error, on_
         // Check if this connection has been closed!
         if (done) {
             console.debug("Connection closed.")
-            await on_error('Connection closed')
+            await on_error(Err({type: 'pipe', message: 'Connection closed'}))
             return
         }
 
@@ -761,7 +774,7 @@ var subscription_parser = (cb) => ({
 
             // Or maybe there's an error to report upstream
             else if (this.state.result === 'error') {
-                await cb(null, create_error(this.state.message, {dont_retry: true}))
+                await cb(null, Err({type: 'parse', message: this.state.message}))
                 return
             }
 
@@ -1215,10 +1228,10 @@ function extra_headers (headers) {
     return result
 }
 
-function get_binary_length(x) {
-    return  x instanceof ArrayBuffer ? x.byteLength :
-            x instanceof Uint8Array ? x.length :
-            x instanceof Blob ? x.size : undefined
+function get_binary_num_bytes (binary) {
+    return  binary instanceof ArrayBuffer ? binary.byteLength :
+            binary instanceof Uint8Array  ? binary.length :
+            binary instanceof Blob        ? binary.size : undefined
 }
 
 function deep_copy(x) {
@@ -1233,14 +1246,17 @@ function ascii_ify(s) {
     return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
+// Each of our errors has a `type`:
+//   pipe:     retry
+//   parse:    give up and tell the app.
+//   app:      the application broke.  stop and tell it.
+//   protocol: the server violated the spec.  stop and tell app.
+//   abort:    the app cancelled.  give up.
+// Any other error is a bug in our own code.
 function Err ({message, type}) {
     var e = Error(message)
     e.type = type
-    return e
-}
-function create_error(msg, override) {
-    var e = new Error(msg)
-    if (override) Object.assign(e, override)
+    e.name = type[0].toUpperCase() + type.slice(1) + 'Error'
     return e
 }
 
@@ -1593,15 +1609,15 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
                 // give the right version when creating a multiplexer... but the
                 // WRONG version for this request?
                 if (res.headers.get('Multiplex-Version') !== multiplex_version)
-                    throw create_error(`Server created multiplexer, and then set a *different* `
-                                       + `Multiplex-Version ${res.headers.get('Multiplex-Version')} `
-                                       + `on a multiplexed request`,
-                                       { dont_retry: true })
+                    throw Err({type: 'protocol',
+                               message: `Server created multiplexer, and then set a *different* `
+                                   + `Multiplex-Version ${res.headers.get('Multiplex-Version')} `
+                                   + `on a multiplexed request`})
 
                 if (res.status !== 293)
-                    throw create_error(`Multiplexed request status ${res.status} is not 293`)
+                    throw Err({type: 'protocol', message: `Multiplexed request status ${res.status} is not 293`})
                 if (!res.headers.has('Multiplex-Version'))
-                    throw create_error('Multiplexed request is missing Multiplex-Version header')
+                    throw Err({type: 'protocol', message: 'Multiplexed request is missing Multiplex-Version header'})
             } else
                 // If we got a response that doesn't talk about multiplexing...
                 // then something probably went wrong before touching the server's
@@ -1616,7 +1632,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             // and therefor closable with "abort",
             // so we handle the abort ourselves to close the multiplexed request
             params.signal.addEventListener('abort', () =>
-                unset(create_error('request aborted', {name: 'AbortError'})))
+                unset(Err({type: 'abort', message: 'request aborted'})))
 
             // first, we need to listen for the headers..
             var headers_buffer = new Uint8Array()
@@ -2012,10 +2028,10 @@ function reliable_update_channel (url, params) {
                 err => {
                     if (inner_signal.aborted) return
                     // Some errors won't be fixed by reconnecting — a corrupt
-                    // stream ('parse') or a bug in on_update ('app'), plus
-                    // anything the stream code flags dont_retry. Warn and shut
-                    // the whole reliable_update_channel down.
-                    if (err?.dont_retry || err?.type === 'parse' || err?.type === 'app') {
+                    // stream ('parse'), a bug in on_update ('app'), or a server
+                    // that violates the spec ('protocol'). Warn and shut the
+                    // whole reliable_update_channel down.
+                    if (err?.type === 'parse' || err?.type === 'app' || err?.type === 'protocol') {
                         warn('subscription error: ' + err.message)
                         return shutdown(err)
                     }

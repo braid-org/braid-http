@@ -872,11 +872,11 @@ run_test(
             })
         } catch (e) {
             console.log('We have an error of', e)
-            return ('' + e).slice(0, 'Error: Server created multiplexer, and then set a '.length)
+            return ('' + e).slice(0, 'ProtocolError: Server created multiplexer, and then set a '.length)
         }
         return 'hm..'
     },
-    'Error: Server created multiplexer, and then set a '
+    'ProtocolError: Server created multiplexer, and then set a '
 );
 
 run_test(
@@ -2107,7 +2107,7 @@ run_test(
             }
         })
     },
-    'Error: Got unexpected subscription status code: 200. Expected 209.'
+    'ProtocolError: Got unexpected subscription status code: 200. Expected 209.'
 )
 
 run_test(
@@ -2403,7 +2403,7 @@ run_test(
         a.abort()
         return x
     },
-    'Error: heartbeat not seen in 3.60s'
+    'PipeError: heartbeat not seen in 3.60s'
 )
 
 run_test(
@@ -3413,7 +3413,7 @@ run_test(
             res.subscribe((u) => {}, done)
         })
     },
-    'Error: Parse error in headers: "hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n"'
+    'ParseError: Parse error in headers: "hello: true\\r\\nhello\\r\\nContent-Length: 2\\r\\n\\r\\n"'
 )
 
 run_test(
@@ -3990,7 +3990,7 @@ run_test(
         delete braid_fetch.reconnect_delay_ms
         return result
     },
-    'Connection closed'
+    'PipeError: Connection closed'
 )
 
 run_test(
