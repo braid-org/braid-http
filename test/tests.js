@@ -21,6 +21,18 @@ function define_tests(run_test, context) {
         return add_handler(base_url, handler)
     }
 
+    // Adds a pre-braidify handler to the main test server -- it runs before
+    // braidify on every request, gets (req, res), and should return
+    // true if it handled the response. Unlike add_main_handler, this can
+    // intercept MULTIPLEX / .well-known/multiplexer requests, which braidify
+    // would otherwise consume. See /add-pre-braidify-handler in test.js.
+    function add_pre_braidify_handler(handler) {
+        return og_fetch(`${base_url}/add-pre-braidify-handler`, {
+            method: 'POST',
+            body: handler.toString()
+        })
+    }
+
     // Adds a handler to the Express middleware server (port + 1).
     function add_express_handler(handler) {
         return add_handler(`https://localhost:${port + 1}`, handler)
@@ -381,58 +393,132 @@ run_test(
 run_test(
     "Test falling back to MULTIPLEX well-known url, if method doesn't work.",
     async () => {
+        // add a handler that holds a subscription open
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hi' })
+        })
+
         var a = new AbortController()
-        var m = 'bad_mux_method'
+        var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
+
+        // make the server 500 attempts to create our multiplexer via the
+        // MULTIPLEX *method*, but let the well-known *url* path through (by not
+        // handling it -- it falls through to braidify). So the client should
+        // try the method, see it fail, and fall back to the well-known url --
+        // ending up multiplexed either way.
+        //
+        // NOTE: the client currently has the MULTIPLEX method hard-disabled
+        // (see `if (true || ...) throw 'skip multiplex method'` in
+        // braid-http-client.js), so it goes straight to the well-known url and
+        // this fault is never actually hit. The test still passes (the request
+        // gets multiplexed via the url), but it won't truly exercise the
+        // method->url fallback until the MULTIPLEX method is re-enabled.
+        //
+        // And even if it were re-enabled, it still wouldn't work here: braid_fetch
+        // uses node's native fetch (undici), which rejects the non-standard
+        // MULTIPLEX method outright (400, before the request is even sent) --
+        // regardless of HTTP/1.1 vs HTTP/2. The MULTIPLEX-method tests that do
+        // pass use og_fetch, a custom HTTP/2 client that can send arbitrary
+        // methods via the :method pseudo-header.
+        await add_pre_braidify_handler(`(req, res) => {
+            if (req.method === 'MULTIPLEX' && req.url.startsWith('/${m}')) {
+                res.writeHead(500)
+                res.end('')
+                return true
+            }
+        }`)
+
         var st = Date.now()
-        var r = await fetch('/json', {
+        var r = await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
             headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
             retry: true
         })
+
+        // the request ended up multiplexed (via the well-known url fallback)...
+        assert(r.multiplexed_through, 'expected request to be multiplexed')
+
+        // ...and the fallback was quick -- no slow retry/timeout
+        assert(Date.now() < st + 300, 'expected fallback to be fast')
+
+        a.abort()
         await og_fetch('/kill_mux', {headers: {mux: m}})
-        return 'is_mux=' + !!r.multiplexed_through + ', fast=' + (Date.now() < st + 300)
-    },
-    'is_mux=true, fast=true'
+    }
 )
 
 run_test(
     "Test option to use MULTIPLEX well-known url regardless.",
     async () => {
+        // add a handler that holds a subscription open
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ body: 'hi' })
+        })
+
         var a = new AbortController()
-        var m = 'bad_mux_well_known_url'
+        var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
+
+        // make the server 500 attempts to create *this* multiplexer via the
+        // well-known url, so the first attempt fails and the client retries
+        await add_pre_braidify_handler(`(req, res) => {
+            if (req.url.startsWith('/.well-known/multiplexer/${m}')) {
+                res.writeHead(500)
+                res.end('')
+                return true
+            }
+        }`)
+
+        // count how many times the client tries to fetch through a multiplexer.
+        // multiplex: {via: 'POST'} forces the well-known-url path (not the
+        // MULTIPLEX method). The first attempt uses our bad m and gets a 500;
+        // onFetch then swaps m to a fresh (good) id, so the retry succeeds.
         var count = 0
-        return new Promise(async done => {
-            var r = await fetch('/json', {
+        await new Promise(async done => {
+            await fetch(endpoint, {
                 signal: a.signal,
                 subscribe: true,
                 multiplex: {via: 'POST'},
                 retry: true,
                 onFetch: (url, params) => {
                     count++
-                    if (count === 2) done('' + count)
+                    if (count === 2) done()
                     params.headers.set('Multiplex-Through', `/.well-known/multiplexer/${m}/${s}`)
                     m = Math.random().toString(36).slice(2)
                 }
             })
         })
-        return 'hm..'
-    },
-    '2'
+
+        // exactly two attempts: the failed one, plus the successful retry
+        assert(count === 2, 'expected one failed attempt followed by one retry')
+
+        a.abort()
+    }
 )
 
 run_test(
     "Test that when multiplexer doesn't exist, it returns the proper header.",
     async () => {
-        var a = new AbortController()
+        // add a handler (which won't actually be reached: a Multiplex-Through
+        // request for a non-existent multiplexer is rejected by braidify with
+        // a 424 before it ever gets routed to a handler)
+        var endpoint = await add_main_handler((req, res) => res.end('hi'))
+
+        // send a Multiplex-Through request naming a multiplexer that doesn't
+        // exist -- the server should 424 with a Bad-Multiplexer header naming it
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var r = await og_fetch('/json', {headers: {'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`, 'Multiplex-Version': multiplex_version}})
-        return r.headers.get('bad-multiplexer') === m
-    },
-    true
+        var r = await og_fetch(endpoint, {
+            headers: {
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        })
+        assert(r.headers.get('bad-multiplexer') === m, 'expected Bad-Multiplexer header naming the missing multiplexer')
+    }
 )
 
 run_test(

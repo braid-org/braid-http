@@ -85,12 +85,31 @@ global.braid_text_headers_log = {}        // key -> [{method, headers}, ...]
 
 function create_test_server() {
     var added_handlers = new Map()
+    var pre_braidify_handlers = []
     var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
         allowHTTP1: true
     }, async (req, res) => {
         console.log('Request:', req.url, req.method)
+
+        // Lets tests register a handler that runs *before* braidify (and before
+        // the magic multiplex routes below), on every request, so it can
+        // intercept things braidify would otherwise consume -- e.g. MULTIPLEX
+        // and /.well-known/multiplexer/ requests. POST the source of a
+        // (req, res) => {...} function; it should return true if it handled the
+        // response (so we stop processing this request).
+        if (req.url === '/add-pre-braidify-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                pre_braidify_handlers.push(eval('(' + Buffer.concat(chunks).toString() + ')'))
+                res.end('ok')
+            })
+            return
+        }
+        for (var handler of pre_braidify_handlers)
+            if (handler(req, res)) return
 
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
