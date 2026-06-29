@@ -459,9 +459,17 @@ async function braid_fetch (url, params = {}) {
                     subscription_cb = cb
                     subscription_error = error
 
-                    // heartbeat
+                    // Heartbeats:
+                    //
+                    // This both sets the heartbeat header, and also sets a
+                    // timer to warn us when the heartbeat has expired.
+                    //
+                    // However, the timer part is moving to the update_pipe.
+                    // It's deprecated here, for now, but you need to
+                    // explicitly opt-out with `params.heartbeat_timer: false`.
                     let on_heartbeat = () => {}
-                    if (params.heartbeats && res.headers.get('heartbeats')) {
+                    if (params.heartbeats && res.headers.get('heartbeats')
+                        && params.heartbeat_timer !== false) {
                         let heartbeats = parseFloat(res.headers.get('heartbeats'))
                         if (isFinite(heartbeats)) {
                             let timeout = null
@@ -845,6 +853,12 @@ async function parse_update_in_solo_response (res) {
         content_type: state.headers['content-type'],
         status: res.status
     })
+
+    // A snapshot body with no Content-Length: arrayBuffer() already read it to
+    // the end (EOF, or the Content-Length boundary on a kept-alive socket), so
+    // hand the parser that length and let the normal path read it.
+    if (state.headers['content-length'] == null && num_patches_in(state.headers) == null)
+        state.headers['content-length'] = state.input.length
 
     // Now parse the body of this update!
     return parse_body(state)
@@ -2010,484 +2024,532 @@ function reliable_update_channel (url, params) {
     }
 }
 
-function old_http_updates (cb) {
-    // Multi-Host Request Queue!
+// ============================================================
+// http_abstraction
+//
+// Abstracts HTTP behind the Abstract Braid Protocol.
+//
+// Translates concrete braid_fetch() requests and responses into the messages:
+//
+//   - get
+//   - set
+//   - delete
+//   - forget
+//   - ack
+//
+// Models the network as pipes that go online and offline:
+//
+//   - one internet pipe                    (network.online)
+//   - one pipe per host                    (host.online)
+//
+// Reports online/offline to the app.
+//
+// When the network or pipe is offline, it throttles reconnection attempts
+// with little probes, rather than sending 10,000s of useless requests off a
+// cliff to their death.
+//
+function http_abstraction (cb, options = {}) {
+
+    var reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
+        poll_interval        = options.poll_interval        ?? 30,   // For URLs that don't support 209 subscriptions
+        max_outstanding_puts = options.max_outstanding_puts ?? 10,   // Per host
+
+        // How long to wait on a GET/PUT response, or a subscription
+        // heartbeat, before declaring a pipe offline.
+        timeout              = options.timeout              ?? 30,
+        heartbeat_period     = (timeout - 3) / 1.2
+
+    // A pipe's "online" state can be true, false, or 'maybe'.
     //
-    // Ensures:
-    //  - When reconnecting to whole internet, only one request is tried per 3s
-    //  - When reconnecting to a downed host, only one request is tried per 3s
-    //
-    // Otherwise, sends requests immediately.
-    var request_queue = {
+    //  - true:    Has an active subscription.  Send freely!
+    //  - false:   Requests failing.  Nothing sends.
+    //  - 'maybe': No active subscription, but the last thing sent.  Try!
 
-        // State of network
-        network: {
-            status: 'offline', // 'online | 'online' | 'connecting'
-            num_open_requests: 0,
-            reconnector
-        },
+    // Each new host is born into `initial_online_status`.
+    var initial_online_status = options.birth ?? 'maybe'
 
-        // Per-host state
-        hosts: {
-            // "hostname": {
-            //    status: 'online' | 'offline' | 'connecting'
-            //    num_open_requests: 0,
-            //    last_reconnect_failed,
-            //    pending_requests: [{url, method, params}, ...],
-            //    reconnector
-            // },
-            // ...
-        },
-        new_host: () => ({
-            status: 'offline',
-            num_open_requests: 0,
-            last_reconnect_failed: false,
-            pending_requests: [],
-        }),
-        initialize_host (hostname) {
-            if (!(hostname in this.hosts))
-                this.hosts[hostname] = new_host()
-        },
-
-        new_request (url, method, params) {
-            var hostname = new URL(url).host
-            this.initialize_host(hostname)
-
-            // If connecting, just enqueue it
-            if (this.network.status === 'connecting'
-                || this.hosts[hostname].status === 'connecting')
-                this.hosts[hostname].pending_requests.push({url, method, params})
-
-            // If network offline, try reconnecting
-            else if (this.network.status === 'offline')
-                this.try_reconnect()
-            // If host offline, fire it and go to connecting
-            else if (this.hosts[hostname].status === 'offline')
-                this.try_reconnect(hostname)
-
-            // Otherwise, we must be online!  So run the request directly
-            console.assert(this.network.status === 'online'
-                           && this.hosts[hostname].status === 'online')
-
-            this.run_request(request)
-        },
-
-        try_to_reconnect () {
-            // If network.status === 'connecting', choose one host and try to
-            // reconnect it.
-
-            // If network.status === 'online', then:
-            //   - run through all hosts
-            //   - if it's offline / connecting
-            //     - then kill the last connecting request, and make another one
-
-            // Store the request on that host in {reconnecting: {abort: aborter}}
-
-            // Run this whole thing every 3 seconds in a setInterval.
-        },
-
-        try_reconnect (hostname) {
-            var random_array_choice = (array) =>
-                array[Math.floor(Math.random() * array.length)]
-
-            // Pick (or inherit) a host
-            var host = hostname || random_array_choice(Object.keys(this.hosts))
-
-            // Run a request on the host
-            run_request(random_array_choice(this.hosts[host].pending_requests))
-
-            // Live to try another day!
-            setTimeout(() => this.try_reconnect(hostname), 3000)
-        },
-
-        handle_request_open(url, aborter) {
-            var hostname = new URL(url).host
-            initialize_host(hostname)
-
-            this.network.num_open_requests++
-            this.hosts[hostname].num_open_requests++
-
-            // If we're reconnecting, kill the previous reconnector and
-            // replace with this one
-            if (this.hosts[hostname].status === 'offline') {
-                this.hosts[hostname].reconnecting?.abort()
-                this.hosts[hostname].reconnecting = {abort: aborter}
-            }
-        },
-        handle_request_closed(url) {
-            var hostname = new URL(url).host
-
-            this.network.num_open_requests--
-            this.hosts[hostname].num_open_requests--
-
-            // Garbage collect host if this is our last request
-            if (this.hosts[hostname].num_open_requests === 0
-                && this.hosts[hostname].pending_requests.length === 0)
-                delete this.hosts[hostname]
-        },
-        handle_url_up (url) {
-            var hostname = new URL(url).host
-            this.initialize_host(hostname)
-
-            // The network must be up.
-
-            // If we weren't online before, let's start trying all our hosts
-            if (this.network.status !== 'online') {
-                console.assert(this.network.status === 'connecting',
-                               'Error: missed a transition from offline->connecting')
-                //...
-            }
-
-            this.network.status = 'online'
-            this.hosts[hostname].status = 'online'
-
-            
-        },
-        handle_url_down (url) {
-            // If method == 'GET'
-        }
+    var network = {
+        online: initial_online_status,
+        hosts: {}                     // hostname -> host
     }
-}
 
+    var hostname = (url) => new URL(url).host
+    var host_of  = (url) => network.hosts[hostname(url)]
+    var currently_idle = () => Object.keys(network.hosts).length === 0
 
+    // Derive network.online from the state of each pipe in network.hosts.
+    function recompute_network_online () {
+        var hosts = Object.values(network.hosts)
+        // Invariant: a host is green exactly when it has an online subscription.
+        for (var h of hosts)
+            console.assert((h.online === true) === (h.online_subs.size > 0),
+                'host.online out of sync with online_subs',
+                {online: h.online, online_subs: h.online_subs.size})
 
-// XXX ========================== XXX
-// XXX   Not yet working.  WIP.   XXX
-// XXX ========================== XXX
-function update_pipe (cb) {
-    // Constants
-    var // Timeout periods
-        heartbeat_period = 20,
-        polling_interval = 30,
-        version_not_found_delay = 5,  // When waiting for a version to appear
-        cooloff_delay = 10            // When server told us to chill
+        network.online =
+            // Online is true if any host is true
+            hosts.some(h => h.online === true)    ? true
+            // or 'maybe' if any is 'maybe'
+          : hosts.some(h => h.online === 'maybe') ? 'maybe'
+            // or 'maybe' while idle (because a host only disappears once its
+            // work has completed successfully)
+          : hosts.length === 0                    ? 'maybe'
+            // Otherwise, we're sitting in a world of network errors, so online === false
+          :                                         false
+    }
 
-    // Network throttling
-    {
+    function create_host_state (name) {
+        network.hosts[name] = {
 
-        // Network state models:
-        //   - One internet pipe, that can go offline
-        //   - Multiple host pipes, that can go offline
-        var network = {
-            online: false,
-            hosts: {
-                // "hostname": {
-                //    online: false,
-                //    // Pending requests are waiting to run fetch() on
-                //    pending_requests: [{url, method, params}, ...],
-                //    // Active requests we've called fetch() on
-                //    active_requests: [...]
-                // },
+            online: initial_online_status,
+
+            // Note ^^^: A new host is born into initial_online_status (usually
+            // 'maybe'), so its first request sends optimistically even when
+            // every other host is currently offline.  Open question: maybe a
+            // new host should instead inherit network.online (and so stay
+            // held when the network is known down).  If you need that, set
+            // its online from network.online here.
+
+            online_subs: new Set(),       // subscription requests that are online (got 209)
+            last_heard_from: 0,           // timestamp; 0 = never heard
+            urls: {},                     // url -> resource
+            active_requests_count: 0,     // active subs + in-flight PUTs (GC at 0)
+            outstanding_puts_count: 0     // in-flight PUTs.  Iff 0, we are "synced."
+        }
+        recompute_network_online()
+        return network.hosts[name]
+    }
+
+    // We have a request to send!  Do the bookkeeping, and send it if the host
+    // is sendable.
+    function schedule_request (req) {
+        var host = host_of(req.url) || create_host_state(hostname(req.url))
+
+        // File the request into its resource object:
+        var resource = host.urls[req.url]
+            || (host.urls[req.url] = {subscription: null, put_queue: new Set()})
+
+        // A GET becomes a subscription
+        if (req.method === 'GET')   resource.subscription = req
+
+        // A PUT or DELETE joins the ordered put_queue:
+        else                        resource.put_queue.add(req)
+
+        // (Because we think of DELETE as a type of "put".)
+
+        // And now send anything we can!
+        if (host.online) send_host_requests(host)
+    }
+
+    function run_request (req) {
+        var host = host_of(req.url)
+
+        // Give the request an abort controller
+        req.aborter = new AbortController()
+
+        // The presence of req.aborter marks the request as "active".
+        // Otherwise, it is "pending."
+
+        // Count the newly-active request
+        host.active_requests_count++
+        if (req.method !== 'GET') host.outstanding_puts_count++
+
+        // And fire the request
+        if (req.method === 'GET') GET(req)
+        else PUT(req)                 // PUT carries DELETE too
+    }
+
+    // Run every request this host can send right now: restart its pending
+    // subscriptions, then fill the PUT pipeline up to max_outstanding_puts.
+    function send_host_requests (host) {
+        for (var url in host.urls) {
+            var sub = host.urls[url].subscription
+            if (sub && !sub.aborter) run_request(sub)
+        }
+        for (var url in host.urls)
+            for (var put of host.urls[url].put_queue) {
+                if (host.outstanding_puts_count >= max_outstanding_puts) return
+                if (!put.aborter) run_request(put)
+            }
+    }
+
+    // == Going online and offline ==
+    function go_online (host) {
+        // A subscription reached 209!   The pipe is up!
+        host.online = true              // Go green
+        recompute_network_online()
+        send_host_requests(host)        // Run everything the host was holding
+    }
+
+    // Take the host offline: abort everything in flight (it becomes
+    // pending) and recompute whether any host is still reachable.
+    function go_offline (host) {
+        // We got a pipe error on this host.  The pipe is down.
+        host.online = false
+
+        // For every resource on this host
+        for (var url in host.urls) {
+            var resource = host.urls[url]
+
+            // Deactivate every request:
+            //  - It will abort()
+            //  - and go back to "pending"
+            deactivate_request(resource.subscription)
+            for (var put of resource.put_queue) deactivate_request(put)
+        }
+        recompute_network_online()
+    }
+
+    // Abort a request's in-flight attempt and mark it pending again.
+    function deactivate_request (req) {
+        if (!req || !req.aborter) return
+
+        // Kill the timers.  We don't want these firing anymore.
+        clearTimeout(req.timeout_timer); req.timeout_timer = null
+        clearTimeout(req.retry_timer);   req.retry_timer   = null
+
+        // Abort the request!
+        req.aborter.abort()
+        req.aborter = null             // Only active requests have an aborter
+
+        var host = host_of(req.url)
+        host.online_subs.delete(req)   // no-op unless this was an online subscription
+
+        // And decrement our active request counters:
+        host.active_requests_count--
+        if (req.method !== 'GET') host.outstanding_puts_count--
+    }
+
+    // Remove a request from our bookkeeping.
+    function delete_request (req) {
+        var host     = host_of(req.url)
+        var resource = host.urls[req.url]
+
+        // Abort it, if it's active
+        deactivate_request(req)
+
+        // Drop it from the resource state
+        if (req.method === 'GET') resource.subscription = null
+        else                      resource.put_queue.delete(req)
+
+        if (host.online)
+            // Let the host send what it can now, because completing a request
+            // frees a slot in max_outstanding_puts
+            send_host_requests(host)
+
+        // Garbage Collection!
+        //
+        // 1. The resource might now be empty of requests:
+        if (!resource.subscription && resource.put_queue.size === 0) {
+            delete host.urls[req.url]
+
+            // 2. The host might now be empty of resources:
+            if (Object.keys(host.urls).length === 0) {
+                delete network.hosts[hostname(req.url)]
+
+                // 3. And the network might now be idle:
+                recompute_network_online()
             }
         }
 
-        // Helper
-        var nothing_to_do = () => Object.keys(network.hosts).length === 0
-        var hostname = (url) => new URL(url).host
-
-        // When a pipe goes offline, we probe it every 3s until it comes online
-        setInterval(reconnection_poll, 3000)
-        function reconnection_poll () {
-            function reconnect_to (hostname) {
-                var random_array_choice = (array) =>
-                    array[Math.floor(Math.random() * array.length)]
-
-                if (nothing_to_do())
-                    return
-
-                // Pick (or inherit) a host
-                var hostnm = hostname || random_array_choice(Object.keys(network.hosts))
-
-                // Run a request on the host
-                run_request(random_array_choice(network.hosts[hostnm].pending_requests))
-            }
-
-            // Every 3 seconds, try to go online
-            if (network.online === false)
-                // Pick a random hosts to try
-                reconnect_to()
-            else
-                // Or go through offline hosts, and try one for each
-                for (var hostname in network.hosts)
-                    if (network.hosts[hostname].online === false)
-                        reconnect_to(hostname)
-        }
-
-        function run_request (request) {
-            if (request.method === 'GET')
-                GET(request.url, request.params)
-            else if (request.method === 'PUT')
-                PUT(request.url, request.params)
-            else if (request.method === 'DELETE')
-                PUT(request.url, 'delete')
-        }
-
-        function schedule_request (url, method, params) {
-            var name = hostname(url)
-
-            // If not tried yet, send the request, and make a host
-            if (nothing_to_do() || !network.hosts[name]) {
-                initialize_host(name)
-                run_request({url, method, params})
-            }
-
-            // If offline, add to the queue
-            else if (network.hosts[name].online === false)
-                hosts[name].pending_requests.push({url, method, params})
-
-            // If online, launch it
-            else if (network.online && network.hosts[name].online)
-                run_request({url, method, params})
-            else
-                throw "This can't happen!"
-        }
-
-        function forget_subscription (url) {
-            var name = hostname(url)
-
-            // Iterate through the active_requests and kill the subscription
-            // Abort it
-            // Remove it from the array
-
-            // Then delete the host if pending and active requests is empty
-        }
-
-        function completed_request (url) {
-            network.online = true
-
-            var name = hostname(url),
-                host = network.hosts[name]
-            console.assert(host, 'Host should exist now!')
-            if (host.online === false) {
-                network.hosts[name].online = true
-                // And flush the queue
-                for (var req in host.pending_requests)
-                    run_request(host.pending_requests[req])
-            }
-        }
-            
-        function broken_request (url) {
-            var host = network.hosts[hostname(url)]
-
-            // Mark the host down
-            host.online = false
-
-            // Reboot all requests on this host
-            for (var req of host.active_requests) {
-                req.abort()
-                delete req.abort
-                host.pending_requests.push(req)
-            }
-
-            // Clear active_requests
-            host.active_requests = []
-
-            // 
+        // A surviving host left with no online subscription settles at 'maybe'.
+        if (host_of(req.url) && host.online === true && host.online_subs.size === 0) {
+            host.online = 'maybe'
+            recompute_network_online()
         }
     }
 
-    // ========================================
-    // Network Requests
-    
-    /* Behavior:
+    // Pipes fail due to (1) an exception from fetch(), or (2) timeout while
+    // waiting for a PUT ack or GET heartbeat.
+    function pipe_failed (req) {
+        // TODO: implement the "veto": if another connection to this host is
+        // still live, reboot just this request instead of the whole host.
+        go_offline(host_of(req.url))
+    }
 
-       - GET fails once: try quick reconnect
-       - GET fails twice: we are offline on this host.
-       - PUT fails: we are offline on this host.
+    // Map a HTTP response status to what we do about it:
+    function classify_response_status (method, status) {
+        // Note that the success cases (209 / 2xx) are handled inline by GET/PUT.
+        var is_get = method === 'GET'
+        switch (status) {
 
-       - Host goes offline:
-         - Abort GET on this host
-         - Abort all PUTs on this host
+            // Any well-formed HTTP response (any status) proves the pipe to
+            // the next hop is up.
+            case 209:                       // subscription established
+                                            return 'online'
 
-       - All hosts have gone offline:
-         - We are entirely offline
-         - Send one request at a time
+            case 200: case 201: case 204:   // regular response
+                                            return is_get ? 'poll' : 'acked'
 
-       - First request on an offline host:
-         - Wait for it to go through before sending more
-       - Host goes from offline to online:
-         - Send all other requests on host
+            // Transient at this URL: retry just this request after a delay.
+            case 502: case 503: case 504:   // origin down / unavailable / gateway timeout
+            case 408: case 425:             // request timeout / too early
+            case 423: case 409:             // locked / conflict
+            case 309: case 432:             // version unknown here
+            case 429:                       // rate-limited (Retry-After)
+            case 507:                       // insufficient storage
+                                            return 'retry'
 
-     */
+            case 500: case 404: case 410:   // GET may recover / poll; a write fails
+                                            return is_get ? 'retry' : 'give_up'
 
-    
-    var latest_connect_failed = false   // Heuristic for setting reconnect time
+            case 401: case 403: case 413:   // permanent
+            case 422: case 415: case 501:   // unprocessable write
+                                            return 'give_up'
+        }
 
-    async function GET (url, params) {
-        console.log('GET', {url, params})
-        var retry_get_after = (seconds) =>
-            setTimeout(() => { GET(url, params)}, seconds * 1000)
+        // unknown: surface it, keep trying
+        return 'retry'
+    }
+
+    // A well-formed response: lift the host out of false, then retry or give up.
+    function handle_issue (req, res, disposition) {
+        route_up(host_of(req.url))
+        if (disposition === 'retry')
+            return retry_request(req, compute_retry_after(res))
+        delete_request(req)   // give up on this resource
+        cb({message: 'error', url: req.url, method: req.method, status: res.status})
+    }
+
+    function route_up (host) {
+        if (host.online === false) {
+            // The pipe answered but isn't streaming a subscription: a write
+            // never earns green, so an offline host settles at 'maybe'.
+            host.online = 'maybe'
+            recompute_network_online()
+        }
+    }
+
+    // Re-fire this request after a delay.
+    function retry_request (req, delay) {
+        // The request will stay "active" (its aborter lives on) so nothing
+        // else will re-send it.
+
+        req.retry_timer = setTimeout(() => {
+            req.retry_timer = null
+            if (req.method === 'GET') GET(req)
+            else                      PUT(req)
+        }, delay * 1000)
+        // ^^ If the request ever gets torn down during the retry period,
+        // deactivate_request() will clear this retry_timer.
+    }
+
+    function compute_retry_after (res) {
+        var base = (res.status === 408 || res.status === 425) ? 1 : reconnect_interval
+        var retry_after = parseFloat(res.headers.get('retry-after'))
+        return isFinite(retry_after) ? Math.max(base, retry_after) : base
+    }
+
+
+    // == Network requests ==
+
+    // Open a subscription and stream its updates.
+    async function GET (req) {
+        var signal = req.aborter.signal
+        var host   = host_of(req.url)
+
+        // Set the timer that triggers pipe_failed(req) when we haven't heard
+        // from the server in too long!
+        var reset_timeout = () => {
+            clearTimeout(req.timeout_timer)
+            req.timeout_timer = setTimeout(() => pipe_failed(req), timeout * 1000)
+        }
+        reset_timeout()
+
+        // Now fire the fetch()!
+        try {
+            var res = await braid_fetch(req.url, {
+                subscribe:       true,
+                retry:           false,
+                heartbeats:      heartbeat_period,
+                heartbeat_timer: false,
+                parents:         req.params?.parents,
+                headers:         req.params?.headers,
+                signal,
+                on_heartbeat:    reset_timeout
+            })
+            clearTimeout(req.timeout_timer)
+            if (signal.aborted) return
+
+            // We got a response!  Figure out how to respond to the response:
+            var disposition = classify_response_status('GET', res.status)
+
+            // Maybe we got a working subscription!
+            if (disposition === 'online') {
+                host.online_subs.add(req)            // this connection is now online
+                if (host.online !== true) go_online(host)
+                reset_timeout()                      // now guard the stream
+                res.subscribe(
+                    update => cb(update.status === 404 || update.status === 410
+                        ? {message: 'delete', url: req.url, version: update.version}
+                        : {message: 'set', url: req.url, ...update}),
+                    err => get_failed(req, err)
+                )
+
+            // Or maybe we're just polling
+            } else if (disposition === 'poll') {
+                // No 209 multiresponse: the server returned the current state
+                // as a plain GET.  Deliver it as an update, stay 'maybe' (a
+                // poll never earns green), and re-GET after poll_interval.
+                route_up(host)
+                var update = await res.update()
+                if (signal.aborted) return
+                cb({...update, message: 'set', url: req.url})
+                retry_request(req, poll_interval)
+
+            // Or... we have a real issue to contend with...
+            } else
+                handle_issue(req, res, disposition)
+        }
+
+        // Exceptions in fetch() are either an intentional abort(), or a pipe
+        // failure, in which case we'll go offline.
+        catch (err) {
+            clearTimeout(req.timeout_timer)
+            if (signal.aborted) return
+            get_failed(req, err)
+        }
+    }
+
+    // Route a thrown connection/stream error by its type.
+    function get_failed (req, err) {
+        if (err.type === 'abort') return
+        if (err.type === 'pipe') {
+            if (err.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
+                console.warn(`update_pipe: TLS hostname mismatch on ${req.url}, likely a captive portal`)
+            return pipe_failed(req)
+        }
+        // parse / protocol / app: reconnecting won't help — cancel the URL.
+        delete_request(req)
+        cb({message: 'error', url: req.url, method: req.method, error: err.message})
+    }
+
+    // Send one PUT (or DELETE).
+    //
+    //  - A complete HTTP response (even with an error response status) proves
+    //    the pipe is up.
+    //  - Only a thrown or timed-out request is a pipe failure.
+    async function PUT (req) {
+        var signal = req.aborter.signal
+        var host   = host_of(req.url)
+
+        // Fail the pipe if the PUT doesn't answer in time.  deactivate_request
+        // clears this, so we need no abort listener.
+        req.timeout_timer = setTimeout(() => pipe_failed(req), timeout * 1000)
 
         try {
-
-            // Prepare for abortions
-            var aborter = new AbortController()
-            abort_get = aborter.abort
-
-            // Do the fetch
-            var res = await braid_fetch(url, {
-                subscribe: true,
-                headers: {'Heartbeats': heartbeat_period},
-                parents: params?.last_known_parents,
-                signal: aborter.signal,
-                //on_heartbeat: got_heartbeat
+            var res = await braid_fetch(req.url, {
+                ...req.params,          // version, parents, patches/body, headers
+                method: req.method,     // PUT or DELETE
+                retry:  false,
+                signal
             })
+            clearTimeout(req.timeout_timer)
+            if (signal.aborted) return
 
-            // Process the response
-
-            console.log('we got a response', res)
-
-            // Log warnings to the user
-            switch (res.status) {
-            case 500:    // 500: Server error
-                // Automatically already logged in JS console by browser, I
-                // think?
-                break;
-            }
-
-            // Change online/offline state
-            switch (res.status) {
-            case 200:    // 200 OK
-            case 209:    // 209 Multiresponse
-            case 404:    // 404 Not Found
-                // Go online
-                we_are_online(true)
-                break;
-
-            case 500:
-            case 502:
-            case 503:
-            case 504:
-                // Go offline
-                we_are_online(false)
-                break;
-            }
-
-            // Publish new state of resource
-            switch (res.status) {
-            case 200:
-                var update = res.update()
-            case 404:
-                // Give an update!
-                announce_update(url, update)
-                break;
-            }
-
-            // Retry the fetch
-            switch (res.status) {
-            case 404:    // 404 Not Found
-            case 200:    // 200 OK
-                // Retry at the polling interval
-                retry_get_after(polling_interval)
-                break;
-
-            case 309:    // 309 Version Unknown Here (deprecated)
-            case 432:    // 432 Version Not Found
-                // Might be out of order.  Wait and retry, and see if it appears.
-                retry_get_after(version_not_found_delay)
-                // Todo: consider throwing an error upstream after N attempts
-                // or T seconds
-                break;
-
-            case 425:    // 425 Too Early (for TLS 1.3 0-RTT)
-                // Just need to restart after a very short delay
-                retry_get_after(2)
-                break;
-
-            case 429:    // 429 Too Many Requests
-                // Retry after an extended delay
-                // Grab the delay from Retry-After header, if it exists.
-                var retry_after = parseFloat(res.headers.get('retry-after'))
-                if (isFinite(retry_after))
-                    retry_get_after(retry_after)
-                else
-                    retry_get_after(cooloff_delay)
-                break;
-            }
-
-            // Setup subscription
-            if (res.status === 209)
-                res.subscribe(
-                    update => {
-                        latest_connect_failed = false
-                        announce_update(url, update)}
-                    ,
-                    err => {
-                        console.log('GET: res.subscribe err', err, 'retrying...') 
-                        retry_get_after(latest_connect_failed ? 3 : 1)
-                        latest_connect_failed = true
-                    }
-                )
-                
-        } catch (e) {
-            console.error('GET: error', e)
-            if (e?.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
-                console.warn('connection not up: TLS hostname mismatch, likely a captive portal')
-            retry_get_after(latest_connect_failed ? 3 : 1)
-            latest_connect_failed = true
+            var disposition = classify_response_status(req.method, res.status)
+            if (disposition === 'acked') {
+                route_up(host)
+                cb({message: 'ack', url: req.url, version: req.params?.version})
+                delete_request(req)
+            } else
+                handle_issue(req, res, disposition)
+        } catch (err) {
+            clearTimeout(req.timeout_timer)
+            if (signal.aborted) return
+            if (err.type === 'pipe') return pipe_failed(req)   // host down; PUT stays queued for a resend
+            // parse / protocol / app: the write itself is bad — cancel it.
+            delete_request(req)
+            cb({message: 'error', url: req.url, method: req.method, error: err.message})
         }
-
-        //  - Mark offlne, and retry after short delay:
-        //    - 404
-        //    - connection down
-        //  - Retry after longer (perhaps variable) delay
-        //  - Send error upstream
-        //  - Print warning to js console
-        //  - Redirect to new URL
-        //    - Perhaps saving for later
-        //  - Go offline
-        //    - Or success: [get: setup subscription handler!, put: give cb/clear promise]
     }
 
-    async function PUT (url, update) {
-        // Needs to put them in order, using put-order
-        //   - or a localtime counter, once we upgrade verison IDs
+    // == Reconnection poll ==
+    // Every three seconds, send a probe to see if we're back online.
+    var next_host_to_probe = 0
+    function reconnection_poll () {
+        if (currently_idle()) return
+
+        // If the network itself is up, send a probe to each offline host
+        if (network.online)
+            for (var name in network.hosts) {
+                var host = network.hosts[name]
+                if (!host.online && host.active_requests_count === 0)
+                    probe_host(host)
+            }
+
+        // Otherwise, send out just one single probe, to a single host, until
+        // we have any signal at all.
+        else {
+            // First, check if we already have a probe in-progress:
+            var probing = Object.values(network.hosts)
+                .some(h => h.active_requests_count > 0)
+            if (!probing) {
+
+                // Pick one host to probe, round-robin style, and probe it:
+                var names = Object.keys(network.hosts)
+                probe_host(network.hosts[names[next_host_to_probe++ % names.length]])
+            }
+        }
     }
 
+    // Launch one held request on a host
+    function probe_host (host) {
+        // Choose a URL round-robin style
+        for (var url in host.urls) {
+            // Loop through URLs, skipping those whose request is already
+            // in-flight or empty, until we find one to probe
 
-    // ========================================
-    // External API
+            var resource = host.urls[url]
+            var put = resource.put_queue.values().next().value
 
-    function we_are_online (url, true_false) {
-        console.log('we_are_online:', true_false)
-        cb('online', {body: true_false})
-        online = true_false
+            // Within a url, probe with its subscription, if it exists.
+            var req = resource.subscription && !resource.subscription.aborter
+                ? resource.subscription
+
+                // Else a PUT.
+                : put && !put.aborter ? put : null
+
+            // If we got one, probe it
+            if (req) {
+                delete host.urls[url]       // Move this url to the back of the
+                host.urls[url] = resource   // iteration order, to implement round-robin
+                return run_request(req)
+            }
+        }
     }
-    function announce_update (url, update) {
-        console.log('announce_update:', url, update)
-        cb(url, update)
-    }
 
-    var subscribed = {}
+    var poll_timer = setInterval(reconnection_poll, reconnect_interval * 1000)
+    poll_timer.unref?.()
 
-    // The statebus interface to this HTTP state
+    // == The Abstract Braid Protocol interface ==
     return {
-        get(url, params) {
-            console.log('http_bus.get()', url, params)
-            if (subscribed[url])
-                throw 'Already subscribed to ' + url
-            subscribed[url] = true
-
-            // Start the GET
+        get (url, params) {
+            var host = host_of(url)
+            var resource = host && host.urls[url]
+            console.assert(!(resource && resource.subscription),
+                           'Already subscribed to ' + url)
             schedule_request({url, method: 'GET', params})
         },
-        forget(url) {
-            console.log('http_bus.forget()', url)
-            if (!subscribed[url])
-                throw 'Not subscribed to ' + url
-            abort_get(url)
+        forget (url) {
+            var host     = host_of(url)
+            var resource = host && host.urls[url]
+            if (resource && resource.subscription) delete_request(resource.subscription)
         },
-        set(url, update) {
-            console.log('http_bus.set()', url, update)
-            schedule_request({url, method: 'PUT', update})
+        set (url, update) {
+            schedule_request({url, method: 'PUT', params: update})
         },
-        delete(url, params) {
-            console.log('http_bus.delete()', url, params)
-            schedule_request({url, method: 'DELETE'})
-        }
+        delete (url, params) {
+            schedule_request({url, method: 'DELETE', params})
+        },
+
+        // Internal state, exposed for inspection and testing.
+        network
     }
 }
 
+// I'm not sure what to call this abstraction yet
+var update_pipe = http_abstraction
 
 // ****************************
 // Exports
@@ -2503,5 +2565,6 @@ if (typeof module !== 'undefined' && module.exports)
         parse_header_values,
         parse_body,
         reliable_update_channel,
+        http_abstraction,
         update_pipe
     }

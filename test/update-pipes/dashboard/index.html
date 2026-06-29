@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset=utf8>
+<title>update_pipe · server-sim</title>
+<style>
+  *      { box-sizing: border-box; }
+  body   { font: 14px/1.5 system-ui, sans-serif; margin: 0; color: #222; }
+  #panel { padding: 12px 18px; }
+  #scenario { font: inherit; padding: 3px 7px; border-radius: 4px; border: 1px solid #ccc; }
+  #blurb  { font-size: 13px; color: #777; margin: 8px 0 14px; }
+  #status { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+
+  .dot   { width: 11px; height: 11px; border-radius: 50%; background: #888;
+           display: inline-block; flex: none; cursor: pointer; transition: background .12s; }
+  .dot.true  { background: #2ecc40; }
+  .dot.maybe { background: #ff9500; }
+  .dot.false { background: #ff4136; }
+  .dot.probe { background: #00c8ff; box-shadow: 0 0 6px #00c8ff; }
+  .dot.pinned { outline: 2px solid #ffcc00; outline-offset: 1px; }   /* forced off */
+
+  .row    { display: flex; align-items: center; height: 17px; }
+  .row.host { margin-top: 6px; }
+  .label  { width: 230px; flex: none; display: flex; align-items: center; gap: 7px;
+            white-space: nowrap; overflow: hidden; font-size: 12px; }
+  .row.host  .label { font-weight: 600; }
+  .row.url   .label { padding-left: 22px; font-family: ui-monospace, monospace; }
+  .row.net   .label { font-weight: 600; opacity: .8; }
+  .tag    { opacity: .45; font-size: 12px; }
+  canvas  { flex: 1; height: 15px; display: block; background: #fafafa;
+            border-left: 1px solid #e3e3e3; }
+
+  #log   { margin: 14px 18px; height: 420px; overflow: auto; background: #f6f6f6;
+           border-radius: 6px; font: 10px/1.4 ui-monospace, monospace; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<div id="panel">
+  <select id="scenario"></select>
+  <div id="blurb"></div>
+  <div id="status"></div>
+  <div id="rows"></div>
+</div>
+<div id="log"></div>
+
+<script src="/braid-http-client.js"></script>
+<script src="/scenarios.js"></script>
+<script src="/dashboard.js"></script>
