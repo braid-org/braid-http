@@ -119,8 +119,7 @@
     <table id="testTable">
         <tr>
             <th>Name</th>
-            <th>Your Server's Responses</th>
-            <th>Known Server Responses</th>
+            <th>Result</th>
         </tr>
     </table>
 </div>
@@ -146,10 +145,6 @@ function createTestRow(test_name, expected) {
     row.className = "queued"
     testTable.appendChild(row)
 
-    const expectedCell = document.createElement("td")
-    expectedCell.textContent = expected
-    row.appendChild(expectedCell)
-
     return row
 }
 
@@ -165,7 +160,7 @@ function add_section_header(header_text) {
     let cell = document.createElement("td")
     cell.textContent = header_text
     cell.className = "section-header"
-    cell.setAttribute("colspan", "3")
+    cell.setAttribute("colspan", "2")
     row.appendChild(cell)
     testTable.appendChild(row)
 }
@@ -190,14 +185,13 @@ function setSummaryBoxRunning(box) {
 var wait_for_me = Promise.resolve()
 var wait_list = []
 
-function wait_for_tests(cb) {
-    wait_for_me = Promise.all([wait_for_me, ...wait_list]).then(() => cb())
-    wait_list = []    
-}
-
 // Parse URL for filter parameter
 const urlParams = new URLSearchParams(window.location.search)
 const filter_arg = urlParams.get('filter') || urlParams.get('grep')
+
+function assert(condition, message) {
+    if (!condition) throw new Error(message || 'Assertion failed')
+}
 
 function run_test(test_name, test_function, expected_result) {
     // Skip tests that don't match filter
@@ -220,7 +214,13 @@ function run_test(test_name, test_function, expected_result) {
 
         try {
             let got = await test_function()
-            if (got === expected_result) {
+            if (expected_result === undefined) {
+                // Assertion-style test: success simply means it returned
+                // (without throwing). An assert() failure throws and is
+                // handled by the catch below.
+                updateTestResult(row, 'passed', 'passed')
+                updateSummaryBox(summaryBox, true)
+            } else if (got === expected_result) {
                 updateTestResult(row, 'passed', got)
                 updateSummaryBox(summaryBox, true)
             } else if (got === 'old node version') {
@@ -238,6 +238,6 @@ function run_test(test_name, test_function, expected_result) {
 }
 
 // Load and run all tests from the shared tests.js file
-define_tests(run_test, { fetch, og_fetch, port, add_section_header, wait_for_tests, test_update, multiplex_fetch, braid_fetch, reliable_update_channel })
+define_tests(run_test, { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, assert })
 
 </script>

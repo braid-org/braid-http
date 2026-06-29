@@ -5,6 +5,9 @@ var fs = require('fs')
 var path = require('path')
 var define_tests = require('./tests.js')
 var {braidify, free_cors} = require('../braid-http-server.js')
+delete require.cache[require.resolve('../braid-http-server.js')]
+var {braidify: braidify_no_mux} = require('../braid-http-server.js')
+braidify_no_mux.enable_multiplex = false
 var https = require('../braid-http-client.js').http(require('https'))
 var braid_fetch = require('../braid-http-client.js').fetch
 var multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
@@ -26,7 +29,7 @@ Options:
   --browser, -b          Start server for browser testing (default: console mode)
   --filter=PATTERN       Only run tests matching pattern (case-insensitive)
   --grep=PATTERN         Alias for --filter
-  --port=N               Base port (uses N, N+1, N+2, N+3). Default 9000. Or set PORT env.
+  --port=N               Base port (uses N, N+1, N+2, N+3, N+4). Default 9000. Or set PORT env.
   --help, -h             Show this help message
 
 Examples:
@@ -70,26 +73,19 @@ process.on("uncaughtException", (x) =>
 
 var braid_text_instance = create_braid_text()
 braid_text_instance.db_folder = null
-var braid_text_fail_first_get = {}     // key -> true, returns 500
-var braid_text_fail_first_put = {}     // key -> true, returns 500
-var braid_text_first_get_status = {}   // key -> {status, retry_after?}
-var braid_text_first_put_status = {}   // key -> {status, retry_after?}
-var braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
-var braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
-var braid_text_put_concurrency = {}    // key -> {current, max}
-var braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
-var braid_text_headers_log = {}        // key -> [{method, headers}, ...]
-global.braid_text_fail_first_get = braid_text_fail_first_get
-global.braid_text_fail_first_put = braid_text_fail_first_put
-global.braid_text_first_get_status = braid_text_first_get_status
-global.braid_text_first_put_status = braid_text_first_put_status
-global.braid_text_get_parents_log = braid_text_get_parents_log
-global.braid_text_put_delay_ms = braid_text_put_delay_ms
-global.braid_text_put_concurrency = braid_text_put_concurrency
-global.braid_text_hang_first_put = braid_text_hang_first_put
-global.braid_text_headers_log = braid_text_headers_log
+global.braid_text_fail_first_get = {}     // key -> true, returns 500
+global.braid_text_fail_first_put = {}     // key -> true, returns 500
+global.braid_text_first_get_status = {}   // key -> {status, retry_after?}
+global.braid_text_first_put_status = {}   // key -> {status, retry_after?}
+global.braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
+global.braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
+global.braid_text_put_concurrency = {}    // key -> {current, max}
+global.braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
+global.braid_text_headers_log = {}        // key -> [{method, headers}, ...]
 
 function create_test_server() {
+    var added_handlers = new Map()
+    var pre_braidify_handlers = []
     var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
@@ -97,16 +93,23 @@ function create_test_server() {
     }, async (req, res) => {
         console.log('Request:', req.url, req.method)
 
-        // Only allow connections from localhost
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            console.log(`connection attempt from: ${req.socket.remoteAddress}`)
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
+        // Lets tests register a handler that runs *before* braidify (and before
+        // the magic multiplex routes below), on every request, so it can
+        // intercept things braidify would otherwise consume -- e.g. MULTIPLEX
+        // and /.well-known/multiplexer/ requests. POST the source of a
+        // (req, res) => {...} function; it should return true if it handled the
+        // response (so we stop processing this request).
+        if (req.url === '/add-pre-braidify-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                pre_braidify_handlers.push(eval('(' + Buffer.concat(chunks).toString() + ')'))
+                res.end('ok')
+            })
             return
         }
+        for (var handler of pre_braidify_handlers)
+            if (handler(req, res)) return
 
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
@@ -224,25 +227,6 @@ function create_test_server() {
             return braid_text_instance.serve(req, res, {key})
         }
 
-        // Internal mulltiplexer tests
-
-        // 1. Fake a duplication of multiplexer
-        //    Used in 'Test MULTIPLEX retrying when receiving 409 Conflict: Duplicate Multiplexer'
-        if (req.url.startsWith('/.well-known/multiplexer')) {
-            if (global.send_duplicate_mux) {
-                console.log('Time to fake a 409 duplicate mux!')
-                res.statusCode = 409
-                res.setHeader('content-type', 'application/json')
-                res.end(`{
-  "error": "Multiplexer already exists",
-  "details": "Cannot create duplicate multiplexer with ID 'XXYY'"
-}`)
-                global.send_duplicate_mux = false
-                console.log('We just faked a 409')
-                return
-            }
-        }
-
         // Braidifies our server
         braidify(req, res)
         if (req.is_multiplexer) return
@@ -257,18 +241,24 @@ function create_test_server() {
         }
         if (is_mux) res.end('hm..')
 
-        // The server is ready to define normal test routes!
-
-        // 1. Serve the /duplicate_mux route
-        if (req.url.startsWith('/duplicate_mux')) {
-            if (req.headers['duplicate-next-mux']) {
-                console.log('Breaking the next multiplexer with 409. '
-                            + 'The next multiplex creation will be a duplicate!')
-                global.send_duplicate_mux = true
-            }
-            res.statusCode = 200
-            res.end('woopee')
+        // Lets tests register their own handlers on the fly: POST the source of
+        // a (req, res) => {...} function, and we eval it, mount it at a fresh
+        // path, and return that path for the test to hit.
+        if (req.url === '/add-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
+                var path = '/added-handler/' + Math.random().toString(36).slice(2)
+                added_handlers.set(path, handler)
+                res.end(path)
+            })
+            return
         }
+        if (added_handlers.has(req.url.split('?')[0]))
+            return added_handlers.get(req.url.split('?')[0])(req, res)
+
+        // The server is ready to define normal test routes!
 
         // 2. Serve the /single-update* routes
 
@@ -630,17 +620,6 @@ function create_test_server() {
 function create_express_middleware_server() {
     var express_app = require("express")()
 
-    express_app.use((req, res, next) => {
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-        next()
-    })
 
     express_app.use(braidify)
 
@@ -668,6 +647,24 @@ function create_express_middleware_server() {
         }
     })
 
+    // Lets tests register their own express handlers on the fly: POST the
+    // source of a (req, res) => {...} function, and we eval it, mount it at a
+    // fresh path, and return that path for the test to hit.
+    var added_handlers = new Map()
+    express_app.post("/add-handler", (req, res) => {
+        var chunks = []
+        req.on('data', chunk => chunks.push(chunk))
+        req.on('end', () => {
+            var body = Buffer.concat(chunks).toString()
+            var handler = eval('(' + body + ')')
+            var path = '/added-handler/' + Math.random().toString(36).slice(2)
+            added_handlers.set(path, handler)
+            res.end(path)
+        })
+    })
+    express_app.all("/added-handler/*", (req, res) =>
+        added_handlers.get(req.path)(req, res))
+
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
@@ -675,23 +672,32 @@ function create_express_middleware_server() {
 }
 
 function create_wrapper_server() {
+    var added_handlers = new Map()
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
     }, braidify(async (req, res) => {
         if (mode === 'browser') console.log('Wrapped-Handler-Request:', req.url, req.method)
 
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1'
-        ) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
+
+        // Lets tests register their own handlers on the fly: POST the source of
+        // a (req, res) => {...} function, and we eval it, mount it at a fresh
+        // path, and return that path for the test to hit.
+        if (req.url === '/add-handler' && req.method === 'POST') {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
+                var path = '/added-handler/' + Math.random().toString(36).slice(2)
+                added_handlers.set(path, handler)
+                res.end(path)
+            })
+            return
+        }
+        if (added_handlers.has(req.url.split('?')[0]))
+            return added_handlers.get(req.url.split('?')[0])(req, res)
 
         if (req.url === '/wrapper-test' && req.method === 'GET') {
             res.setHeader('content-type', 'application/json')
@@ -748,14 +754,6 @@ function create_wrapped_server() {
     braidify.server(server)
 
     server.on('request', (req, res) => {
-        if (req.socket.remoteAddress !== '127.0.0.1'
-            && req.socket.remoteAddress !== '::1'
-            && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
-            res.writeHead(403, { 'Content-Type': 'text/plain' })
-            res.end('Forbidden: Only localhost connections are allowed')
-            return
-        }
-
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
@@ -804,6 +802,33 @@ function create_wrapped_server() {
             var test_id = req.url.split('/').pop()
             res.writeHead(200, { 'Content-Type': 'text/plain' })
             res.end(listener_test_results[test_id] || 'pending')
+            return
+        }
+
+        res.writeHead(404)
+        res.end('Not found')
+    })
+
+    return server
+}
+
+function create_no_mux_server() {
+    var server = require('http2').createSecureServer({
+        key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
+        cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
+        allowHTTP1: true
+    }, async (req, res) => {
+        free_cors(res)
+        if (req.method === 'OPTIONS') return res.end()
+        
+        braidify_no_mux(req, res)
+
+        if (req.url === '/json' && req.method === 'GET') {
+            res.setHeader('content-type', 'application/json')
+            if (req.subscribe) res.startSubscription()
+            res.sendUpdate(test_update)
+            // Simulate an update after the fact
+            setTimeout(() => res.sendUpdate({version: ['another!'], body: '"!"'}), 200)
             return
         }
 
@@ -996,10 +1021,8 @@ async function run_console_tests() {
         add_section_header.current_section = header_text
     }
 
-    // In console mode, wait_for_tests queues a callback to run after all previous tests
-    // We store it as a special entry in tests_to_run
-    function wait_for_tests(cb) {
-        tests_to_run.push({ is_wait_callback: true, callback: cb })
+    function assert(condition, message) {
+        if (!condition) throw new Error(message || 'Assertion failed')
     }
 
     function run_test(test_name, test_function, expected_result) {
@@ -1021,11 +1044,13 @@ async function run_console_tests() {
     var express_server = create_express_middleware_server()
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
+    var no_mux_server = create_no_mux_server()
 
-    await new Promise(resolve => main_server.listen(port, resolve))
-    await new Promise(resolve => express_server.listen(port + 1, resolve))
-    await new Promise(resolve => wrapper_server.listen(port + 2, resolve))
-    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
+    await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
+    await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
+    await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
+    await new Promise(resolve => no_mux_server.listen(port + 4, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
 
@@ -1036,23 +1061,17 @@ async function run_console_tests() {
         og_fetch,  // Already configured with base_url
         port,
         add_section_header,
-        wait_for_tests,
         test_update: { ...test_update, status: "200" },
         multiplex_fetch,
         braid_fetch: wrapped_braid_fetch,
         reliable_update_channel,
-        base_url: `https://localhost:${port}`  // For building expected values in tests
+        base_url: `https://localhost:${port}`,  // For building expected values in tests
+        assert
     })
 
     // Run tests sequentially
     var current_section = null
     for (var item of tests_to_run) {
-        // Handle wait_for_tests callbacks
-        if (item.is_wait_callback) {
-            item.callback()
-            continue
-        }
-
         var { test_name, test_function, expected_result, section } = item
         if (section && section !== current_section) {
             current_section = section
@@ -1066,7 +1085,13 @@ async function run_console_tests() {
                 new Promise((_, reject) =>
                     setTimeout(() => reject(new Error(`Test timed out after ${timeout_ms/1000}s`)), timeout_ms))
             ])
-            if (result == expected_result) {
+            if (expected_result === undefined) {
+                // Assertion-style test: success simply means it returned
+                // (without throwing). An assert() failure throws and is
+                // handled by the catch below.
+                passed_tests++
+                console.log(`✓ ${test_name}`)
+            } else if (result == expected_result) {
                 passed_tests++
                 console.log(`✓ ${test_name}`)
             } else if (result === 'old node version') {
@@ -1103,6 +1128,7 @@ async function run_console_tests() {
     express_server.close()
     wrapper_server.close()
     wrapped_server.close()
+    no_mux_server.close()
 
     // Close all connections if available (Node 18.2+)
     if (typeof main_server.closeAllConnections === 'function') {
@@ -1110,6 +1136,7 @@ async function run_console_tests() {
         express_server.closeAllConnections()
         wrapper_server.closeAllConnections()
         wrapped_server.closeAllConnections()
+        no_mux_server.closeAllConnections()
     }
 
     setTimeout(() => process.exit(failed_tests > 0 ? 1 : 0), 100)
@@ -1124,11 +1151,13 @@ async function run_browser_mode() {
     var express_server = create_express_middleware_server()
     var wrapper_server = create_wrapper_server()
     var wrapped_server = create_wrapped_server()
+    var no_mux_server = create_no_mux_server()
 
-    await new Promise(resolve => main_server.listen(port, resolve))
-    await new Promise(resolve => express_server.listen(port + 1, resolve))
-    await new Promise(resolve => wrapper_server.listen(port + 2, resolve))
-    await new Promise(resolve => wrapped_server.listen(port + 3, resolve))
+    await new Promise(resolve => main_server.listen(port, 'localhost', resolve))
+    await new Promise(resolve => express_server.listen(port + 1, 'localhost', resolve))
+    await new Promise(resolve => wrapper_server.listen(port + 2, 'localhost', resolve))
+    await new Promise(resolve => wrapped_server.listen(port + 3, 'localhost', resolve))
+    await new Promise(resolve => no_mux_server.listen(port + 4, 'localhost', resolve))
 
     console.log(`Test server running on https://localhost:${port}`)
     console.log(`Express middleware test server running on port ${port + 1}`)
