@@ -303,51 +303,79 @@ run_test(
 run_test(
     `Test for "Incremental: ?1" header in multiplexer response.`,
     async () => {
+        // create a multiplexer with a MULTIPLEX request
         var m = Math.random().toString(36).slice(2)
-        var r = await og_fetch(`/${m}`, {method: 'MULTIPLEX', headers: {'Multiplex-Version': multiplex_version}})
-        return r.headers.get('Incremental')
-    },
-    '?1'
+        var r = await og_fetch(`/${m}`, {
+            method: 'MULTIPLEX',
+            headers: {'Multiplex-Version': multiplex_version}
+        })
+
+        // the response should announce that it's an incremental stream
+        assert(r.headers.get('Incremental') === '?1', 'expected Incremental: ?1')
+    }
 )
 
 run_test(
     "Test handling duplicate request id locally",
     async () => {
+        // add a handler that holds a subscription open, sending an update now
+        // and another, delayed, update 200ms later
+        var endpoint = await add_main_handler((req, res) => {
+            res.startSubscription()
+            res.sendUpdate({ version: ['now!'], body: 'hi' })
+            setTimeout(() => res.sendUpdate({ version: ['another!'], body: '"!"' }), 200)
+        })
+
+        // open a multiplexed subscription through a multiplexer of our choosing
         var a = new AbortController()
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-        var through = `/.well-known/multiplexer/${m}/${s}`
-        var r = await fetch('/json', {
+        var r = await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-Through': through },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
         })
 
+        // watch for that delayed update
         var saw_delayed_update
         r.subscribe(update => {
             if (update.version[0] === 'another!')
                 saw_delayed_update = true
         })
 
-        s = r.multiplexed_through.split('/')[4]
+        // the client honors the request id we submitted on a fresh request, so
+        // the first request really is occupying our id s
+        assert(r.multiplexed_through.split('/')[4] === s, 'expected the first request to use our submitted id')
 
+        // make a second request deliberately reusing that now-taken request id,
+        // to force the client's local duplicate-request-id handling
         var st = Date.now()
-        var r2 = await fetch('/json', {
+        var r2 = await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
-            headers: { 'Multiplex-Through':
-                `/.well-known/multiplexer/${m}/${s}` },
+            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` },
         })
         var et = Date.now()
 
+        // both requests go through the same multiplexer...
+        assert(r.multiplexed_through.split('/')[3] === r2.multiplexed_through.split('/')[3],
+               'expected both requests on the same multiplexer')
+
+        // ...but the client should have noticed the duplicate request id and
+        // assigned the second one a fresh id, so they aren't the same request...
+        assert(r.multiplexed_through !== r2.multiplexed_through,
+               'expected the second request to get a fresh request id')
+
+        // ...and it should have done so locally, without a slow round-trip
+        assert(et < st + 300, 'expected duplicate request id to be handled quickly (locally)')
+
+        // give the delayed 'another!' update time to arrive, then make sure it did
         await new Promise(done => setTimeout(done, 300))
+        assert(saw_delayed_update, 'expected to get the delayed update')
 
         a.abort()
         await og_fetch('/kill_mux', {headers: {mux: m}})
-
-        return `same mux = ${r.multiplexed_through.split('/')[3] === r2.multiplexed_through.split('/')[3]}, ` + 'same_request: ' + (r.multiplexed_through === r2.multiplexed_through) + ', fast=' + (et < st + 300) + ', ' + (saw_delayed_update ? 'got' : 'did not get') + ' update'
-    },
-    'same mux = true, same_request: false, fast=true, got update'
+    }
 )
 
 run_test(
