@@ -2181,19 +2181,42 @@ function interstate (cb, options = {}) {
             }
     }
 
-    // == Going online and offline ==
-    function go_online (host) {
+    // == Going online, offline, and 'maybe' ==
+
+    // Go online at host when a subscription is alive
+    function subscription_became_alive (host) {
         // A subscription reached 209!   The pipe is up!
-        host.online = true              // Go green
-        recompute_network_online()
-        send_host_requests(host)        // Run everything the host was holding
+
+        if (host.online !== true) {
+            // Take the host online
+            host.online = true              // Go green
+            recompute_network_online()      // The network might need to go green, too
+            send_host_requests(host)        // Run everything the host was holding
+        }
     }
 
-    // Take the host offline: abort everything in flight (it becomes
-    // pending) and recompute whether any host is still reachable.
-    function go_offline (host) {
-        // We got a pipe error on this host.  The pipe is down.
-        host.online = false
+    // If we receive any positive signal from the host, we can transition to 'maybe'
+    function host_showed_life (host) {
+        if (host.online === false) {
+            // The pipe answered but isn't streaming a subscription: a write
+            // never earns green, so an offline host settles at 'maybe'.
+            host.online = 'maybe'           // Go orange
+            recompute_network_online()
+        }
+    }
+
+    // We go offline when pipes fail.  Pipes "fail" in two cases:
+    //
+    //   (1) Exceptions from fetch()
+    //   (2) Timeouts, while waiting for PUT ack or GET heartbeat
+    //
+    function pipe_failed (host) {
+        // Todo: if we fail to receive a heartbeat from an origin server
+        // through a proxy, we don't want to kill the whole proxy.  But this
+        // doesn't distinguish yet.
+
+        // The pipe to this host is down
+        host.online = false                 // Go red
 
         // For every resource on this host
         for (var url in host.urls) {
@@ -2205,8 +2228,11 @@ function interstate (cb, options = {}) {
             deactivate_request(resource.subscription)
             for (var put of resource.put_queue) deactivate_request(put)
         }
+
+        // Now recompute the network's online status
         recompute_network_online()
     }
+
 
     // Abort a request's in-flight attempt and mark it pending again.
     function deactivate_request (req) {
@@ -2268,13 +2294,6 @@ function interstate (cb, options = {}) {
         }
     }
 
-    // Pipes fail due to (1) an exception from fetch(), or (2) timeout while
-    // waiting for a PUT ack or GET heartbeat.
-    function pipe_failed (req) {
-        // TODO: implement the "veto": if another connection to this host is
-        // still live, reboot just this request instead of the whole host.
-        go_offline(host_of(req.url))
-    }
 
     // Map a HTTP response status to what we do about it:
     function classify_response_status (method, status) {
@@ -2314,20 +2333,11 @@ function interstate (cb, options = {}) {
 
     // A well-formed response: lift the host out of false, then retry or give up.
     function handle_issue (req, res, disposition) {
-        host_is_alive(host_of(req.url))
+        host_showed_life(host_of(req.url))
         if (disposition === 'retry')
             return retry_request(req, compute_retry_after(res))
         delete_request(req)   // give up on this resource
         cb({message: 'error', url: req.url, method: req.method, status: res.status})
-    }
-
-    function host_is_alive (host) {
-        if (host.online === false) {
-            // The pipe answered but isn't streaming a subscription: a write
-            // never earns green, so an offline host settles at 'maybe'.
-            host.online = 'maybe'
-            recompute_network_online()
-        }
     }
 
     // Re-fire this request after a delay.
@@ -2358,11 +2368,11 @@ function interstate (cb, options = {}) {
         var signal = req.aborter.signal
         var host   = host_of(req.url)
 
-        // Set the timer that triggers pipe_failed(req) when we haven't heard
+        // Set the timer that triggers pipe_failed(host) when we haven't heard
         // from the server in too long!
         var reset_timeout = () => {
             clearTimeout(req.timeout_timer)
-            req.timeout_timer = setTimeout(() => pipe_failed(req), timeout * 1000)
+            req.timeout_timer = setTimeout(() => pipe_failed(host), timeout * 1000)
         }
         reset_timeout()
 
@@ -2387,7 +2397,7 @@ function interstate (cb, options = {}) {
             // Maybe we got a working subscription!
             if (disposition === 'online') {
                 host.online_subs.add(req)            // this connection is now online
-                if (host.online !== true) go_online(host)
+                subscription_became_alive(host)
                 reset_timeout()                      // now guard the stream
                 res.subscribe(
                     update => cb(update.status === 404 || update.status === 410
@@ -2401,7 +2411,7 @@ function interstate (cb, options = {}) {
                 // No 209 multiresponse: the server returned the current state
                 // as a plain GET.  Deliver it as an update, stay 'maybe' (a
                 // poll never earns green), and re-GET after poll_interval.
-                host_is_alive(host)
+                host_showed_life(host)
                 var update = await res.update()
                 if (signal.aborted) return
                 cb({...update, message: 'set', url: req.url})
@@ -2427,7 +2437,7 @@ function interstate (cb, options = {}) {
         if (err.type === 'pipe') {
             if (err.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
                 console.warn(`update_pipe: TLS hostname mismatch on ${req.url}, likely a captive portal`)
-            return pipe_failed(req)
+            return pipe_failed(host_of(req.url))
         }
         // parse / protocol / app: reconnecting won't help — cancel the URL.
         delete_request(req)
@@ -2445,7 +2455,7 @@ function interstate (cb, options = {}) {
 
         // Fail the pipe if the PUT doesn't answer in time.  deactivate_request
         // clears this, so we need no abort listener.
-        req.timeout_timer = setTimeout(() => pipe_failed(req), timeout * 1000)
+        req.timeout_timer = setTimeout(() => pipe_failed(host), timeout * 1000)
 
         try {
             var res = await braid_fetch(req.url, {
@@ -2459,7 +2469,7 @@ function interstate (cb, options = {}) {
 
             var disposition = classify_response_status(req.method, res.status)
             if (disposition === 'acked') {
-                host_is_alive(host)
+                host_showed_life(host)
                 cb({message: 'ack', url: req.url, version: req.params?.version})
                 delete_request(req)
             } else
@@ -2467,7 +2477,8 @@ function interstate (cb, options = {}) {
         } catch (err) {
             clearTimeout(req.timeout_timer)
             if (signal.aborted) return
-            if (err.type === 'pipe') return pipe_failed(req)   // host down; PUT stays queued for a resend
+            if (err.type === 'pipe')
+                return pipe_failed(host)   // host down; PUT stays queued for a resend
             // parse / protocol / app: the write itself is bad — cancel it.
             delete_request(req)
             cb({message: 'error', url: req.url, method: req.method, error: err.message})
