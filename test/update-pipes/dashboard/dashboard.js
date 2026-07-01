@@ -1,9 +1,10 @@
 // The dashboard: run the selected scenario's pipe against the simulated hosts
 // and show, per row (network / host / URL), an online dot plus a scrolling
-// timeline — a state "ribbon" (green online · light-green connecting · orange
-// maybe/retrying · red offline), a faint time ruler ticked at the timeout
-// interval, and arrows for traffic: ↓ forestgreen incoming updates, ↑ blue
-// outgoing edits (baselines meeting at the centerline), red bars for errors.
+// timeline — a state "ribbon" (green online · light-green connecting · cyan
+// probing · orange maybe/retrying · blank offline), a faint time ruler ticked
+// at the timeout interval, and arrows for traffic: ↓ forestgreen incoming
+// updates; ↑ blue outgoing edits, hollow when issued and solid when acked (red
+// outline if the write gives up); red bars for GET errors.
 // State is read live from pipe.network each frame; traffic from the cb / set.
 
 ;(async () => {
@@ -52,7 +53,7 @@
         if (sub && sub.retry_timer) return 'maybe'            // retrying
         if (sub && sub.aborter)     return 'connecting'       // sent, no 209 yet
         if (r && any_put_retrying(r)) return 'maybe'          // write-only: a put is retrying (forced 503)
-        return online_state(h.online)
+        return online_state(h.online)                         // else reflect the host's pipe
     }
     function host_role (hurls) {
         if (hurls.every(u => u.subscribe === 'poll')) return 'polling'

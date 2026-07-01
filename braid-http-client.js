@@ -2025,17 +2025,25 @@ function reliable_update_channel (url, params) {
 }
 
 // ============================================================
-// http_abstraction
+// Interstate / Statebus
 //
-// Abstracts HTTP behind the Abstract Braid Protocol.
+// Abstracts HTTP behind the Braid Interstate Protocol.
 //
-// Translates concrete braid_fetch() requests and responses into the messages:
+// This maps between concrete braid_fetch() HTTP requests and responses, and
+// the standard Interstate messages:
 //
 //   - get
 //   - set
 //   - delete
 //   - forget
 //   - ack
+//
+// Usage:
+// > state = interstate(cb)
+// > state.get('https://foo.com/bar')
+// > // Updates will stream to you via cb({type: 'set', url: 'https://foo.com/bar', update})
+// > state.set('https://foo.com/bar', update)
+// > state.forget('https://foo.com/bar')
 //
 // Models the network as pipes that go online and offline:
 //
@@ -2048,7 +2056,7 @@ function reliable_update_channel (url, params) {
 // with little probes, rather than sending 10,000s of useless requests off a
 // cliff to their death.
 //
-function http_abstraction (cb, options = {}) {
+function interstate (cb, options = {}) {
 
     var reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
         poll_interval        = options.poll_interval        ?? 30,   // For URLs that don't support 209 subscriptions
@@ -2232,9 +2240,10 @@ function http_abstraction (cb, options = {}) {
         if (req.method === 'GET') resource.subscription = null
         else                      resource.put_queue.delete(req)
 
+        // This dropped request frees up a slot in max_outstanding_puts
         if (host.online)
-            // Let the host send what it can now, because completing a request
-            // frees a slot in max_outstanding_puts
+            // So if the host is online, it can send another requesta, up to
+            // max_outstanding_puts
             send_host_requests(host)
 
         // Garbage Collection!
@@ -2299,19 +2308,20 @@ function http_abstraction (cb, options = {}) {
         }
 
         // unknown: surface it, keep trying
+        console.log('Unknown status code', status, 'retrying...')
         return 'retry'
     }
 
     // A well-formed response: lift the host out of false, then retry or give up.
     function handle_issue (req, res, disposition) {
-        route_up(host_of(req.url))
+        host_is_alive(host_of(req.url))
         if (disposition === 'retry')
             return retry_request(req, compute_retry_after(res))
         delete_request(req)   // give up on this resource
         cb({message: 'error', url: req.url, method: req.method, status: res.status})
     }
 
-    function route_up (host) {
+    function host_is_alive (host) {
         if (host.online === false) {
             // The pipe answered but isn't streaming a subscription: a write
             // never earns green, so an offline host settles at 'maybe'.
@@ -2391,7 +2401,7 @@ function http_abstraction (cb, options = {}) {
                 // No 209 multiresponse: the server returned the current state
                 // as a plain GET.  Deliver it as an update, stay 'maybe' (a
                 // poll never earns green), and re-GET after poll_interval.
-                route_up(host)
+                host_is_alive(host)
                 var update = await res.update()
                 if (signal.aborted) return
                 cb({...update, message: 'set', url: req.url})
@@ -2449,7 +2459,7 @@ function http_abstraction (cb, options = {}) {
 
             var disposition = classify_response_status(req.method, res.status)
             if (disposition === 'acked') {
-                route_up(host)
+                host_is_alive(host)
                 cb({message: 'ack', url: req.url, version: req.params?.version})
                 delete_request(req)
             } else
@@ -2534,7 +2544,8 @@ function http_abstraction (cb, options = {}) {
         forget (url) {
             var host     = host_of(url)
             var resource = host && host.urls[url]
-            if (resource && resource.subscription) delete_request(resource.subscription)
+            if (resource && resource.subscription)
+                delete_request(resource.subscription)
         },
         set (url, update) {
             schedule_request({url, method: 'PUT', params: update})
@@ -2549,7 +2560,7 @@ function http_abstraction (cb, options = {}) {
 }
 
 // I'm not sure what to call this abstraction yet
-var update_pipe = http_abstraction
+var update_pipe = interstate
 
 // ****************************
 // Exports
@@ -2565,6 +2576,5 @@ if (typeof module !== 'undefined' && module.exports)
         parse_header_values,
         parse_body,
         reliable_update_channel,
-        http_abstraction,
         update_pipe
     }

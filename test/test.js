@@ -12,6 +12,7 @@ var https = require('../braid-http-client.js').http(require('https'))
 var braid_fetch = require('../braid-http-client.js').fetch
 var multiplex_fetch = require('../braid-http-client.js').multiplex_fetch
 var reliable_update_channel = require('../braid-http-client.js').reliable_update_channel
+var update_pipe = require('../braid-http-client.js').update_pipe
 var {create_braid_text} = require('braid-text')
 
 // Parse command line arguments
@@ -1065,6 +1066,7 @@ async function run_console_tests() {
         multiplex_fetch,
         braid_fetch: wrapped_braid_fetch,
         reliable_update_channel,
+        update_pipe,
         base_url: `https://localhost:${port}`,  // For building expected values in tests
         assert
     })

@@ -2,7 +2,7 @@
 // This file exports a function that takes a test runner and context
 
 function define_tests(run_test, context) {
-    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, base_url, assert } = context
+    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, update_pipe, base_url, assert } = context
     // base_url is empty in browser, 'https://localhost:${port}' in console tests
     base_url = base_url || ''
 
@@ -5177,6 +5177,430 @@ run_test(
     },
     JSON.stringify({parents_called_again: true, went_offline_then_online: true})
 )
+
+
+    add_section_header("update_pipe Tests")
+
+    // ── shared helpers for the update_pipe tests ──────────────────────────
+    var rid   = () => Math.random().toString(36).slice(2)
+    var sleep = ms => new Promise(r => setTimeout(r, ms))
+    var drop_conn    = ep => og_fetch(ep + '?_drop')       // cut the live subscriptions
+    var release_puts = ep => og_fetch(ep + '?_release')    // free the held PUT responses
+    var server_puts  = async ep => (await og_fetch(ep + '?_puts')).json()  // the received-PUT log
+    var decode = b => typeof b === 'string' ? b : new TextDecoder().decode(b)
+
+    // A configurable braid server:
+    // it 209-subscribes (or polls, or refuses), logs PUTs, and answers control
+    // requests (?_drop / ?_release / ?_puts).  State lives in a per-test global
+    // so control requests can reach it.  opts.put_behavior is a source string:
+    // n => 'ok' | 'hold' | 'drop' | <status number>.  The handler runs
+    // server-side (its source is shipped over the wire), so it can't close over
+    // test variables — everything it needs is baked into the source here.
+    function pipe_server (test_id, opts = {}) {
+        var o = JSON.stringify({
+            subscribe_status: opts.subscribe_status ?? null,
+            poll_mode:        !!opts.poll_mode,
+            send_heartbeats:  opts.send_heartbeats !== false,
+            put_status:       opts.put_status ?? 200,
+            fail_first_put:   !!opts.fail_first_put
+        })
+        var put_behavior = opts.put_behavior ? '(' + opts.put_behavior + ')' : 'null'
+        return `(req, res) => {
+            var G = (global._pipe_${test_id} ||= {puts: [], live: [], held: [], poll: 0, put_count: 0, holding: ${!!opts.hold_puts}})
+            var o = ${o}
+            var put_behavior = ${put_behavior}
+            var q = new URL(req.url, 'http://x').searchParams
+
+            // control requests
+            if (q.has('_drop'))    { for (var s of G.live) s.destroy(); G.live = []; return res.end('ok') }
+            if (q.has('_release')) { G.holding = false; for (var f of G.held) f(); G.held = []; return res.end('ok') }
+            if (q.has('_puts'))    { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify(G.puts)) }
+
+            // subscriptions
+            if (req.subscribe) {
+                if (q.get('u') === 'hang')  { G.live.push(res.socket); return }          // never answer
+                if (o.subscribe_status)     { res.statusCode = o.subscribe_status; return res.end() }
+                if (o.poll_mode) {                                                       // plain 200, no 209
+                    res.statusCode = 200
+                    res.setHeader('version', JSON.stringify('v' + (++G.poll)))
+                    return res.end('state' + G.poll)
+                }
+                if (!o.send_heartbeats) delete req.headers['heartbeats']
+                G.live.push(res.socket)
+                res.startSubscription()
+                res.sendUpdate({version: ['v1'], body: 'hello'})
+                return
+            }
+
+            // writes
+            if (req.method === 'PUT') {
+                var n = ++G.put_count
+                var action = put_behavior ? put_behavior(n)
+                           : o.fail_first_put && n === 1 ? 'drop'
+                           : G.holding ? 'hold' : 'ok'
+                if (action === 'drop') return req.socket.destroy()
+                req.parseUpdate().then(update => {
+                    G.puts.push({version: update.version, body: update.body && Buffer.from(update.body).toString()})
+                    var respond = () => { res.statusCode = typeof action === 'number' ? action : o.put_status; res.end() }
+                    if (action === 'hold') G.held.push(respond)
+                    else respond()
+                })
+                return
+            }
+
+            res.statusCode = 200; res.end('ok')
+        }`
+    }
+
+    run_test(
+        "update_pipe: A dropped connection takes the host offline",
+        async () => {
+            // 0. Subscribe to a healthy 209 host.
+            var ep = await add_main_handler(pipe_server('drop_' + rid()))
+            var host = new URL(ep).host
+            var updates = []
+            var pipe = update_pipe(m => updates.push(m), {reconnect_interval: 60})
+            pipe.get(ep)
+
+            // 1. It delivers its first update (a 'set'), and the host is online.
+            await sleep(300)
+            assert(updates.length === 1, 'should receive one update')
+            assert(updates[0].message === 'set', "delivered as a 'set' message")
+            assert(decode(updates[0].body) === 'hello', 'body should be "hello"')
+            assert(pipe.network.hosts[host].online === true, 'host online after 209')
+
+            // 2. Drop the connection — the host should go offline.
+            await drop_conn(ep)
+            await sleep(500)
+            assert(pipe.network.hosts[host].online === false, 'host offline after the drop')
+
+            pipe.forget(ep)
+        }
+    )
+
+    run_test(
+        "update_pipe: A silent connection (no heartbeats) times out to offline",
+        async () => {
+            // 0. Subscribe to a host that ignores our heartbeat request, with a 1s timeout.
+            var ep = await add_main_handler(pipe_server('hb_' + rid(), {send_heartbeats: false}))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {timeout: 1, reconnect_interval: 60})
+            pipe.get(ep)
+
+            // 1. The 209 arrives, so we're online.
+            await sleep(300)
+            assert(pipe.network.hosts[host].online === true, 'online after the 209')
+
+            // 2. No bytes arrive for longer than the timeout — the host should go offline.
+            await sleep(1200)
+            assert(pipe.network.hosts[host].online === false, 'offline after the heartbeat timeout')
+
+            pipe.forget(ep)
+        }
+    )
+
+    run_test(
+        "update_pipe: The reconnection poll brings a dropped host back online",
+        async () => {
+            // 0. Subscribe; we're online with one update.
+            var ep = await add_main_handler(pipe_server('rc_' + rid()))
+            var host = new URL(ep).host
+            var updates = []
+            var pipe = update_pipe(m => updates.push(m), {reconnect_interval: 0.3})
+            pipe.get(ep)
+
+            await sleep(300)
+            assert(pipe.network.hosts[host].online === true, 'online initially')
+            assert(updates.length === 1, 'one update initially')
+
+            // 1. Drop the connection — the host goes offline.
+            await drop_conn(ep)
+
+            // 2. The poll (every 0.3s) reconnects and delivers a fresh update.
+            await sleep(900)
+            assert(pipe.network.hosts[host].online === true, 'back online after reconnect')
+            assert(updates.length >= 2, 'reconnect delivered a fresh update')
+
+            pipe.forget(ep)
+        }
+    )
+
+    run_test(
+        "update_pipe: One host going down leaves the others online (per-host isolation)",
+        async () => {
+            // 0. Subscribe to two URLs on each of two separate hosts.
+            var ep1 = await add_main_handler(pipe_server('m1_' + rid()))     // host 1 (main server)
+            var ep2 = await add_express_handler(pipe_server('m2_' + rid()))  // host 2 (express server)
+            var h1 = new URL(ep1).host, h2 = new URL(ep2).host
+            var urls = [ep1 + '?u=a', ep1 + '?u=b', ep2 + '?u=a', ep2 + '?u=b']
+            var got = {}
+            var pipe = update_pipe(m => { got[m.url] = (got[m.url] || 0) + 1 }, {reconnect_interval: 0.3})
+            for (var u of urls) pipe.get(u)
+
+            // 1. All four are online; both hosts and the network are up.
+            await sleep(500)
+            for (var u of urls) assert(got[u] === 1, 'one update for ' + u)
+            assert(pipe.network.hosts[h1].online === true, 'host1 online')
+            assert(pipe.network.hosts[h2].online === true, 'host2 online')
+            assert(pipe.network.online === true, 'network online')
+
+            // 2. Drop host 1 only — host 2 (and so the network) stay up.
+            await drop_conn(ep1)
+            await sleep(150)
+            assert(pipe.network.hosts[h2].online === true, 'host2 unaffected by host1 drop')
+            assert(pipe.network.online === true, 'network stays online while host2 is up')
+
+            // 3. The poll reconnects host 1, cascading fresh updates to both its URLs.
+            await sleep(900)
+            assert(pipe.network.hosts[h1].online === true, 'host1 reconnected')
+            assert(got[ep1 + '?u=a'] >= 2 && got[ep1 + '?u=b'] >= 2, 'both host1 urls got fresh updates')
+
+            for (var u of urls) pipe.forget(u)
+        }
+    )
+
+    run_test(
+        "update_pipe: A write lands and its write-only host is garbage-collected",
+        async () => {
+            // 0. Write once to a write-only host (no subscription).
+            var ep = await add_main_handler(pipe_server('pb_' + rid()))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
+            pipe.set(ep, {version: ['a1'], body: 'hi'})
+
+            // 1. The server receives the PUT, with the right body.
+            await sleep(300)
+            var puts = await server_puts(ep)
+            assert(puts.length === 1, 'server received the PUT')
+            assert(puts[0].body === 'hi', 'server got the body')
+
+            // 2. On the ack the host holds no more work, so it's GC'd and the network reads idle.
+            assert(pipe.network.hosts[host] === undefined, "spent write-only host is GC'd")
+            assert(pipe.network.online === 'maybe', 'idle network reads maybe')
+        }
+    )
+
+    run_test(
+        "update_pipe: Writes pipeline up to max_outstanding_puts; the rest queue and drain",
+        async () => {
+            // 0. Queue 25 writes at a cap of 10, with the server holding every response.
+            var ep = await add_main_handler(pipe_server('pp_' + rid(), {hold_puts: true}))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {reconnect_interval: 60, max_outstanding_puts: 10})
+            for (var i = 0; i < 25; i++) pipe.set(ep, {version: ['v' + i], body: String(i)})
+
+            // 1. Exactly 10 are in flight; all 25 wait in the queue, unacked.
+            await sleep(300)
+            var h = pipe.network.hosts[host]
+            assert(h.outstanding_puts_count === 10, 'in-flight capped at 10')
+            assert((await server_puts(ep)).length === 10, 'server received exactly 10')
+            assert(h.urls[ep].put_queue.size === 25, 'all 25 still queued, unacked')
+
+            // 2. Release the held responses — all 25 drain through and the host is GC'd.
+            await release_puts(ep)
+            await sleep(600)
+            assert((await server_puts(ep)).length === 25, 'all 25 eventually sent')
+            assert(pipe.network.hosts[host] === undefined, "host GC'd once all PUTs drained")
+        }
+    )
+
+    run_test(
+        "update_pipe: A non-2xx write is a give-up: reported as an error, then dropped",
+        async () => {
+            // 0. Write to a host that answers 500.
+            var ep = await add_main_handler(pipe_server('pg_' + rid(), {put_status: 500}))
+            var host = new URL(ep).host
+            var errors = []
+            var pipe = update_pipe(m => { if (m.message === 'error') errors.push(m) }, {reconnect_interval: 60})
+            pipe.set(ep, {version: ['a1'], body: 'hi'})
+
+            // 1. It's reported once as an error, carrying the status.
+            await sleep(300)
+            assert(errors.length === 1, 'give-up reported once')
+            assert(errors[0].status === 500, 'status surfaced')
+
+            // 2. The write is dropped, so its write-only host is GC'd.
+            assert(pipe.network.hosts[host] === undefined, "gave-up PUT's host is GC'd")
+        }
+    )
+
+    run_test(
+        "update_pipe: A write whose pipe fails is requeued, then re-probed back to success",
+        async () => {
+            // 0. Write to a host that drops the first PUT's connection.
+            var ep = await add_main_handler(pipe_server('prw_' + rid(), {fail_first_put: true}))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3})
+            pipe.set(ep, {version: ['a1'], body: 'hi'})
+
+            // 1. The pipe failure takes the host offline; the PUT is requeued, not lost.
+            await sleep(300)
+            var h = pipe.network.hosts[host]
+            assert(h.online === false, 'write-only host offline on the pipe failure')
+            assert(h.urls[ep].put_queue.size === 1, 'the PUT is requeued, not lost')
+
+            // 2. The poll re-probes with the queued PUT; this one lands, and the host GCs.
+            await sleep(600)
+            assert(pipe.network.hosts[host] === undefined, "revived host GC'd after its PUT drained")
+            assert(pipe.network.online === 'maybe', 'network settles at maybe')
+            var puts = await server_puts(ep)
+            assert(puts.length === 1, 'server got the PUT only on the retry')
+            assert(puts[0].body === 'hi', 'with the right body')
+        }
+    )
+
+    run_test(
+        "update_pipe: A PUT ack revives a multi-write host to online='maybe' (not online=true)",
+        async () => {
+            // 0. Queue three writes, one at a time; the server drops #1, acks #2 (the retry), holds #3.
+            var ep = await add_main_handler(pipe_server('prk_' + rid(),
+                {put_behavior: 'n => n === 1 ? "drop" : n === 2 ? "ok" : "hold"'}))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3, max_outstanding_puts: 1})
+            pipe.set(ep, {version: ['a1'], body: '1'})
+            pipe.set(ep, {version: ['a2'], body: '2'})
+            pipe.set(ep, {version: ['a3'], body: '3'})
+
+            // 1. The ack lifts the offline host to 'maybe' — never online=true, since it has no subscription.
+            await sleep(800)
+            var h = pipe.network.hosts[host]
+            assert(h.online === 'maybe', 'a landed PUT lifts the offline host to maybe')
+
+            // 2. The remaining queued writes keep the host alive.
+            assert(h.urls[ep].put_queue.size === 2, 'later writes keep the host alive')
+        }
+    )
+
+    run_test(
+        "update_pipe: forget() drops a subscription and garbage-collects its resource and host",
+        async () => {
+            // 0. Subscribe to two URLs on one host — both online, host green.
+            var ep = await add_main_handler(pipe_server('fg_' + rid()))
+            var host = new URL(ep).host
+            var a = ep + '?u=a', b = ep + '?u=b'
+            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
+            pipe.get(a); pipe.get(b)
+
+            await sleep(300)
+            var h = pipe.network.hosts[host]
+            assert(Object.keys(h.urls).length === 2, 'two resources subscribed')
+            assert(h.online === true, 'green while subscribed')
+
+            // 1. Forget the first URL — its resource is collected; the host survives on the other sub.
+            pipe.forget(a)
+            await sleep(50)
+            assert(h.urls[a] === undefined, 'forgotten resource collected')
+            assert(Object.keys(h.urls).length === 1, 'one resource left')
+            assert(pipe.network.hosts[host] === h, 'host survives on its other sub')
+            assert(h.online === true, 'still green')
+
+            // 2. Forget the second — the host is GC'd; the network settles at 'maybe'.
+            pipe.forget(b)
+            await sleep(50)
+            assert(pipe.network.hosts[host] === undefined, "host GC'd once last sub forgotten")
+            assert(pipe.network.online === 'maybe', 'network settles at maybe')
+        }
+    )
+
+    run_test(
+        "update_pipe: A connecting (not-yet-209) subscription can't hold its host green",
+        async () => {
+            // 0. Subscribe to /a (gets its 209 → online) and /hang (server never answers → still connecting).
+            var ep = await add_main_handler(pipe_server('fc_' + rid()))
+            var host = new URL(ep).host
+            var a = ep + '?u=a', hang = ep + '?u=hang'
+            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
+            pipe.get(a)
+            pipe.get(hang)
+
+            // 1. The host is green, but only /a counts as online — the connecting /hang doesn't.
+            await sleep(300)
+            var h = pipe.network.hosts[host]
+            assert(h.online === true, 'green because /a is online')
+            assert(h.online_subs.size === 1, 'only /a is online; hang is just connecting')
+
+            // 2. Forget /a — the only online sub — and the host falls to 'maybe', not stuck green.
+            pipe.forget(a)
+            await sleep(50)
+            assert(h.online_subs.size === 0, 'no online subscriptions remain')
+            assert(h.online === 'maybe', 'host falls to maybe, not stuck green')
+
+            pipe.forget(hang)
+        }
+    )
+
+    run_test(
+        "update_pipe: A forbidden (403) subscription is a give-up: error, then cancel the URL",
+        async () => {
+            // 0. Subscribe to a host that answers 403.
+            var ep = await add_main_handler(pipe_server('gg_' + rid(), {subscribe_status: 403}))
+            var host = new URL(ep).host
+            var errors = []
+            var pipe = update_pipe(m => { if (m.message === 'error') errors.push(m) }, {reconnect_interval: 60})
+            pipe.get(ep)
+
+            // 1. It's reported once as an error — the 403, on the GET.
+            await sleep(300)
+            assert(errors.length === 1, 'one error reported')
+            assert(errors[0].status === 403, 'the 403 surfaced')
+            assert(errors[0].method === 'GET', 'on the GET')
+
+            // 2. The subscription is cancelled, so its host is GC'd.
+            assert(pipe.network.hosts[host] === undefined, "subscription cancelled, host GC'd")
+        }
+    )
+
+    run_test(
+        "update_pipe: A 503 write retries the request without taking the host offline",
+        async () => {
+            // 0. Write to a host that answers 503 the first time, then 200.
+            var ep = await add_main_handler(pipe_server('pr_' + rid(), {put_behavior: 'n => n === 1 ? 503 : 200'}))
+            var host = new URL(ep).host
+            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3})
+            pipe.set(ep, {version: ['a1'], body: 'hi'})
+
+            // 1. A 503 is a per-resource retry: the host stays 'maybe' (never offline), the PUT waits.
+            await sleep(150)
+            var h = pipe.network.hosts[host]
+            assert(h.online === 'maybe', '503 keeps the host maybe, never offline')
+            assert(h.urls[ep].put_queue.size === 1, 'the PUT waits in its queue to retry')
+
+            // 2. The retry lands (the server saw it twice); the write acks and the host is GC'd.
+            await sleep(500)
+            assert((await server_puts(ep)).length === 2, 'server saw the PUT twice (503 then 200)')
+            assert(pipe.network.hosts[host] === undefined, "PUT finally acked; host GC'd")
+        }
+    )
+
+    run_test(
+        "update_pipe: A server with no 209 support is polled, and stays online='maybe'",
+        async () => {
+            // 0. Subscribe to a host with no 209 — it answers a plain 200 with the current state.
+            var ep = await add_main_handler(pipe_server('poll_' + rid(), {poll_mode: true}))
+            var host = new URL(ep).host
+            var updates = []
+            var pipe = update_pipe(m => { if (m.message === 'set') updates.push(m) }, {poll_interval: 0.3})
+            pipe.get(ep)
+
+            // 1. The first poll delivers the current state; the URL is 'maybe' (never green — no 209 sub).
+            await sleep(150)
+            assert(updates.length === 1, 'first poll delivered the current state')
+            assert(decode(updates[0].body) === 'state1', 'with the right body')
+            var h = pipe.network.hosts[host]
+            assert(h.online === 'maybe', 'a polled url is maybe, never green')
+            assert(h.online_subs.size === 0, 'no online (209) subscription')
+
+            // 2. Polling re-fetches and delivers again.
+            await sleep(500)
+            assert(updates.length >= 2, 'polling re-fetched and delivered again')
+
+            // 3. forget() stops the polling.
+            pipe.forget(ep)
+            var at_forget = updates.length
+            await sleep(500)
+            assert(updates.length === at_forget, 'forget stops the polling')
+        }
+    )
 
 }
 
