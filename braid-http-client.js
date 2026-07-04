@@ -1744,7 +1744,7 @@ function concat_buffers(buffers) {
 //     - Redo just this request, at this other URL instead
 //   - Weird ones, we don't expect -- likely indicate some kind of error:
 //     - 300 Multiple Choices.  Not sure what to do.  Warn user, and retry?
-//     - 403 Not Modified.  Only happens if client issues If-None-Match, and we won't.
+//     - 304 Not Modified.  Only happens if client issues If-None-Match, and we won't.
 //     - 303 See Other.  Only happens from POST.  Says where the URL now lives.
 
 function reliable_update_channel (url, params) {
@@ -2055,7 +2055,7 @@ function reliable_update_channel (url, params) {
 // When the network or pipe is offline, it throttles reconnection attempts
 // with little probes, rather than sending 10,000s of useless requests off a
 // cliff to their death.
-//
+
 function interstate (cb, options = {}) {
 
     var reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
@@ -2119,7 +2119,7 @@ function interstate (cb, options = {}) {
             // its online from network.online here.
 
             online_subs: new Set(),       // subscription requests that are online (got 209)
-            last_heard_from: 0,           // timestamp; 0 = never heard
+            // last_heard_from: 0,           // timestamp; 0 = never heard
             urls: {},                     // url -> resource
             active_requests_count: 0,     // active subs + in-flight PUTs (GC at 0)
             outstanding_puts_count: 0     // in-flight PUTs.  Iff 0, we are "synced."
@@ -2135,7 +2135,8 @@ function interstate (cb, options = {}) {
 
         // File the request into its resource object:
         var resource = host.urls[req.url]
-            || (host.urls[req.url] = {subscription: null, put_queue: new Set()})
+            || (host.urls[req.url] = {subscription: null, put_queue: new Set(),
+                                      last_version: null, last_etag: null, last_hash: null})
 
         // A GET becomes a subscription
         if (req.method === 'GET')   resource.subscription = req
@@ -2309,6 +2310,9 @@ function interstate (cb, options = {}) {
             case 200: case 201: case 204:   // regular response
                                             return is_get ? 'poll' : 'acked'
 
+            case 304:                       // If-None-Match matched: unchanged
+                                            return is_get ? 'unchanged' : 'give_up'
+
             // Transient at this URL: retry just this request after a delay.
             case 502: case 503: case 504:   // origin down / unavailable / gateway timeout
             case 408: case 425:             // request timeout / too early
@@ -2337,7 +2341,7 @@ function interstate (cb, options = {}) {
         if (disposition === 'retry')
             return retry_request(req, compute_retry_after(res))
         delete_request(req)   // give up on this resource
-        cb({message: 'error', url: req.url, method: req.method, status: res.status})
+        cb({type: 'error', url: req.url, method: req.method, status: res.status})
     }
 
     // Re-fire this request after a delay.
@@ -2365,8 +2369,8 @@ function interstate (cb, options = {}) {
 
     // Open a subscription and stream its updates.
     async function GET (req) {
-        var signal = req.aborter.signal
-        var host   = host_of(req.url)
+        var host     = host_of(req.url)
+        var resource = host.urls[req.url]
 
         // Set the timer that triggers pipe_failed(host) when we haven't heard
         // from the server in too long!
@@ -2383,13 +2387,14 @@ function interstate (cb, options = {}) {
                 retry:           false,
                 heartbeats:      heartbeat_period,
                 heartbeat_timer: false,
-                parents:         req.params?.parents,
-                headers:         req.params?.headers,
-                signal,
+                parents:         req.params?.parents ?? resource.last_version,
+                headers:         resource.last_etag ?
+                                   {'If-None-Match': resource.last_etag} : undefined,
+                signal:          req.aborter.signal,
                 on_heartbeat:    reset_timeout
             })
             clearTimeout(req.timeout_timer)
-            if (signal.aborted) return
+            if (req.aborter.signal.aborted) return
 
             // We got a response!  Figure out how to respond to the response:
             var disposition = classify_response_status('GET', res.status)
@@ -2400,21 +2405,35 @@ function interstate (cb, options = {}) {
                 subscription_became_alive(host)
                 reset_timeout()                      // now guard the stream
                 res.subscribe(
-                    update => cb(update.status === 404 || update.status === 410
-                        ? {message: 'delete', url: req.url, version: update.version}
-                        : {message: 'set', url: req.url, ...update}),
+                    update => {
+                        // Remember the new version
+                        if (update.version) resource.last_version = update.version
+                        // And fire the update!
+                        cb(update.status === 404 || update.status === 410
+                            ? {type: 'delete', url: req.url, version: update.version}
+                            : {...update, type: 'set', url: req.url})
+                    },
                     err => get_failed(req, err)
                 )
 
             // Or maybe we're just polling
             } else if (disposition === 'poll') {
-                // No 209 multiresponse: the server returned the current state
-                // as a plain GET.  Deliver it as an update, stay 'maybe' (a
-                // poll never earns green), and re-GET after poll_interval.
+                if (req.aborter.signal.aborted) return
+
+                // Host's online is now at least 'maybe'
                 host_showed_life(host)
+
+                // The update is in the respones
                 var update = await res.update()
-                if (signal.aborted) return
-                cb({...update, message: 'set', url: req.url})
+                if (await polled_update_differs(resource, update, res))
+                    cb({...update, type: 'set', url: req.url})
+
+                // And poll again in 30s!
+                retry_request(req, poll_interval)
+
+            // Or the server says nothing changed since our If-None-Match.
+            } else if (disposition === 'unchanged') {
+                host_showed_life(host)
                 retry_request(req, poll_interval)
 
             // Or... we have a real issue to contend with...
@@ -2426,7 +2445,7 @@ function interstate (cb, options = {}) {
         // failure, in which case we'll go offline.
         catch (err) {
             clearTimeout(req.timeout_timer)
-            if (signal.aborted) return
+            if (req.aborter.signal.aborted) return
             get_failed(req, err)
         }
     }
@@ -2441,7 +2460,7 @@ function interstate (cb, options = {}) {
         }
         // parse / protocol / app: reconnecting won't help — cancel the URL.
         delete_request(req)
-        cb({message: 'error', url: req.url, method: req.method, error: err.message})
+        cb({type: 'error', url: req.url, method: req.method, error: err.message})
     }
 
     // Send one PUT (or DELETE).
@@ -2450,38 +2469,40 @@ function interstate (cb, options = {}) {
     //    the pipe is up.
     //  - Only a thrown or timed-out request is a pipe failure.
     async function PUT (req) {
-        var signal = req.aborter.signal
-        var host   = host_of(req.url)
+        var host    = host_of(req.url)
 
         // Fail the pipe if the PUT doesn't answer in time.  deactivate_request
         // clears this, so we need no abort listener.
         req.timeout_timer = setTimeout(() => pipe_failed(host), timeout * 1000)
 
         try {
+
+            // Send the PUT!!
             var res = await braid_fetch(req.url, {
                 ...req.params,          // version, parents, patches/body, headers
                 method: req.method,     // PUT or DELETE
                 retry:  false,
-                signal
+                signal: req.aborter.signal
             })
             clearTimeout(req.timeout_timer)
-            if (signal.aborted) return
+            if (req.aborter.signal.aborted) return
 
+            // Classify the response status code
             var disposition = classify_response_status(req.method, res.status)
             if (disposition === 'acked') {
                 host_showed_life(host)
-                cb({message: 'ack', url: req.url, version: req.params?.version})
+                cb({type: 'ack', url: req.url, version: req.params?.version})
                 delete_request(req)
             } else
                 handle_issue(req, res, disposition)
         } catch (err) {
             clearTimeout(req.timeout_timer)
-            if (signal.aborted) return
+            if (req.aborter.signal.aborted) return
             if (err.type === 'pipe')
                 return pipe_failed(host)   // host down; PUT stays queued for a resend
             // parse / protocol / app: the write itself is bad — cancel it.
             delete_request(req)
-            cb({message: 'error', url: req.url, method: req.method, error: err.message})
+            cb({type: 'error', url: req.url, method: req.method, error: err.type})
         }
     }
 
@@ -2540,8 +2561,60 @@ function interstate (cb, options = {}) {
         }
     }
 
+    // == Subscription Poll fallback ==
+
+    // Does this update differ from the last one?
+    async function polled_update_differs (resource, update, res) {
+        // Fast non-cryptographic 53-bit hash; pure-JS fallback for when
+        // WebCrypto's SHA-256 is unavailable (e.g. insecure http: pages).
+        function cyrb53_bytes (bytes, seed = 0) {
+            let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed
+            for (let i = 0; i < bytes.length; i++) {
+                let ch = bytes[i]
+                h1 = Math.imul(h1 ^ ch, 2654435761)
+                h2 = Math.imul(h2 ^ ch, 1597334677)
+            }
+            h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507)
+            h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+            h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507)
+            h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+            return 4294967296 * (2097151 & h2) + (h1 >>> 0)
+        }
+        // Helper to compare versions
+        var same_version = (a, b) => a.length === b.length && a.every((v, i) => v === b[i])
+
+        var etag = res.headers.get('etag')
+        var changed
+        if (resource.last_version != null && update.version != null)
+            changed = !same_version(update.version, resource.last_version)
+        else if (resource.last_etag != null && etag != null)
+            changed = etag !== resource.last_etag
+        else {
+            // No shared version or etag: hash the body.
+            var bytes = update.body ?? new Uint8Array(0)
+            var hash
+            if (globalThis.crypto?.subtle) {
+                var digest = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+                hash = [...new Uint8Array(digest)]
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('')
+            } else
+                hash = cyrb53_bytes(bytes)
+            changed = resource.last_hash == null || hash !== resource.last_hash
+            resource.last_hash = hash
+        }
+
+        // Adopt the server's latest tokens (etag may be null: next GET omits it).
+        if (update.version != null)
+            resource.last_version = update.version
+        resource.last_etag = etag
+
+        return changed
+    }
+
     var poll_timer = setInterval(reconnection_poll, reconnect_interval * 1000)
     poll_timer.unref?.()
+
 
     // == The Abstract Braid Protocol interface ==
     return {

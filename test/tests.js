@@ -5265,7 +5265,7 @@ run_test(
             // 1. It delivers its first update (a 'set'), and the host is online.
             await sleep(300)
             assert(updates.length === 1, 'should receive one update')
-            assert(updates[0].message === 'set', "delivered as a 'set' message")
+            assert(updates[0].type === 'set', "delivered as a 'set' message")
             assert(decode(updates[0].body) === 'hello', 'body should be "hello"')
             assert(pipe.network.hosts[host].online === true, 'host online after 209')
 
@@ -5411,7 +5411,7 @@ run_test(
             var ep = await add_main_handler(pipe_server('pg_' + rid(), {put_status: 500}))
             var host = new URL(ep).host
             var errors = []
-            var pipe = update_pipe(m => { if (m.message === 'error') errors.push(m) }, {reconnect_interval: 60})
+            var pipe = update_pipe(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
             pipe.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. It's reported once as an error, carrying the status.
@@ -5536,7 +5536,7 @@ run_test(
             var ep = await add_main_handler(pipe_server('gg_' + rid(), {subscribe_status: 403}))
             var host = new URL(ep).host
             var errors = []
-            var pipe = update_pipe(m => { if (m.message === 'error') errors.push(m) }, {reconnect_interval: 60})
+            var pipe = update_pipe(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
             pipe.get(ep)
 
             // 1. It's reported once as an error — the 403, on the GET.
@@ -5579,7 +5579,7 @@ run_test(
             var ep = await add_main_handler(pipe_server('poll_' + rid(), {poll_mode: true}))
             var host = new URL(ep).host
             var updates = []
-            var pipe = update_pipe(m => { if (m.message === 'set') updates.push(m) }, {poll_interval: 0.3})
+            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.3})
             pipe.get(ep)
 
             // 1. The first poll delivers the current state; the URL is 'maybe' (never green — no 209 sub).
@@ -5599,6 +5599,130 @@ run_test(
             var at_forget = updates.length
             await sleep(500)
             assert(updates.length === at_forget, 'forget stops the polling')
+        }
+    )
+
+    // A polling server for change-detection tests.  It serves a stable state
+    // (version 'v<n>', etag '"e<n>"', body 'state<n>') and bumps <n> only on a
+    // ?_change request; ?_polls reports how many polls and If-None-Match's it
+    // has seen.  mode picks which key it exposes: 'version', 'etag' (with 304s),
+    // or 'hash' (body only, no version or etag).
+    function poll_server (test_id, mode) {
+        return `(req, res) => {
+            var G = (global._poll_${test_id} ||= {n: 1, polls: 0, inm: 0})
+            var q = new URL(req.url, 'http://x').searchParams
+            if (q.has('_change')) { G.n++; return res.end('ok') }
+            if (q.has('_polls'))  { res.setHeader('content-type', 'application/json')
+                                    return res.end(JSON.stringify({polls: G.polls, inm: G.inm})) }
+            if (!req.subscribe)   { res.statusCode = 200; return res.end('ok') }
+
+            G.polls++
+            res.statusCode = 200
+            if (${JSON.stringify(mode)} === 'version') {
+                res.setHeader('version', JSON.stringify('v' + G.n))
+                return res.end('state' + G.n)
+            }
+            if (${JSON.stringify(mode)} === 'etag') {
+                var etag = '"e' + G.n + '"'
+                if (req.headers['if-none-match']) G.inm++
+                if (req.headers['if-none-match'] === etag) { res.statusCode = 304; return res.end() }
+                res.setHeader('etag', etag)
+                return res.end('state' + G.n)
+            }
+            return res.end('state' + G.n)   // hash mode
+        }`
+    }
+    var change_state = ep => og_fetch(ep + '?_change')
+    var poll_status  = async ep => (await og_fetch(ep + '?_polls')).json()
+
+    run_test(
+        "update_pipe: Polling suppresses an unchanged version, and delivers a new one",
+        async () => {
+            // 0. Poll a server that keeps the same version until told to change.
+            var ep = await add_main_handler(poll_server('cdv_' + rid(), 'version'))
+            var updates = []
+            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            pipe.get(ep)
+
+            // 1. The first poll delivers the current state.
+            await sleep(150)
+            assert(updates.length === 1, 'first poll delivered the state')
+            assert(decode(updates[0].body) === 'state1', 'with the right body')
+
+            // 2. Later polls see the same version: nothing delivered, but polling continues.
+            await sleep(700)
+            var s = await poll_status(ep)
+            assert(updates.length === 1, 'an unchanged version stays silent')
+            assert(s.polls >= 3, 'yet the server kept being polled')
+
+            // 3. Bump the version — the next poll delivers again.
+            await change_state(ep)
+            await sleep(400)
+            assert(updates.length === 2, 'a new version is delivered')
+            assert(decode(updates[1].body) === 'state2', 'with the new body')
+
+            pipe.forget(ep)
+        }
+    )
+
+    run_test(
+        "update_pipe: Polling sends If-None-Match; a 304 stays silent, a changed etag delivers",
+        async () => {
+            // 0. Poll a server that supports conditional GET (etag + 304).
+            var ep = await add_main_handler(poll_server('cde_' + rid(), 'etag'))
+            var updates = []
+            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            pipe.get(ep)
+
+            // 1. The first poll (no etag held yet) delivers the current state.
+            await sleep(150)
+            assert(updates.length === 1, 'first poll delivered the state')
+            assert(decode(updates[0].body) === 'state1', 'with the right body')
+
+            // 2. Now holding the etag, later polls send If-None-Match and earn 304s.
+            await sleep(700)
+            var s = await poll_status(ep)
+            assert(updates.length === 1, 'a 304 delivers nothing')
+            assert(s.inm >= 1, 'the client sent If-None-Match')
+            assert(s.polls >= 3, 'and kept polling')
+
+            // 3. Change the state (new etag) — the poll 200s and delivers.
+            await change_state(ep)
+            await sleep(400)
+            assert(updates.length === 2, 'a changed etag is delivered')
+            assert(decode(updates[1].body) === 'state2', 'with the new body')
+
+            pipe.forget(ep)
+        }
+    )
+
+    run_test(
+        "update_pipe: Polling with no version or etag dedups by hashing the body",
+        async () => {
+            // 0. Poll a server that sends only a body — no version, no etag.
+            var ep = await add_main_handler(poll_server('cdh_' + rid(), 'hash'))
+            var updates = []
+            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            pipe.get(ep)
+
+            // 1. The first poll delivers the current state.
+            await sleep(150)
+            assert(updates.length === 1, 'first poll delivered the state')
+            assert(decode(updates[0].body) === 'state1', 'with the right body')
+
+            // 2. The same body hashes equal on later polls, so nothing is delivered.
+            await sleep(700)
+            var s = await poll_status(ep)
+            assert(updates.length === 1, 'an identical body stays silent')
+            assert(s.polls >= 3, 'yet the server kept being polled')
+
+            // 3. Change the body — the new hash is delivered.
+            await change_state(ep)
+            await sleep(400)
+            assert(updates.length === 2, 'a changed body is delivered')
+            assert(decode(updates[1].body) === 'state2', 'with the new body')
+
+            pipe.forget(ep)
         }
     )
 
