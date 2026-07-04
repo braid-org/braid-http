@@ -2058,7 +2058,8 @@ function reliable_update_channel (url, params) {
 
 function interstate (cb, options = {}) {
 
-    var reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
+    var base_url             = options.base_url,
+        reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
         poll_interval        = options.poll_interval        ?? 30,   // For URLs that don't support 209 subscriptions
         max_outstanding_puts = options.max_outstanding_puts ?? 10,   // Per host
 
@@ -2081,7 +2082,7 @@ function interstate (cb, options = {}) {
         hosts: {}                     // hostname -> host
     }
 
-    var hostname = (url) => new URL(url).host
+    var hostname = (url) => new URL(url, base_url).host
     var host_of  = (url) => network.hosts[hostname(url)]
     var currently_idle = () => Object.keys(network.hosts).length === 0
 
@@ -2296,6 +2297,26 @@ function interstate (cb, options = {}) {
     }
 
 
+    function process_mime_type (update, resource) {
+        // Store the content_type, if it's changed
+        if (update.content_type)
+            resource.content_type = update.content_type
+        // Otherwise, import it from the past
+        update.content_type = resource.content_type
+
+        // Decode a text/* body to a string, and a JSON body to a parsed value.
+        if (update.body == null) return update
+
+        var type = update.content_type ?? ''
+        if (type.includes('json'))
+            update.body = JSON.parse(new TextDecoder().decode(update.body))
+        else if (type.startsWith('text/'))
+            update.body = new TextDecoder().decode(update.body)
+
+        return update
+    }
+
+
     // Map a HTTP response status to what we do about it:
     function classify_response_status (method, status) {
         // Note that the success cases (209 / 2xx) are handled inline by GET/PUT.
@@ -2396,7 +2417,13 @@ function interstate (cb, options = {}) {
             clearTimeout(req.timeout_timer)
             if (req.aborter.signal.aborted) return
 
-            // We got a response!  Figure out how to respond to the response:
+            // We got a response!
+
+            // Store the content-type
+            var content_type = res.headers.get('repr-type')
+            if (content_type) resource.content_type = content_type
+
+            // Figure out how to respond to the response:
             var disposition = classify_response_status('GET', res.status)
 
             // Maybe we got a working subscription!
@@ -2408,10 +2435,14 @@ function interstate (cb, options = {}) {
                     update => {
                         // Remember the new version
                         if (update.version) resource.last_version = update.version
-                        // And fire the update!
-                        cb(update.status === 404 || update.status === 410
-                            ? {type: 'delete', url: req.url, version: update.version}
-                            : {...update, type: 'set', url: req.url})
+
+                        // Announce a delete
+                        if (update.status === 404 || update.status === 410)
+                            cb({type: 'delete', url: req.url, version: update.version})
+
+                        // Or an update!
+                        else
+                            cb({...process_mime_type(update, resource), type: 'set', url: req.url})
                     },
                     err => get_failed(req, err)
                 )
@@ -2426,7 +2457,7 @@ function interstate (cb, options = {}) {
                 // The update is in the respones
                 var update = await res.update()
                 if (await polled_update_differs(resource, update, res))
-                    cb({...update, type: 'set', url: req.url})
+                    cb({...process_mime_type(update, resource), type: 'set', url: req.url})
 
                 // And poll again in 30s!
                 retry_request(req, poll_interval)
@@ -2469,7 +2500,7 @@ function interstate (cb, options = {}) {
     //    the pipe is up.
     //  - Only a thrown or timed-out request is a pipe failure.
     async function PUT (req) {
-        var host    = host_of(req.url)
+        var host = host_of(req.url)
 
         // Fail the pipe if the PUT doesn't answer in time.  deactivate_request
         // clears this, so we need no abort listener.
