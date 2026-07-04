@@ -123,16 +123,16 @@
     }
     var pipe = update_pipe((m) => {
         var row = rowByUrl[m.url]
-        if (m.message === 'set' || m.message === 'delete')
+        if (m.type === 'set' || m.type === 'delete')
             row?.events.push({t: performance.now(), type: 'in'})   // incoming: ↓, timeline only
-        else if (m.message === 'ack')                             // write landed → solid ↑ at ack time
+        else if (m.type === 'ack')                             // write landed → solid ↑ at ack time
             row?.events.push({t: performance.now(), type: 'out', status: 'acked'})
-        else if (m.message === 'error') {
+        else if (m.type === 'error') {
             if (m.method === 'GET')
                 row?.events.push({t: performance.now(), type: 'error'})
             else                                                  // write gave up → red ↑ at fail time
                 row?.events.push({t: performance.now(), type: 'out', status: 'error'})
-            log('error ' + m.method + ' ' + m.url.replace(/^https?:\/\//, '') + ' ' + (m.status ?? m.error))
+            log('error ' + m.method + ' ' + m.url.replace(/^https?:\/\//, '') + ' ' + (m.description))
         }
     }, scenario.pipe_options || {})
 

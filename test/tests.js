@@ -5417,7 +5417,7 @@ run_test(
             // 1. It's reported once as an error, carrying the status.
             await sleep(300)
             assert(errors.length === 1, 'give-up reported once')
-            assert(errors[0].status === 500, 'status surfaced')
+            assert(errors[0].description === 500, 'status surfaced')
 
             // 2. The write is dropped, so its write-only host is GC'd.
             assert(pipe.network.hosts[host] === undefined, "gave-up PUT's host is GC'd")
@@ -5542,7 +5542,7 @@ run_test(
             // 1. It's reported once as an error — the 403, on the GET.
             await sleep(300)
             assert(errors.length === 1, 'one error reported')
-            assert(errors[0].status === 403, 'the 403 surfaced')
+            assert(errors[0].description === 403, 'the 403 surfaced')
             assert(errors[0].method === 'GET', 'on the GET')
 
             // 2. The subscription is cancelled, so its host is GC'd.

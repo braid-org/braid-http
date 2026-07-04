@@ -2341,7 +2341,7 @@ function interstate (cb, options = {}) {
         if (disposition === 'retry')
             return retry_request(req, compute_retry_after(res))
         delete_request(req)   // give up on this resource
-        cb({type: 'error', url: req.url, method: req.method, status: res.status})
+        cb({type: 'error', url: req.url, method: req.method, description: res.status})
     }
 
     // Re-fire this request after a delay.
@@ -2460,7 +2460,7 @@ function interstate (cb, options = {}) {
         }
         // parse / protocol / app: reconnecting won't help — cancel the URL.
         delete_request(req)
-        cb({type: 'error', url: req.url, method: req.method, error: err.message})
+        cb({type: 'error', url: req.url, method: req.method, description: err.message})
     }
 
     // Send one PUT (or DELETE).
@@ -2502,7 +2502,7 @@ function interstate (cb, options = {}) {
                 return pipe_failed(host)   // host down; PUT stays queued for a resend
             // parse / protocol / app: the write itself is bad — cancel it.
             delete_request(req)
-            cb({type: 'error', url: req.url, method: req.method, error: err.type})
+            cb({type: 'error', url: req.url, method: req.method, description: err.type})
         }
     }
 
