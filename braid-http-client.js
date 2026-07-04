@@ -2592,7 +2592,7 @@ function interstate (cb, options = {}) {
         }
     }
 
-    // == Subscription Poll fallback ==
+    // == Subscription Poll Fallback Helpers ==
 
     // Does this update differ from the last one?
     async function polled_update_differs (resource, update, res) {
