@@ -2135,17 +2135,17 @@ function interstate (cb, options = {}) {
         var host = host_of(req.url) || create_host_state(hostname(req.url))
 
         // File the request into its resource object:
-        var resource = host.urls[req.url]
-            || (host.urls[req.url] = {subscription: null, put_queue: new Set(),
-                                      last_version: null, last_etag: null, last_hash: null})
+        var resource = host.urls[req.url] || (host.urls[req.url] = {
+            subscription: null, put_queue: new Set(),
+            last_version: null, last_etag: null, last_hash: null
+        })
 
         // A GET becomes a subscription
         if (req.method === 'GET')   resource.subscription = req
 
         // A PUT or DELETE joins the ordered put_queue:
         else                        resource.put_queue.add(req)
-
-        // (Because we think of DELETE as a type of "put".)
+        // (We think of DELETE as a type of "put".)
 
         // And now send anything we can!
         if (host.online) send_host_requests(host)
@@ -2332,7 +2332,7 @@ function interstate (cb, options = {}) {
                                             return is_get ? 'poll' : 'acked'
 
             case 304:                       // If-None-Match matched: unchanged
-                                            return is_get ? 'unchanged' : 'give_up'
+                                            return is_get ? 'poll-noop' : 'give_up'
 
             // Transient at this URL: retry just this request after a delay.
             case 502: case 503: case 504:   // origin down / unavailable / gateway timeout
@@ -2352,7 +2352,7 @@ function interstate (cb, options = {}) {
         }
 
         // unknown: surface it, keep trying
-        console.log('Unknown status code', status, 'retrying...')
+        console.warn('Unknown status code', status, 'retrying...')
         return 'retry'
     }
 
@@ -2463,7 +2463,7 @@ function interstate (cb, options = {}) {
                 retry_request(req, poll_interval)
 
             // Or the server says nothing changed since our If-None-Match.
-            } else if (disposition === 'unchanged') {
+            } else if (disposition === 'poll-noop') {
                 host_showed_life(host)
                 retry_request(req, poll_interval)
 
