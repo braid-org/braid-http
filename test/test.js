@@ -56,10 +56,7 @@ var test_update = {
     parents: ['oldie'],
     body: JSON.stringify({this: 'stuff'})
 }
-var retries_left = 4
 var giveup_completely_set = {}
-var faulty_mux_i = 0
-var deleted_request_count = {}
 
 process.on("unhandledRejection", (x) => {
     if (mode === 'browser') console.log(`unhandledRejection: ${x.stack}`)
@@ -74,18 +71,56 @@ process.on("uncaughtException", (x) =>
 
 var braid_text_instance = create_braid_text()
 braid_text_instance.db_folder = null
-global.braid_text_fail_first_get = {}     // key -> true, returns 500
 global.braid_text_fail_first_put = {}     // key -> true, returns 500
 global.braid_text_first_get_status = {}   // key -> {status, retry_after?}
 global.braid_text_first_put_status = {}   // key -> {status, retry_after?}
-global.braid_text_get_parents_log = {}    // key -> [parents-header-value, ...]
-global.braid_text_put_delay_ms = {}       // key -> ms to delay each PUT by
-global.braid_text_put_concurrency = {}    // key -> {current, max}
-global.braid_text_hang_first_put = {}     // key -> true, first PUT hangs forever
-global.braid_text_headers_log = {}        // key -> [{method, headers}, ...]
+
+// Reads a request body of the form {handler: "<source of a
+// (req, res, ...args) => {...} function>", args}, evals the handler source,
+// and hands {fn, args} to cb. This is how tests register their own handlers
+// on our servers, on the fly. The args are JSON-serialized values the test
+// wants passed to the handler after (req, res) on each request -- handy
+// because the handler runs server-side, so it can't close over test-side
+// variables. (The eval happens at module scope, so handler source can still
+// use test.js globals like braidify, test_update, port, ...)
+function read_posted_handler(req, cb) {
+    var chunks = []
+    req.on('data', chunk => chunks.push(chunk))
+    req.on('end', () => {
+        var { handler, args } = JSON.parse(Buffer.concat(chunks).toString())
+        cb({ fn: eval('(' + handler + ')'), args })
+    })
+}
+
+// A registry of handlers that tests have added to a server on the fly: POST a
+// handler to /add-handler (in the format read_posted_handler expects), and we
+// mount it at a fresh path and return that path for the test to hit. Each
+// server makes its own registry, and calls handle() on incoming requests --
+// it returns true if it consumed the request (registering a new handler, or
+// running a mounted one).
+function create_added_handlers() {
+    var handlers = new Map()
+    return {
+        handle(req, res) {
+            if (req.url === '/add-handler' && req.method === 'POST') {
+                read_posted_handler(req, entry => {
+                    var path = '/added-handler/' + Math.random().toString(36).slice(2)
+                    handlers.set(path, entry)
+                    res.end(path)
+                })
+                return true
+            }
+            var entry = handlers.get(req.url.split('?')[0])
+            if (entry) {
+                entry.fn(req, res, ...entry.args)
+                return true
+            }
+        }
+    }
+}
 
 function create_test_server() {
-    var added_handlers = new Map()
+    var added_handlers = create_added_handlers()
     var pre_braidify_handlers = []
     var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
@@ -97,47 +132,21 @@ function create_test_server() {
         // Lets tests register a handler that runs *before* braidify (and before
         // the magic multiplex routes below), on every request, so it can
         // intercept things braidify would otherwise consume -- e.g. MULTIPLEX
-        // and /.well-known/multiplexer/ requests. POST the source of a
-        // (req, res) => {...} function; it should return true if it handled the
+        // and /.well-known/multiplexer/ requests. POST a handler in the format
+        // read_posted_handler expects; it should return true if it handled the
         // response (so we stop processing this request).
-        if (req.url === '/add-pre-braidify-handler' && req.method === 'POST') {
-            var chunks = []
-            req.on('data', chunk => chunks.push(chunk))
-            req.on('end', () => {
-                pre_braidify_handlers.push(eval('(' + Buffer.concat(chunks).toString() + ')'))
+        if (req.url === '/add-pre-braidify-handler' && req.method === 'POST')
+            return read_posted_handler(req, entry => {
+                pre_braidify_handlers.push(entry)
                 res.end('ok')
             })
-            return
-        }
-        for (var handler of pre_braidify_handlers)
-            if (handler(req, res)) return
+        for (var { fn, args } of pre_braidify_handlers)
+            if (fn(req, res, ...args)) return
 
         // MULTIPLEX
         var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
-        if (is_mux)
-            var [multiplexer, request] = req.url.split('/').slice(req.method === 'MULTIPLEX' ? 1 : 3)
 
-        if (is_mux && request) deleted_request_count[request] = (deleted_request_count[request] ?? 0) + 1
-
-        if (is_mux && multiplexer === 'faulty_mux') {
-            faulty_mux_i++
-            if (faulty_mux_i === 1) {
-                res.writeHead(425)
-                return res.end('')
-            }
-        } else if (is_mux && multiplexer === 'bad_mux') {
-            res.writeHead(500)
-            return res.end('')
-        } else if (is_mux && multiplexer === 'bad_mux_method' && req.method === 'MULTIPLEX') {
-            res.writeHead(500)
-            return res.end('')
-        } else if (is_mux && multiplexer === 'bad_mux_well_known_url' && req.url.startsWith('/.well-known/multiplexer/')) {
-            res.writeHead(500)
-            return res.end('')
-        } else if (is_mux && request === 'bad_request') {
-            res.writeHead(500)
-            return res.end('')
-        } else if (req.url === '/500') {
+        if (req.url === '/500') {
             res.writeHead(500)
             return res.end('')
         }
@@ -160,25 +169,9 @@ function create_test_server() {
             })
         })
 
-        if (req.url.startsWith('/eval_pre_braidify') && req.method === 'POST')
-            if ((await eval_func()) !== 'keep going') return res.end('ok')
-
-
         // Braid-text test endpoint
         if (req.url.startsWith('/braid-text-test')) {
             var key = req.url.split('?')[0]
-            // Optional: record all headers on each request (for tests)
-            if (braid_text_headers_log[key])
-                braid_text_headers_log[key].push({method: req.method, headers: {...req.headers}})
-            // Optional: log the parents header seen on each GET (for tests)
-            if (req.method === 'GET' && braid_text_get_parents_log[key])
-                braid_text_get_parents_log[key].push(req.headers.parents ?? null)
-            // Optional: fail the first GET on this URL, then succeed (for retry tests)
-            if (req.method === 'GET' && braid_text_fail_first_get[key]) {
-                delete braid_text_fail_first_get[key]
-                res.writeHead(500)
-                return res.end('')
-            }
             // Optional: return a specific status (and optional Retry-After)
             // on the first GET of this key, then succeed on subsequent GETs
             if (req.method === 'GET' && braid_text_first_get_status[key]) {
@@ -195,11 +188,6 @@ function create_test_server() {
                 res.writeHead(500)
                 return res.end('')
             }
-            // Optional: hang the first PUT forever (for timeout tests)
-            if (req.method === 'PUT' && braid_text_hang_first_put[key]) {
-                delete braid_text_hang_first_put[key]
-                return  // never respond
-            }
             // Optional: return a specific status (and optional Retry-After)
             // on the first PUT of this key, then succeed on subsequent PUTs
             if (req.method === 'PUT' && braid_text_first_put_status[key]) {
@@ -210,20 +198,6 @@ function create_test_server() {
                     put_headers['Retry-After'] = String(put_spec.retry_after)
                 res.writeHead(put_spec.status, put_headers)
                 return res.end('')
-            }
-            // Optional: track PUT concurrency per key (for probe-first tests)
-            if (req.method === 'PUT' && braid_text_put_concurrency[key]) {
-                var c = braid_text_put_concurrency[key]
-                c.current++
-                if (c.current > c.max) c.max = c.current
-                var decremented = false
-                var dec = () => { if (!decremented) { decremented = true; c.current-- } }
-                res.on('close', dec)
-                res.on('finish', dec)
-            }
-            // Optional: delay each PUT by some number of ms (for probe-first tests)
-            if (req.method === 'PUT' && braid_text_put_delay_ms[key]) {
-                await new Promise(r => setTimeout(r, braid_text_put_delay_ms[key]))
             }
             return braid_text_instance.serve(req, res, {key})
         }
@@ -236,62 +210,17 @@ function create_test_server() {
             if ((await eval_func()) !== 'keep going') return
 
         // MULTIPLEX
-        if (req.url === '/kill_mux') {
-            braidify.multiplexers?.get(req.headers.mux)?.res.end('AAAAA')
-            return res.end(`ok`)
-        }
         if (is_mux) res.end('hm..')
 
-        // Lets tests register their own handlers on the fly: POST the source of
-        // a (req, res) => {...} function, and we eval it, mount it at a fresh
-        // path, and return that path for the test to hit.
-        if (req.url === '/add-handler' && req.method === 'POST') {
-            var chunks = []
-            req.on('data', chunk => chunks.push(chunk))
-            req.on('end', () => {
-                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
-                var path = '/added-handler/' + Math.random().toString(36).slice(2)
-                added_handlers.set(path, handler)
-                res.end(path)
-            })
-            return
-        }
-        if (added_handlers.has(req.url.split('?')[0]))
-            return added_handlers.get(req.url.split('?')[0])(req, res)
+        // Lets tests register their own handlers on the fly, and serves the
+        // handlers they've registered (see create_added_handlers above)
+        if (added_handlers.handle(req, res)) return
 
         // The server is ready to define normal test routes!
 
-        // 2. Serve the /single-update* routes
-
-        // Updates expressed within a single response body
-        if (req.url === '/single-update-snapshot') {
-            // Return a snapshot with a version and parents
-            res.statusCode = 200
-            res.setHeader('Content-Type', 'application/json')
-            res.sendUpdate({
-                version: ['3'],
-                parents: ['1'],
-                body: JSON.stringify({hello: 'world'})
-            })
-            res.end()
-        }
-        if (req.url.startsWith('/single-update-patches')) {
-            // Return a set of patches
-            res.statusCode = 200
-            //res.setHeader('Content-Type', 'application/json')
-            res.sendUpdate({
-                version: ['4'],
-                parents: ['3'],
-                patches: [{unit: 'json', range: '.hello', content: 'worlds'},
-                          {unit: 'json', range: '.and',   content: 'wonderverses'}]
-            })
-            res.end()
-        }
-
-
         // 3. Serve the /json route
         if (req.url.startsWith('/json') && req.method === 'GET') {
-            res.setHeader('content-type', req.headers.charset ? 'application/json; charset=utf-8' : 'application/json')
+            res.setHeader('content-type', 'application/json')
 
             if (giveup_completely_set[req.headers.giveup_completely]) {
                 res.statusCode = 500
@@ -302,105 +231,16 @@ function create_test_server() {
             if (req.subscribe)
                 res.startSubscription()
 
-            // test writing header after startSubscription
-            res.setHeader('post-sub-header', 'yup')
-
             // Send the current version
             if (!req.headers.skip_first) res.sendUpdate(test_update)
 
             res.multiplexer?.write('\r\r\n\r\r')
 
-            if (req.headers.send_unicode_version) res.sendUpdate({
-                version: ['hello🌍-0'],
-                body: 'hi'
-            })
-            if (req.headers.send_unicode_parents) res.sendUpdate({
-                parents: ['hello🌍-0', '🌈-5'],
-                body: 'hi'
-            })
-
             // Send a binary body update
-            if (req.headers.send_binary_body_arraybuffer) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                body: new Uint8Array([0, 1, 2, 3]).buffer
-            })
             if (req.headers.send_binary_body) res.sendUpdate({
                 version: ['test'],
                 parents: ['oldie'],
                 body: new Uint8Array([0, 1, 2, 3])
-            })
-            if (req.headers.send_binary_body_blob) {
-                await res.sendUpdate({
-                    version: ['test'],
-                    parents: ['oldie'],
-                    body: typeof Blob !== 'undefined' ?
-                        new Blob([new Uint8Array([0, 1, 2, 3])]) :
-                        'old node version'
-                })
-            }
-            if (req.headers.send_binary_body_buffer) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                body: Buffer.from(new Uint8Array([0, 1, 2, 3]))
-            })
-
-            // Send a binary patch update
-            if (req.headers.send_binary_patch_arraybuffer) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patch: {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer}
-            })
-            if (req.headers.send_binary_patch) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patch: {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])}
-            })
-            if (req.headers.send_binary_patch_blob) {
-                await res.sendUpdate({
-                    version: ['test'],
-                    parents: ['oldie'],
-                    patch: {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([0, 1, 2, 3])]) : 'old node version'}
-                })
-            }
-            if (req.headers.send_binary_patch_buffer) await res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patch: {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([0, 1, 2, 3]))}
-            })
-
-            // binary patches
-            if (req.headers.send_binary_patches_arraybuffer) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patches: [
-                    {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3]).buffer},
-                    {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13]).buffer}
-                ]
-            })
-            if (req.headers.send_binary_patches) res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patches: [
-                    {unit: 'text', range: '[0:0]', content: new Uint8Array([0, 1, 2, 3])},
-                    {unit: 'text', range: '[0:0]', content: new Uint8Array([10, 11, 12, 13])}
-                ]
-            })
-            if (req.headers.send_binary_patches_blob) await res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patches: [
-                    {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([0, 1, 2, 3])]) : 'old node version'},
-                    {unit: 'text', range: '[0:0]', content: typeof Blob !== 'undefined' ? new Blob([new Uint8Array([10, 11, 12, 13])]) : 'old node version'}
-                ]
-            })
-            if (req.headers.send_binary_patches_buffer) await res.sendUpdate({
-                version: ['test'],
-                parents: ['oldie'],
-                patches: [
-                    {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([0, 1, 2, 3]))},
-                    {unit: 'text', range: '[0:0]', content: Buffer.from(new Uint8Array([10, 11, 12, 13]))}
-                ]
             })
 
             if (req.headers.giveup) return setTimeout(() => res.end(), 300)
@@ -443,29 +283,6 @@ function create_test_server() {
             }
         }
 
-        // Simulate a framework that pre-buffers the request body
-        // (like Fastify or Express with body-parser)
-        if (req.url === '/json_prebuffered' && req.method === 'PUT') {
-            braidify(req, res)
-            // Read the stream into a buffer, then set already_buffered_body
-            var chunks = []
-            req.on('data', chunk => chunks.push(chunk))
-            req.on('end', async () => {
-                req.already_buffered_body = Buffer.concat(chunks)
-                if (req.headers.check_patch_content_text) {
-                    var update = await req.parseUpdate()
-                    for (var p of update.patches)
-                        res.write('' + p.content_text + '\n')
-                } else if (req.headers.check_body_text) {
-                    var update = await req.parseUpdate()
-                    res.write(update.body_text)
-                }
-                res.statusCode = 200
-                res.end()
-            })
-            return
-        }
-
         // Echo back the content-type header the server received
         if (req.url === '/json_echo_content_type' && req.method === 'PUT') {
             res.statusCode = 200
@@ -502,27 +319,6 @@ function create_test_server() {
             return
         }
 
-        // Test status: false suppressing the `HTTP <status> <reason>` line
-        if (req.url === '/status_false_test' && req.method === 'GET' && req.subscribe) {
-            res.startSubscription()
-
-            // This update suppresses its status line
-            res.sendUpdate({
-                version: ['no-status'],
-                status: false,
-                body: '"hidden"'
-            })
-
-            // This update prints a normal `HTTP 200 OK` status line
-            res.sendUpdate({
-                version: ['with-status'],
-                body: '"shown"'
-            })
-
-            setTimeout(() => res.end(), 100)
-            return
-        }
-
         // We'll accept Braid at the /json PUTs!
         if (req.url === '/json' && req.method === 'PUT') {
             if (req.headers.check_patch_content_text) {
@@ -533,18 +329,6 @@ function create_test_server() {
                 var update = await req.parseUpdate()
                 for (var p of update.patches)
                     res.write('' + p.content + '\n')
-            } else if (req.headers.check_everything_patch_content_text) {
-                var patches = await req.patches()
-                res.write(patches[0].content_text)
-            } else if (req.headers.check_everything_patch_binary) {
-                var patches = await req.patches()
-                res.write('' + patches[0].content)
-            } else if (req.headers.check_body_binary) {
-                var update = await req.parseUpdate()
-                res.write('' + update.body)
-            } else if (req.headers.check_body_text) {
-                var update = await req.parseUpdate()
-                res.write(update.body_text)
             }
             res.statusCode = 200
             res.end()
@@ -562,56 +346,19 @@ function create_test_server() {
             res.end(fs.readFileSync(path.join(__dirname, 'test-responses.txt')))
 
         // New routes for tests
-        if (req.url === "/400") {
-            res.writeHead(400, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ error: 400 }))
-        } else if (req.url === "/401") {
-            res.writeHead(401, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ error: 401 }))
-        } else if (req.url === "/keep_open") {
+        if (req.url === "/keep_open") {
         } else if (req.url === "/check_parents") {
             res.writeHead(200, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ parents: req.headers.parents }))
-        } else if (req.url === "/retry") {
-            if (retries_left > 0) {
-                retries_left--
-                res.writeHead(408, { "Content-Type": "application/json" })
-                res.end(JSON.stringify({ error: 408 }))
-            } else {
-                res.writeHead(200, { "Content-Type": "application/json" })
-                res.end(JSON.stringify(test_update))
-            }
         } else if (req.url === '/binary') {
             var buffer = Buffer.alloc(256)
             for (var i = 0; i < 256; i++) buffer[i] = i
 
-            if (req.subscribe) {
-                res.startSubscription()
-                res.sendUpdate({
-                    version: ['test'],
-                    parents: ['oldie'],
-                    body: buffer
-                })
-            } else {
-                res.writeHead(200, {
-                    "Content-Type": "application/octet-stream",
-                    "Content-Length": buffer.length
-                })
-                res.end(buffer)
-            }
-        } else if (req.url === '/noheartbeat') {
-            res.setHeader('Heartbeats', req.headers['heartbeats'])
-            delete req.headers['heartbeats']
-            res.startSubscription()
-            res.sendUpdate(test_update)
-            return
-        } else if (req.url === '/parse_error') {
-            res.startSubscription()
-            res.write(`hello: true\r\n`)
-            res.write(`hello\r\n`)
-            res.write('Content-Length: 2\r\n')
-            res.write('\r\n')
-            res.write('hi')
+            res.writeHead(200, {
+                "Content-Type": "application/octet-stream",
+                "Content-Length": buffer.length
+            })
+            res.end(buffer)
         }
     })
 
@@ -648,23 +395,12 @@ function create_express_middleware_server() {
         }
     })
 
-    // Lets tests register their own express handlers on the fly: POST the
-    // source of a (req, res) => {...} function, and we eval it, mount it at a
-    // fresh path, and return that path for the test to hit.
-    var added_handlers = new Map()
-    express_app.post("/add-handler", (req, res) => {
-        var chunks = []
-        req.on('data', chunk => chunks.push(chunk))
-        req.on('end', () => {
-            var body = Buffer.concat(chunks).toString()
-            var handler = eval('(' + body + ')')
-            var path = '/added-handler/' + Math.random().toString(36).slice(2)
-            added_handlers.set(path, handler)
-            res.end(path)
-        })
+    // Lets tests register their own express handlers on the fly, and serves
+    // the handlers they've registered (see create_added_handlers above)
+    var added_handlers = create_added_handlers()
+    express_app.use((req, res, next) => {
+        if (!added_handlers.handle(req, res)) next()
     })
-    express_app.all("/added-handler/*", (req, res) =>
-        added_handlers.get(req.path)(req, res))
 
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
@@ -673,7 +409,7 @@ function create_express_middleware_server() {
 }
 
 function create_wrapper_server() {
-    var added_handlers = new Map()
+    var added_handlers = create_added_handlers()
     return https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
@@ -683,22 +419,9 @@ function create_wrapper_server() {
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
-        // Lets tests register their own handlers on the fly: POST the source of
-        // a (req, res) => {...} function, and we eval it, mount it at a fresh
-        // path, and return that path for the test to hit.
-        if (req.url === '/add-handler' && req.method === 'POST') {
-            var chunks = []
-            req.on('data', chunk => chunks.push(chunk))
-            req.on('end', () => {
-                var handler = eval('(' + Buffer.concat(chunks).toString() + ')')
-                var path = '/added-handler/' + Math.random().toString(36).slice(2)
-                added_handlers.set(path, handler)
-                res.end(path)
-            })
-            return
-        }
-        if (added_handlers.has(req.url.split('?')[0]))
-            return added_handlers.get(req.url.split('?')[0])(req, res)
+        // Lets tests register their own handlers on the fly, and serves the
+        // handlers they've registered (see create_added_handlers above)
+        if (added_handlers.handle(req, res)) return
 
         if (req.url === '/wrapper-test' && req.method === 'GET') {
             res.setHeader('content-type', 'application/json')
@@ -721,17 +444,6 @@ function create_wrapper_server() {
                     })
                 }, 200)
             }
-        } else if (req.url === '/eval') {
-            var body = ''
-            req.on('data', chunk => body += chunk.toString())
-            req.on('end', () => {
-                try {
-                    eval(body)
-                } catch (error) {
-                    res.writeHead(500, { 'Content-Type': 'text/plain' })
-                    res.end(`Error: ${error.message}`)
-                }
-            })
         } else {
             res.writeHead(404)
             res.end('Not found')
@@ -741,12 +453,8 @@ function create_wrapper_server() {
 
 // Server using the new braidify.server() entry point (attaches to an
 // existing http.Server, intercepts 'request' events).  Listens on port+3.
-//
-// Hosts the same /wrapper-test-style endpoints, plus a /listener-test
-// endpoint that exercises the http2-proxy-bug pattern: setting a property
-// on `res` and reading it from inside an event listener.
-var listener_test_results = {}
 function create_wrapped_server() {
+    var added_handlers = create_added_handlers()
     var server = https.createServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
@@ -757,6 +465,10 @@ function create_wrapped_server() {
     server.on('request', (req, res) => {
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
+
+        // Lets tests register their own handlers on the fly, and serves the
+        // handlers they've registered (see create_added_handlers above)
+        if (added_handlers.handle(req, res)) return
 
         if (req.url === '/server-test' && req.method === 'GET') {
             res.setHeader('content-type', 'application/json')
@@ -776,36 +488,6 @@ function create_wrapped_server() {
             return
         }
 
-        // Listener test: set a property on res, attach a 'finish' listener
-        // that reads `this[prop]`.  This is the pattern that broke under
-        // the old property-forwarding hack (state on res, listener on res2,
-        // mismatch when listener fires).
-        if (req.url.startsWith('/listener-test/')) {
-            var test_id = req.url.split('/').pop()
-            res.my_marker = 'magic-' + test_id
-            var record = function () {
-                if (listener_test_results[test_id]) return  // already recorded
-                listener_test_results[test_id] =
-                    (this.my_marker === 'magic-' + test_id) ? 'ok' : 'fail'
-            }
-            res.on('finish', record)
-            res.on('close', record)
-            res.setHeader('content-type', 'application/json')
-            if (req.subscribe) res.startSubscription()
-            res.sendUpdate({
-                version: ['listener-test-' + test_id],
-                body: JSON.stringify({ id: test_id })
-            })
-            return
-        }
-
-        if (req.url.startsWith('/listener-result/')) {
-            var test_id = req.url.split('/').pop()
-            res.writeHead(200, { 'Content-Type': 'text/plain' })
-            res.end(listener_test_results[test_id] || 'pending')
-            return
-        }
-
         res.writeHead(404)
         res.end('Not found')
     })
@@ -814,6 +496,7 @@ function create_wrapped_server() {
 }
 
 function create_no_mux_server() {
+    var added_handlers = create_added_handlers()
     var server = require('http2').createSecureServer({
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
@@ -821,17 +504,12 @@ function create_no_mux_server() {
     }, async (req, res) => {
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
-        
+
         braidify_no_mux(req, res)
 
-        if (req.url === '/json' && req.method === 'GET') {
-            res.setHeader('content-type', 'application/json')
-            if (req.subscribe) res.startSubscription()
-            res.sendUpdate(test_update)
-            // Simulate an update after the fact
-            setTimeout(() => res.sendUpdate({version: ['another!'], body: '"!"'}), 200)
-            return
-        }
+        // Lets tests register their own handlers on the fly, and serves the
+        // handlers they've registered (see create_added_handlers above)
+        if (added_handlers.handle(req, res)) return
 
         res.writeHead(404)
         res.end('Not found')
@@ -1014,6 +692,9 @@ async function run_console_tests() {
     Object.defineProperty(wrapped_braid_fetch, 'reconnect_delay_ms', {
         get: () => braid_fetch.reconnect_delay_ms,
         set: (v) => { braid_fetch.reconnect_delay_ms = v }
+    })
+    Object.defineProperty(wrapped_braid_fetch, 'subscription_counts', {
+        get: () => braid_fetch.subscription_counts
     })
 
     // multiplex_fetch is imported from braid-http-client.js
