@@ -344,6 +344,18 @@ braidify.handler = function (handler) {
 braidify.server = function (server) {
     if (server._braidified_server) return server
     server._braidified_server = true
+
+    // Increase the maximum streems to 1 million from 1 hundred
+    // Works in safari and firefox.  Chrome still limits us to 256.
+    var opts = server[Object.getOwnPropertySymbols(server)
+                      .find(s => s.description === 'options')]
+    if (opts?.settings?.maxConcurrentStreams == null)
+        server.on('session', (session) => {
+            try { session.settings({ maxConcurrentStreams: 1000000 }) }
+            catch (e) { /* http1 session, or a settings frame already in flight */ }
+        })
+
+    // Wrap the .emit() function to add braidify helpers
     var original_emit = server.emit.bind(server)
     server.emit = function (event, ...args) {
         if (event !== 'request') return original_emit(event, ...args)
