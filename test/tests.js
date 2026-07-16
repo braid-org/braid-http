@@ -1,8 +1,12 @@
 // Shared test definitions that work in both Node.js and browser environments
-// This file exports a function that takes a test runner and context
 
+// This module exports "define_tests(run_test, context)":
 function define_tests(run_test, context) {
-    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, update_pipe, base_url, assert } = context
+    // Get all the Javascript functions and variables we will be using.
+    // These are set differently in nodejs and the browser.
+    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch,
+          braid_fetch, reliable_update_channel, update_pipe, base_url, assert } = context
+
     // base_url is 'https://localhost:${port}' in console tests; in the browser
     // we derive it from the page's origin, so that endpoints returned by the
     // add_*_handler helpers are absolute urls in both modes -- several tests
@@ -6381,6 +6385,7 @@ run_test(
         var endpoint = await add_main_handler((req, res, s, sends) => {
             global['_subs_' + s] = (global['_subs_' + s] ?? []).concat(!!req.subscribe)
             res.startSubscription()
+            // Send all but the last update
             for (var u of sends.slice(0, -1)) res.sendUpdate(u)
             setTimeout(() => res.sendUpdate(sends[sends.length - 1]), 100)
         }, s, sends)
