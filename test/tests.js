@@ -1757,88 +1757,85 @@ run_test(
 var knob_turn = Promise.resolve()
 var serialize_knob_test = fn => knob_turn = knob_turn.then(fn, fn)
 
+// Takes a serialized turn with braidify.multiplex_wait set to ms, restoring
+// the pristine default afterwards even if fn throws. The pristine value is
+// captured once, on first use -- which serialization guarantees is before
+// any test has twiddled the knob -- so tests neither hardcode the default
+// nor inherit whatever a failed predecessor left behind
+var pristine_wait = null
+var with_multiplex_wait = (ms, fn) => serialize_knob_test(async () => {
+    if (pristine_wait === null)
+        pristine_wait = JSON.parse(await server_eval((req, res) =>
+            res.end(JSON.stringify(braidify.multiplex_wait))))
+    await server_eval((req, res, ms) => { braidify.multiplex_wait = ms; res.end('ok') }, ms)
+    try { return await fn() }
+    finally {
+        await server_eval((req, res, w) => { braidify.multiplex_wait = w; res.end('ok') }, pristine_wait)
+    }
+})
+
 run_test(
     "Test multiplex_wait suppresses 424 when POST arrives within window.",
-    () => serialize_knob_test(async () => {
+    // with_multiplex_wait holds the window at a generous 3s for our
+    // serialized turn (nobody else can shrink it mid-test), so the explicit
+    // park-then-POST sequencing below can't lose a race against the window
+    () => with_multiplex_wait(3000, async () => {
         // add a handler to the express server that sends one update and holds
-        // the subscription open. we use the express server because its
-        // middleware hands braidify a next() -- the server only holds
-        // requests for multiplex_wait when it has a way to re-run them later
+        // the subscription open. (why express? parking needs a braidify form
+        // with a continuation to re-run the request -- middleware, handler, or
+        // server, but not the main server's inline form; see the "has no
+        // effect without next" test. any of the three would do)
         var update = { version: ['test'], body: 'made it within the window' }
         var endpoint = await add_express_handler((req, res, update) => {
             res.startSubscription()
             res.sendUpdate(update)
         }, update)
 
-        // remember the server's multiplex_wait, to restore at the end (the
-        // test servers share one braidify module, so twiddling it through the
-        // main server's /eval reaches the express server too)
-        var og_wait = JSON.parse(await server_eval((req, res) =>
-            res.end(JSON.stringify(braidify.multiplex_wait))))
+        // send a Multiplex-Through GET naming a multiplexer that doesn't
+        // exist yet. instead of 424ing right away, the server should hold
+        // the request open for up to multiplex_wait ms
+        var m = Math.random().toString(36).slice(2)
+        var s = Math.random().toString(36).slice(2)
+        var get_done = false
+        var get_promise = og_fetch(endpoint, {
+            headers: {
+                'Subscribe': 'true',
+                'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
+                'Multiplex-Version': multiplex_version
+            }
+        }).then(x => {
+            get_done = true
+            return x
+        })
 
-        // multiplex_wait is a global knob that neighboring tests also twiddle,
-        // and in the browser tests run in parallel -- another test could
-        // shrink our window mid-attempt and 424 our GET early. retry if so
-        var m, s, r, post_r
-        for (var attempt = 0; ; attempt++) {
-            assert(attempt < 5, 'gave up: multiplex_wait kept getting changed under us')
-
-            // widen the wait window from its default 10ms, so the explicit
-            // park-then-POST sequencing below replaces the old version's
-            // 5ms-sleep-vs-10ms-window race
-            await server_eval((req, res) => {
-                braidify.multiplex_wait = 1000
-                res.end('ok')
-            })
-
-            // send a Multiplex-Through GET naming a multiplexer that doesn't
-            // exist yet. instead of 424ing right away, the server should hold
-            // the request open for up to multiplex_wait ms
-            m = Math.random().toString(36).slice(2)
-            s = Math.random().toString(36).slice(2)
-            var get_done = false
-            var get_promise = og_fetch(endpoint, {
-                headers: {
-                    'Subscribe': 'true',
-                    'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
-                    'Multiplex-Version': multiplex_version
-                }
-            }).then(x => {
-                get_done = true
-                return x
-            })
-
-            // wait until the server has actually parked our GET in the wait
-            // window (it registers a pending timeout keyed by our multiplexer
-            // id). this proves the wait mechanism really engaged, and
-            // guarantees the POST below lands *during* the window, not before
-            // -- the old version could pass without ever exercising the wait
-            while (!get_done && await server_eval((req, res, m) =>
-                res.end('' + !!braidify.pending_timeouts?.has(m)), m) !== 'true')
-                await new Promise(done => setTimeout(done, 3))
-
-            // if the GET resolved before we ever saw it parked, the window
-            // must have been stomped -- go around again
-            if (get_done) continue
-
-            // now create the multiplexer. the server should hand the waiting
-            // GET over to it instead of letting the 424 timer fire
-            post_r = await og_fetch(`https://localhost:${port + 1}/.well-known/multiplexer/${m}`, {
-                method: 'POST',
-                headers: { 'Multiplex-Version': multiplex_version }
-            })
-            assert(post_r.ok, 'expected the POST to create the multiplexer')
-
-            r = await get_promise
-            if (r.status !== 424) break
-
-            // stomped after parking: the 424 timer fired before our POST's
-            // multiplexer caught the GET. clean up and try again
-            await kill_mux(m)
+        // wait until the server has actually parked our GET in the wait
+        // window (it registers a pending timeout keyed by our multiplexer
+        // id). this proves the wait mechanism really engaged, and guarantees
+        // the POST below lands *during* the window, not before -- otherwise
+        // the test could pass without ever exercising the wait. bounded, so
+        // a regression fails with a diagnosis instead of hanging (and
+        // wedging the serialized knob tests queued behind us)
+        var parked_deadline = Date.now() + 8000
+        while (await server_eval((req, res, m) =>
+            res.end('' + !!braidify.pending_timeouts?.has(m)), m) !== 'true') {
+            assert(!get_done, 'expected the GET to be held in the wait window, '
+                   + 'but it resolved before we ever saw it parked')
+            assert(Date.now() < parked_deadline,
+                   'expected the GET to be parked in the wait window, but it never was')
+            await new Promise(done => setTimeout(done, 3))
         }
+
+        // now create the multiplexer. the server should hand the waiting
+        // GET over to it instead of letting the 424 timer fire
+        var post_r = await og_fetch(`https://localhost:${port + 1}/.well-known/multiplexer/${m}`, {
+            method: 'POST',
+            headers: { 'Multiplex-Version': multiplex_version }
+        })
+        assert(post_r.ok, 'expected the POST to create the multiplexer')
 
         // the GET should have resolved 293 (responded via multiplexer), and
         // its headers should point back at our multiplexer and request id
+        var r = await get_promise
         assert(r.status === 293, `expected 293, got ${r.status}`)
         assert(r.headers.get('multiplex-through') === `/.well-known/multiplexer/${m}/${s}`,
                'expected the response to name our multiplexer and request id')
@@ -1854,11 +1851,6 @@ run_test(
             seen += new TextDecoder().decode(value)
         }
 
-        // restore the multiplex_wait we found, and tear down our multiplexer
-        await server_eval((req, res, og_wait) => {
-            braidify.multiplex_wait = og_wait
-            res.end('ok')
-        }, og_wait)
         await kill_mux(m)
     })
 )
@@ -1871,25 +1863,23 @@ run_test(
 
 run_test(
     "Test multiplex_wait times out to 424 when POST never arrives.",
-    () => serialize_knob_test(async () => {
+    // 300ms window: stretched from the 10ms default so the mid-wait poll
+    // below can catch the parked request, and long enough that the elapsed
+    // check can tell a real wait from an immediate 424
+    () => with_multiplex_wait(300, async () => {
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
-
-        // stretch the wait window (default is only 10ms) so we can catch the
-        // server mid-wait below, remembering the old value to restore later
-        var old_wait = JSON.parse(await server_eval((req, res, wait) => {
-            var old = braidify.multiplex_wait
-            braidify.multiplex_wait = wait
-            res.end(JSON.stringify(old))
-        }, 300))
 
         // send a subscribe GET naming a multiplexer that will never be
         // created. the express server hands braidify a next() function, so
         // instead of 424ing immediately, multiplex_wait kicks in and holds
-        // the request open in case the multiplexer's POST is merely late
-        // (braidify intercepts this request before any route handler runs)
+        // the request open in case the multiplexer's POST is merely late.
+        // the path is a random one with NO route mounted on it: braidify
+        // parks the request and later answers the 424 itself, before express
+        // routing ever runs -- so no handler is needed, and if the request
+        // ever fell through to express we'd see its 404 instead of our 424
         var st = Date.now()
-        var get_promise = og_fetch(`https://localhost:${port+1}/middleware-test`, {
+        var get_promise = og_fetch(`https://localhost:${port+1}/${Math.random().toString(36).slice(2)}`, {
             headers: {
                 'Subscribe': 'true',
                 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}`,
@@ -1899,22 +1889,21 @@ run_test(
 
         // prove the wait mechanism actually engaged: while waiting, braidify
         // parks the request in pending_timeouts under our multiplexer id.
-        // spin until it shows up -- if it never engages, this loop spins
-        // until the test runner's timeout fails the test
+        // spin until it shows up -- bounded, so a regression fails with a
+        // diagnosis instead of hanging (and wedging the serialized knob
+        // tests queued behind us)
+        var engage_deadline = Date.now() + 8000
         while (await server_eval((req, res, m) =>
-            res.end('' + !!braidify.pending_timeouts?.has(m)), m) !== 'true')
+            res.end('' + !!braidify.pending_timeouts?.has(m)), m) !== 'true') {
+            assert(Date.now() < engage_deadline,
+                   'expected the request to be parked in the multiplex_wait window, but it never was')
             await new Promise(done => setTimeout(done, 5))
+        }
 
         // with no POST ever arriving, the GET should give up with a 424
         // naming the missing multiplexer, and only after the full window
         var r = await get_promise
         var elapsed = Date.now() - st
-
-        // restore the wait window before asserting anything
-        await server_eval((req, res, wait) => {
-            braidify.multiplex_wait = wait
-            res.end('ok')
-        }, old_wait)
 
         assert(r.status === 424, 'expected a 424 status')
         assert(r.headers.get('bad-multiplexer') === m, 'expected bad-multiplexer header naming the missing multiplexer')
@@ -1930,7 +1919,12 @@ run_test(
 
 run_test(
     "Test multiplex_wait=0 disables waiting (immediate 424).",
-    () => serialize_knob_test(async () => {
+    // the wrapper primes the window to 3 seconds; the test then sets it to 0
+    // (the subject of this test). priming high first keeps the test honest:
+    // if the 0 fails to disable waiting, the GET below stalls for seconds
+    // and trips the elapsed check, rather than sneaking in under it after a
+    // stale 10ms default wait
+    () => with_multiplex_wait(3000, async () => {
         var m = Math.random().toString(36).slice(2)
         var s = Math.random().toString(36).slice(2)
 
@@ -1943,14 +1937,7 @@ run_test(
             res.end('ok')
         }, s)
 
-        // crank the wait up to 3 seconds, then set it to 0. priming it high
-        // first keeps the test honest: if the 0 fails to disable waiting, the
-        // GET below stalls for seconds and trips the elapsed check, rather
-        // than sneaking in under it after a stale 10ms default wait
-        await server_eval((req, res) => {
-            braidify.multiplex_wait = 3000
-            res.end('ok')
-        })
+        // now the move under test: zero the window
         await server_eval((req, res) => {
             braidify.multiplex_wait = 0
             res.end('ok')
@@ -1967,13 +1954,6 @@ run_test(
         })
         var elapsed = Date.now() - st
 
-        // restore the default before asserting anything, so a failed assert
-        // doesn't leave the knob broken for other tests
-        await server_eval((req, res) => {
-            braidify.multiplex_wait = 10
-            res.end('ok')
-        })
-
         // the request should fail right away with 424, blaming our multiplexer
         assert(r.status === 424, 'expected 424')
         assert(r.headers.get('bad-multiplexer') === m, 'expected our multiplexer to be blamed')
@@ -1989,7 +1969,13 @@ run_test(
 
 run_test(
     "Test multiple requests waiting for same multiplexer via multiplex_wait.",
-    () => serialize_knob_test(async () => {
+    // the 5s window is generous because in the parallel browser runner the
+    // two GETs below can arrive well apart -- each pays a CORS preflight and
+    // competes with other tests for chrome's 6-connections-per-host budget
+    // -- and both must be parked at the same moment for the poll below.
+    // holding the window open this long is safe because the knob tests are
+    // serialized (see with_multiplex_wait)
+    () => with_multiplex_wait(5000, async () => {
         // add a handler to the express server (whose braidify runs as
         // middleware with a next(), so multiplex_wait applies) that opens a
         // subscription and echoes back which multiplexed request id it's
@@ -1997,21 +1983,6 @@ run_test(
         var endpoint = await add_express_handler((req, res) => {
             res.startSubscription()
             res.sendUpdate({ body: `hello ${req.headers['multiplex-through'].split('/')[4]}` })
-        })
-
-        // raise multiplex_wait, giving the requests below plenty of time to
-        // wait for their multiplexer (all the test servers share one braidify
-        // module, so setting this on the main server sets it everywhere).
-        // the window is generous because in the parallel browser runner the
-        // two GETs below can arrive well apart -- each pays a CORS preflight
-        // and competes with other tests for chrome's 6-connections-per-host
-        // budget -- and both must be parked at the same moment for the poll
-        // below. the knob tests are serialized (see serialize_knob_test), so
-        // holding the window open this long can't destabilize a neighboring
-        // test's timing
-        await server_eval((req, res) => {
-            braidify.multiplex_wait = 5000
-            res.end('ok')
         })
 
         var m = Math.random().toString(36).slice(2)
@@ -2062,13 +2033,6 @@ run_test(
 
         var [r1, r2] = await Promise.all([get1, get2])
 
-        // restore the multiplex_wait default before asserting anything, so a
-        // failure below doesn't leave the raised value behind
-        await server_eval((req, res) => {
-            braidify.multiplex_wait = 10
-            res.end('ok')
-        })
-
         // both held GETs should have resolved with 293 ("your response will
         // arrive via the multiplexer") -- not 424
         assert(r1.status === 293, `expected 293 for first request, got ${r1.status}`)
@@ -2096,7 +2060,12 @@ run_test(
 
 run_test(
     "Test multiplex_wait has no effect without next (main server).",
-    () => serialize_knob_test(async () => {
+    // the window is widened to a full second as contrast dye -- the old
+    // version of this test checked elapsed < 50ms, which couldn't tell an
+    // immediate 424 from one that waited out the default 10ms window; with a
+    // wide window, a wrongly parked request gets caught red-handed by the
+    // polling below instead
+    () => with_multiplex_wait(1000, async () => {
         // the main server calls braidify(req, res) inline, without a next().
         // with no way to re-run the request later, braidify can't park
         // Multiplex-Through requests in the multiplex_wait window, so naming
@@ -2109,18 +2078,6 @@ run_test(
             global['_ran_' + s] = (global['_ran_' + s] ?? 0) + 1
             res.end('handler ran')
         }, s)
-
-        // remember the server's multiplex_wait to restore at the end, and
-        // widen it from its default 10ms -- the old version of this test
-        // checked elapsed < 50ms, which couldn't tell an immediate 424 from
-        // one that waited out the window; with a wide window, a wrongly
-        // parked request gets caught red-handed by the polling below instead
-        var og_wait = JSON.parse(await server_eval((req, res) =>
-            res.end(JSON.stringify(braidify.multiplex_wait))))
-        await server_eval((req, res) => {
-            braidify.multiplex_wait = 1000
-            res.end('ok')
-        })
 
         // send a Multiplex-Through GET naming a multiplexer that doesn't
         // exist (and never will)
@@ -2157,12 +2114,6 @@ run_test(
         assert(await server_eval((req, res, s) =>
             res.end('' + (global['_ran_' + s] ?? 0)), s) === '0',
             'expected braidify to hide the request from the handler')
-
-        // restore the multiplex_wait we found
-        await server_eval((req, res, og_wait) => {
-            braidify.multiplex_wait = og_wait
-            res.end('ok')
-        }, og_wait)
     })
 )
 
