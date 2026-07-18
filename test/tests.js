@@ -4106,49 +4106,48 @@ run_test(
         // replacement that records whether it saw our request -- identified
         // by a random marker in the url, so that (in the parallel browser
         // runner) a concurrent test's traffic can't trip the flag for us --
-        // before delegating to the real transport
+        // before delegating to the transport it replaced. set_fetch hands
+        // that one back, and the finally restores it, so a failed assert
+        // can't leave the replacement installed for the rest of the suite
         var c = Math.random().toString(36).slice(2)
         var client_saw_it = false
-        fetch.set_fetch((...args) => {
+        var og_transport = fetch.set_fetch((...args) => {
             if (('' + args[0]).includes(c)) client_saw_it = true
-            return og_fetch(...args)
+            return og_transport(...args)
         })
-
-        // fetch the endpoint, tagged with the marker, and make sure the
-        // request really went through the replacement and that the
-        // replacement still carried it to the server and back
-        var r = await fetch(`${endpoint}?${c}`)
-        var body = await r.text()
-        assert(client_saw_it, 'expected braid_fetch to use the fetch given to set_fetch')
-        assert(body === 'hello', 'expected the replacement fetch to still deliver the response')
-
-        // put the original transport back before touching the server, since
-        // in the console runner the client and server share one braid_fetch
-        // module. braid_fetch's original transport is the environment's
-        // global fetch: in the browser that's og_fetch (window.fetch, saved
-        // before it was replaced with braid_fetch), but in the console
-        // runner og_fetch is the harness's http2 wrapper, and the original
-        // is node's global fetch
-        fetch.set_fetch(typeof window === 'undefined' ? globalThis.fetch : og_fetch)
+        try {
+            // fetch the endpoint, tagged with the marker, and make sure the
+            // request really went through the replacement and that the
+            // replacement still carried it to the server and back
+            var r = await fetch(`${endpoint}?${c}`)
+            var body = await r.text()
+            assert(client_saw_it, 'expected braid_fetch to use the fetch given to set_fetch')
+            assert(body === 'hello', 'expected the replacement fetch to still deliver the response')
+        } finally {
+            fetch.set_fetch(og_transport)
+        }
 
         // now do the same to the server's braid_fetch: swap in a
         // marker-watching replacement, make a server-side braid_fetch tagged
-        // with the marker, and restore the server's original transport (the
-        // endpoint's path and marker are passed as args, since this function
-        // is eval'd in the server's scope)
+        // with the marker, and restore the replaced transport (the endpoint's
+        // path and marker are passed as args, since this function is eval'd
+        // in the server's scope)
         var s = Math.random().toString(36).slice(2)
         var pathname = new URL(endpoint, 'https://x').pathname
         var got = await server_eval(async (req, res, pathname, s) => {
             if (typeof fetch === 'undefined') return res.end('old node version')
 
             var saw_it = false
-            braid_fetch.set_fetch((...args) => {
+            var og_transport = braid_fetch.set_fetch((...args) => {
                 if (('' + args[0]).includes(s)) saw_it = true
-                return fetch(...args)
+                return og_transport(...args)
             })
-            var r = await braid_fetch(`https://localhost:${port}${pathname}?${s}`)
-            var body = await r.text()
-            braid_fetch.set_fetch(fetch)
+            try {
+                var r = await braid_fetch(`https://localhost:${port}${pathname}?${s}`)
+                var body = await r.text()
+            } finally {
+                braid_fetch.set_fetch(og_transport)
+            }
             res.end(JSON.stringify({ saw_it, body }))
         }, pathname, s)
 

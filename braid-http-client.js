@@ -128,7 +128,9 @@ if (is_nodejs) {
     // window.fetch = braid_fetch
 }
 
-braid_fetch.set_fetch = f => normal_fetch = f
+// Swaps the underlying transport; returns the one it replaces, so callers
+// can restore it afterwards
+braid_fetch.set_fetch = f => { var old = normal_fetch; normal_fetch = f; return old }
 
 // Global event listeners for debugging/devtools
 var braid_fetch_listeners = {}
