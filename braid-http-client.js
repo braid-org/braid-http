@@ -274,6 +274,16 @@ async function braid_fetch (url, params = {}) {
             if (!braid_fetch.subscription_counts[origin])
                 delete braid_fetch.subscription_counts[origin]
         }
+
+        // The count must come down on every way a subscription can die.
+        // Errors and give-ups flow through handlers below that call this --
+        // but only when something is reading the subscription. An abort with
+        // no reader attached would otherwise never be noticed, leaking the
+        // count (and skewing the multiplex {after: N} heuristic) forever.
+        // This listener catches that case; the self-nulling closure makes it
+        // safe for several of these paths to fire on the same subscription.
+        original_signal?.addEventListener('abort',
+            () => subscription_counts_on_close?.())
     }
 
     return await new Promise((done, fail) => {
@@ -617,6 +627,9 @@ async function braid_fetch (url, params = {}) {
                             give_up = false
                     }
                     if (give_up) {
+                        // a fatal status ends the subscription for good:
+                        // release its slot in the per-origin count
+                        subscription_counts_on_close?.()
                         if (params.onSubscriptionStatus && subscription_online) {
                             subscription_online = false
                             params.onSubscriptionStatus({

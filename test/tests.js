@@ -1481,11 +1481,10 @@ run_test(
 run_test(
     "Test 2nd GET causing multiplexed connection.",
     async () => {
-        // this test needs an origin whose subscription count starts at zero,
-        // so we use the express server: the main server's count is inflated
-        // by earlier tests, because aborting a subscription that was never
-        // read leaks braid_fetch.subscription_counts (the client only
-        // decrements it when a reader sees the subscription end)
+        // this test needs an origin whose subscription count starts at zero.
+        // we use the express server because it is a quiet one: in the
+        // parallel browser runner the main origin nearly always has other
+        // tests' subscriptions live on it, so its count rarely rests at zero
         var endpoint = await add_express_handler((req, res) => {
             res.startSubscription()
             res.sendUpdate({ body: 'hi' })
@@ -1500,16 +1499,15 @@ run_test(
         var a, r, r2
         for (var attempt = 0; ; attempt++) {
             // wait for this origin's subscriptions from other tests to wind
-            // down (aborts take a few ticks to propagate). the wait is
-            // bounded so that if some test ever leaks a subscription on this
-            // origin, we fail pointing at the leak, rather than timing out
+            // down. the wait is bounded so that if the origin never
+            // quiesces, we fail with a diagnosis rather than timing out
             // mysteriously
             var give_up = Date.now() + 3000
             while (braid_fetch.subscription_counts?.[origin]) {
                 assert(Date.now() < give_up,
                        `expected origin ${origin} to quiesce, but its subscription count is stuck `
-                       + `at ${braid_fetch.subscription_counts?.[origin]} -- an earlier test probably `
-                       + `leaked a subscription on it (aborted without reading it?)`)
+                       + `at ${braid_fetch.subscription_counts?.[origin]} -- is another test holding `
+                       + `a long-lived subscription on this origin?`)
                 await new Promise(done => setTimeout(done, 10))
             }
 
@@ -1534,19 +1532,13 @@ run_test(
             if (braid_fetch.subscription_counts?.[origin] === 2) break
 
             // another test snuck a subscription in -- clean up and retry
+            // (aborting decrements the count synchronously, unread or not)
             assert(attempt < 5, 'gave up: other tests kept subscribing to this origin')
-            await new Promise(done => r.subscribe(done))
-            await new Promise(done => r2.subscribe(done))
             a.abort()
         }
 
         assert(!r.multiplexed_through, 'expected the first subscription not to be multiplexed')
         assert(r2.multiplexed_through, 'expected the second subscription to be multiplexed')
-
-        // read both subscriptions, so the abort below tears them down fully
-        // (and doesn't leak this origin's count for other tests)
-        await new Promise(done => r.subscribe(done))
-        await new Promise(done => r2.subscribe(done))
 
         a.abort()
     }
@@ -7408,13 +7400,6 @@ run_test(
             res.end('' + global['_hits_' + s2]), s2)
         assert(hits2 === '2', 'expected exactly two requests, got ' + hits2)
 
-        // the give-up path above never decrements the client's
-        // braid_fetch.subscription_counts for the origin (known client bug,
-        // like the abort-without-reading leak), so undo our +1 ourselves to
-        // avoid contaminating later multiplexing tests
-        var origin = new URL(endpoint2, typeof document !== 'undefined' ? document.baseURI : undefined).origin
-        if (braid_fetch.subscription_counts?.[origin] && !--braid_fetch.subscription_counts[origin])
-            delete braid_fetch.subscription_counts[origin]
     }
 )
 
@@ -8168,12 +8153,6 @@ run_test(
         assert(events[0].online === true, 'expected the event to be online')
         assert(Object.keys(events[0]).length === 1, 'expected no extra fields on the online event')
 
-        // read the first update before aborting. this dodges a known client
-        // bug: braid_fetch's per-origin subscription_counts (which drive the
-        // multiplex-after-N heuristic) only get decremented when a reader
-        // sees the subscription die, so aborting a never-read subscription
-        // would leak the count into later tests
-        await new Promise(done => r.subscribe(done, () => {}))
         a.abort()
     }
 )
@@ -8273,8 +8252,7 @@ run_test(
         })
 
         // read the first update, proving the subscription was really
-        // flowing before the hangup (and giving the client a reader, so it
-        // can clean up its subscription bookkeeping when the stream ends)
+        // flowing before the hangup
         var update = await new Promise(done => r.subscribe(done, () => {}))
         assert(update.body_text === 'hi', 'expected the first update to arrive')
 
