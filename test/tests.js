@@ -9381,19 +9381,20 @@ run_test(
             return true
         }, s, key)
 
-        // warm up a pool of connections against a trivial endpoint, and
-        // consume the responses, which returns each connection to the pool.
-        // without this the parallel puts below race: a put that finds an
-        // idle connection reaches the server (and gets its 500 back) in
-        // ~1ms, while the others are still in the tls handshake of a fresh
-        // connection -- so the reboot triggered by the 500 aborts them
-        // before they ever hit the wire, and the server never sees three
-        // puts in flight together, breaking the asserted request sequence.
-        // 8 covers every connection this test uses at once, plus the ones
-        // destroyed when the client aborts them mid-request
+        // the three parallel puts below must all reach the server before
+        // the first one's 500 comes back, because that 500 makes the channel
+        // abort the other two -- and a put still setting up a fresh
+        // connection loses that race and never hits the wire, breaking the
+        // asserted request sequence. so warm a pool of keep-alive
+        // connections first, on the same transport the channel's puts ride
+        // (fetch with multiplex off: node's fetch in the console runner,
+        // window.fetch in the browser), consuming each response so its
+        // connection returns to the pool. 8 covers every connection this
+        // test holds at once, with slack for the ones destroyed when the
+        // client aborts them mid-request
         var warm_endpoint = await add_main_handler((req, res) => res.end('ok'))
         await Promise.all(Array.from({length: 8}, () =>
-            og_fetch(warm_endpoint).then(r => r.text())))
+            fetch(warm_endpoint, {multiplex: false}).then(r => r.text())))
 
         // open a channel, collecting warnings, and wait for the initial
         // update so we know the subscription is up before we put
