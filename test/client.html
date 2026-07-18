@@ -127,12 +127,6 @@
 
 var og_fetch = fetch
 fetch = braid_fetch
-let test_update = {
-    version: ['test'],
-    parents: ['oldie'],
-    body: JSON.stringify({this: 'stuff'}),
-    status: "200"
-}
 let delay = 0
 // the base port of the test-server block (port, port+1, ... port+4) -- derive
 // it from the page's own origin, so browser tests work on any --port
@@ -240,6 +234,6 @@ function run_test(test_name, test_function, expected_result) {
 }
 
 // Load and run all tests from the shared tests.js file
-define_tests(run_test, { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch, braid_fetch, reliable_update_channel, update_pipe, assert })
+define_tests(run_test, { fetch, og_fetch, port, add_section_header, multiplex_fetch, braid_fetch, reliable_update_channel, update_pipe, assert })
 
 </script>

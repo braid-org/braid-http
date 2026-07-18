@@ -28,7 +28,6 @@
     "parse-headers": "^2.0.3"
   },
   "devDependencies": {
-    "braid-text": "~0.5.6",
     "express": "^4.22.1"
   }
 }

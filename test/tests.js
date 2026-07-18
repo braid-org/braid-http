@@ -4,7 +4,7 @@
 function define_tests(run_test, context) {
     // Get all the Javascript functions and variables we will be using.
     // These are set differently in nodejs and the browser.
-    var { fetch, og_fetch, port, add_section_header, test_update, multiplex_fetch,
+    var { fetch, og_fetch, port, add_section_header, multiplex_fetch,
           braid_fetch, reliable_update_channel, update_pipe, base_url, assert } = context
 
     // base_url is 'https://localhost:${port}' in console tests; in the browser
@@ -9215,20 +9215,33 @@ add_section_header("reliable_update_channel Tests")
 run_test(
     "reliable_update_channel receives updates via on_update and put sends a PUT",
     async () => {
-        // a fresh braid-text key for this test, and a random id for keying
-        // server-side state
+        // add a tiny doc server: it greets each subscriber with the current
+        // (empty) state and holds the subscription open, counts the PUTs
+        // that reach it in a keyed global, and echoes each accepted PUT's
+        // patch to every subscriber
         var s = Math.random().toString(36).slice(2)
-        var key = `/braid-text-test/rug_${s}`
-        var url = base_url + key
-
-        // count the PUTs that actually reach the server for our key
-        // (observing passively -- the request falls through to braid-text)
-        await add_pre_braidify_handler((req, res, key, s) => {
-            if (req.method === 'PUT' && req.url.split('?')[0] === key)
+        var endpoint = await add_main_handler(async (req, res, s) => {
+            var G = global['_rug_' + s] = global['_rug_' + s] ?? { subs: [], version: 0 }
+            if (req.method === 'PUT') {
                 global['_puts_' + s] = (global['_puts_' + s] ?? 0) + 1
-        }, key, s)
+                var update = await req.parseUpdate()
+                G.version++
+                for (var sub of G.subs)
+                    sub.sendUpdate({
+                        version: ['v' + G.version],
+                        patches: update.patches.map(p =>
+                            ({ unit: p.unit, range: p.range, content: p.content_text }))
+                    })
+                res.statusCode = 200
+                return res.end()
+            }
+            res.startSubscription()
+            res.sendUpdate({ version: ['v' + G.version], body: '' })
+            G.subs.push(res)
+        }, s)
+        var url = endpoint
 
-        // open the channel -- braid-text greets a new subscriber with the
+        // open the channel -- the server greets a new subscriber with the
         // current state as a first update, and our PUT below should be
         // echoed back as a second update
         var resolve_first, resolve_second
@@ -9244,8 +9257,8 @@ run_test(
         })
 
         // wait for the initial update -- once it arrives the subscription is
-        // established and the channel is online (no timer racing), and a
-        // fresh key's initial state should be empty
+        // established and the channel is online (no timer racing), and the
+        // initial state should be empty
         var first = await got_first
         assert(first.body_text === '', 'expected the initial update to be the empty state')
 
@@ -9326,17 +9339,45 @@ run_test(
         var key = '/put-retry-' + s
         var url = base_url + key
 
-        // take over the doc path with a handler backed by the server's
-        // braid-text instance: it logs every request it sees (puts by their
-        // tag header), 500s the first put, and delays serving each surviving
-        // put by 300ms -- so the two puts in flight alongside the failing one
-        // can't succeed before the client reacts to the 500 by aborting them,
-        // guaranteeing all three puts are still queued when the channel
-        // reconnects, and must all be re-fired
+        // take over the doc path with a tiny text-document server: it logs
+        // every request it sees (puts by their tag header), 500s the first
+        // put, and delays serving each surviving put by 300ms -- so the two
+        // puts in flight alongside the failing one can't succeed before the
+        // client reacts to the 500 by aborting them, guaranteeing all three
+        // puts are still queued when the channel reconnects, and must all be
+        // re-fired. served puts splice their patch into the doc's text; puts
+        // the client aborted while we held them are skipped, like a real
+        // server that never got to process a dead request
         await add_pre_braidify_handler((req, res, s, key) => {
             if (!req.url.startsWith(key)) return
             var log = global['_reqs_' + s] = global['_reqs_' + s] ?? []
             log.push(req.method === 'PUT' ? req.headers['put-tag'] : req.method)
+
+            var serve_doc = async () => {
+                // a request the client aborted while we held it has a dead
+                // response -- skip it, like a real server that never got to
+                // process a dead request. (checked on res, not req: a fully
+                // read request body marks req destroyed even on live streams)
+                if (res.destroyed || res.writableEnded) return
+                // we run before braidify, so braidify this request ourselves.
+                // it adds parseUpdate/startSubscription/sendUpdate onto
+                // req/res in place (its return value only matters for
+                // multiplexed requests, which the channel never sends)
+                braidify(req, res)
+                if (req.method === 'PUT') {
+                    var update = await req.parseUpdate().catch(() => null)
+                    if (!update || res.destroyed) return
+                    var p = update.patches[0]
+                    var [lo, hi] = p.range.slice(1, -1).split(':').map(Number)
+                    var text = global['_text_' + s] ?? ''
+                    global['_text_' + s] = text.slice(0, lo) + p.content_text + text.slice(hi)
+                    res.statusCode = 200
+                    res.end()
+                } else {
+                    res.startSubscription()
+                    res.sendUpdate({ version: ['v' + log.length], body: global['_text_' + s] ?? '' })
+                }
+            }
 
             // fail the first put with a 500 (and remember that we did)
             if (req.method === 'PUT' && !global['_put_failed_' + s]) {
@@ -9344,12 +9385,12 @@ run_test(
                 res.writeHead(500)
                 res.end('')
             }
-            // hold the surviving puts for 300ms before braid-text serves them
+            // hold the surviving puts for 300ms before serving them
             else if (req.method === 'PUT')
-                setTimeout(() => braid_text_instance.serve(req, res, {key}), 300)
-            // braid-text serves everything else (the subscription gets)
+                setTimeout(serve_doc, 300)
+            // serve everything else (the subscription gets) right away
             else
-                braid_text_instance.serve(req, res, {key})
+                serve_doc()
             return true
         }, s, key)
 
@@ -9397,17 +9438,16 @@ run_test(
                'expected a warning about the failed put')
 
         // read back what the server saw on this doc, and the doc's final
-        // text, straight from the braid-text instance (and clean up)
-        var seen = JSON.parse(await server_eval(async (req, res, s, key) => {
+        // text (and clean up)
+        var seen = JSON.parse(await server_eval((req, res, s) => {
             var requests = global['_reqs_' + s]
             var failed = global['_put_failed_' + s]
+            var text = global['_text_' + s] ?? ''
             delete global['_reqs_' + s]
             delete global['_put_failed_' + s]
-            res.end(JSON.stringify({
-                requests, failed,
-                text: await braid_text_instance.get(key)
-            }))
-        }, s, key))
+            delete global['_text_' + s]
+            res.end(JSON.stringify({ requests, failed, text }))
+        }, s))
 
         // the server really did 500 a put...
         assert(seen.failed, 'expected the server to have failed a put')
@@ -10216,20 +10256,23 @@ run_test(
 run_test(
     "reliable_update_channel on_status reports outstanding_puts",
     async () => {
-        // a fresh braid-text key for this test, and a random id for keying
-        // server-side state
+        // add a tiny doc server: it greets each subscriber with the current
+        // state and holds the subscription open, and accepts PUTs (after
+        // fully parsing them), counting each in a keyed global
         var s = Math.random().toString(36).slice(2)
-        var key = `/braid-text-test/status_puts_${s}`
-        var url = base_url + key
-
-        // count the PUTs that actually reach the server for our key
-        // (observing passively -- the request falls through to braid-text)
-        await add_pre_braidify_handler((req, res, key, s) => {
-            if (req.method === 'PUT' && req.url.split('?')[0] === key)
+        var endpoint = await add_main_handler(async (req, res, s) => {
+            if (req.method === 'PUT') {
                 global['_puts_' + s] = (global['_puts_' + s] ?? 0) + 1
-        }, key, s)
+                await req.parseUpdate()
+                res.statusCode = 200
+                return res.end()
+            }
+            res.startSubscription()
+            res.sendUpdate({ version: ['v0'], body: '' })
+        }, s)
+        var url = endpoint
 
-        // open the channel, recording every status report -- braid-text
+        // open the channel, recording every status report -- the server
         // greets a new subscriber with the current state, so waiting for
         // that first update tells us the subscription is established
         // (no timer racing)
