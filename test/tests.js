@@ -6424,120 +6424,131 @@ run_test(
 run_test(
     "PUT with single patch, in array",
     async () => {
-        // calling the wrapped https.get with braid write options (version,
-        // patches) must still issue a working PUT. note the wrapper only
-        // implements subscribe + update parsing -- write options are passed
-        // through to node's https, which ignores them, and .get() ends the
-        // request immediately -- so what actually goes over the wire is a
-        // plain bodiless PUT. we pin that contract down here; if the wrapper
-        // ever learns to send patches, this test should start asserting that
-        // the patch arrives instead
+        // same contract as the bare-object test above, for the one-element-
+        // array shape: braid write options pass through the wrapper to
+        // node's https, which ignores them, so a plain bodiless PUT is what
+        // goes over the wire. a random marker rides as both the version and
+        // the patch content, so we can check exactly where it shows up in
+        // the arriving request (spoiler: nowhere)
+        var marker = Math.random().toString(36).slice(2)
 
-        // add a handler that echoes back what the server actually received:
-        // the method, any braid write headers, and the body length
+        // add a handler that records what actually arrives on the wire --
+        // the method, every header, and the raw body -- and echoes it all
+        // back, so we can see exactly what the wrapper sent
         var endpoint = await add_main_handler((req, res) => {
             var chunks = []
             req.on('data', chunk => chunks.push(chunk))
             req.on('end', () => {
-                res.setHeader('Content-Type', 'application/json')
+                res.setHeader('content-type', 'application/json')
                 res.end(JSON.stringify({
                     method: req.method,
-                    version: req.headers.version ?? null,
-                    content_range: req.headers['content-range'] ?? null,
-                    patches: req.headers.patches ?? null,
-                    body_length: Buffer.concat(chunks).length
+                    headers: req.headers,
+                    body: Buffer.concat(chunks).toString()
                 }))
             })
         })
 
-        // the wrapped https.get only exists on the server (it wraps node's
-        // https module), so make the PUT from there, with a single patch in
-        // an array. read the response back through the wrapper's forwarded
-        // .on('data')/.on('end') events, checking that the wrapped callback
-        // still behaves like a normal node response
-        var result = JSON.parse(await server_eval((req, res, endpoint) => {
+        // on the server (the node wrapper only exists there), PUT a single
+        // patch wrapped in an array through the braidified https.get, and
+        // relay the status and body its callback sees -- which also checks
+        // the wrapper's rewired callback still forwards normal events
+        var got = JSON.parse(await server_eval((req, res, endpoint, marker) => {
             https.get(endpoint, {
-                version: ['test2'],
-                patches: [{unit: 'json', range: '[0]', content: '"test2"'}],
+                version: [marker],
+                patches: [{unit: 'json', range: '[0]', content: JSON.stringify(marker)}],
                 method: 'PUT',
                 rejectUnauthorized: false
             }, put_res => {
                 var body = ''
                 put_res.on('data', chunk => body += chunk)
                 put_res.on('end', () => res.end(JSON.stringify({
-                    status: put_res.statusCode,
-                    seen: JSON.parse(body)
+                    status: put_res.statusCode, body
                 })))
             })
-        }, endpoint))
+        }, endpoint, marker))
 
-        // the callback should have gotten a normal 200 response
-        assert(result.status === 200, 'expected a 200 response')
+        // the put succeeded, really arrived as a PUT, and its response came
+        // back intact through the wrapped callback
+        assert(got.status === 200, `expected the put to return 200, got ${got.status}`)
+        var seen = JSON.parse(got.body)
+        assert(seen.method === 'PUT', 'expected the wrapper to send a PUT')
 
-        // the server should have received the PUT on our endpoint...
-        assert(result.seen.method === 'PUT', 'expected the server to see a PUT')
-
-        // ...as plain http: node ignores the braid-specific options, so no
-        // version or patch headers -- and no patch content -- hit the wire
-        assert(result.seen.version === null, 'expected no version header')
-        assert(result.seen.content_range === null, 'expected no content-range header')
-        assert(result.seen.patches === null, 'expected no patches header')
-        assert(result.seen.body_length === 0, 'expected an empty request body')
+        // the array wrapping changes nothing: no braid headers, no body,
+        // and the marker nowhere in the arriving request. (if the wrapper
+        // ever learns to send patches, these assertions are the ones to
+        // update)
+        assert(seen.headers.version === undefined, 'expected no version header on the wire')
+        assert(seen.headers['content-range'] === undefined, 'expected no content-range header on the wire')
+        assert(seen.headers.patches === undefined, 'expected no patches header on the wire')
+        assert(seen.body === '', 'expected an empty request body')
+        assert(!JSON.stringify(seen).includes(marker),
+               'expected the version/patch marker nowhere in the arriving request')
     }
 )
 
 run_test(
     "PUT with multiples patches",
     async () => {
-        // add a handler that parses the incoming braid update and echoes back
-        // what braidify saw -- the version, the Patches header, and each
-        // patch's unit/range/content -- so we can check what actually crossed
-        // the wire
-        var endpoint = await add_main_handler(async (req, res) => {
-            var update = await req.parseUpdate()
-            res.writeHead(200, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({
-                version: req.version,
-                patches_header: req.headers.patches,
-                patches: (update.patches || []).map(p =>
-                    ({ unit: p.unit, range: p.range, content: p.content_text }))
-            }))
+        // three distinct markers, one per patch, so we can check exactly
+        // where they show up in the arriving request (spoiler: nowhere --
+        // this is the multi-patch cousin of the two single-patch tests above)
+        var markers = [0, 1, 2].map(() => Math.random().toString(36).slice(2))
+
+        // add a handler that records what actually arrives on the wire --
+        // the method, every header, and the raw body -- and echoes it all
+        // back, so we can see exactly what the wrapper sent
+        var endpoint = await add_main_handler((req, res) => {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => {
+                res.setHeader('content-type', 'application/json')
+                res.end(JSON.stringify({
+                    method: req.method,
+                    headers: req.headers,
+                    body: Buffer.concat(chunks).toString()
+                }))
+            })
         })
 
-        // three patches with distinct contents, so we can tell they arrive
-        // complete and in order. we snapshot what we're sending as json now,
-        // because fetch encodes each patch's content in place as it sends
-        var v = Math.random().toString(36).slice(2)
-        var patches = [
-            { unit: 'json', range: '[0]', content: '"zero"' },
-            { unit: 'json', range: '[1]', content: '"one"' },
-            { unit: 'json', range: '[2]', content: '"two"' }
-        ]
-        var sent = patches.map(p => JSON.stringify(p))
+        // on the server (the node wrapper only exists there), PUT an array
+        // of three patches through the braidified https.get -- the form
+        // braid_fetch would serialize into a Patches: N block -- and relay
+        // the status and body its callback sees
+        var got = JSON.parse(await server_eval((req, res, endpoint, markers) => {
+            https.get(endpoint, {
+                version: ['test3'],
+                patches: markers.map((m, i) =>
+                    ({unit: 'json', range: `[${i}]`, content: JSON.stringify(m)})),
+                method: 'PUT',
+                rejectUnauthorized: false
+            }, put_res => {
+                var body = ''
+                put_res.on('data', chunk => body += chunk)
+                put_res.on('end', () => res.end(JSON.stringify({
+                    status: put_res.statusCode, body
+                })))
+            })
+        }, endpoint, markers))
 
-        // PUT them with braid_fetch -- multiple patches should get serialized
-        // into a Patches: N block on the wire
-        var r = await fetch(endpoint, {
-            method: 'PUT',
-            version: [v],
-            patches
-        })
+        // the put succeeded, really arrived as a PUT, and its response came
+        // back intact through the wrapped callback
+        assert(got.status === 200, `expected the put to return 200, got ${got.status}`)
+        var seen = JSON.parse(got.body)
+        assert(seen.method === 'PUT', 'expected the wrapper to send a PUT')
 
-        // make sure the PUT succeeded
-        assert(r.status === 200, 'expected the PUT to return 200')
-
-        // make sure the client really used the multi-patch wire format
-        var echoed = await r.json()
-        assert(echoed.patches_header === '3', 'expected a Patches: 3 header')
-
-        // make sure the version and all three patches survived the round trip
-        assert(echoed.version.length === 1 && echoed.version[0] === v,
-               'expected the version to survive the wire')
-        assert(echoed.patches.length === patches.length,
-               'expected all three patches to arrive')
-        for (var i = 0; i < patches.length; i++)
-            assert(JSON.stringify(echoed.patches[i]) === sent[i],
-                   `expected patch ${i} to arrive intact and in order`)
+        // as with a single patch, the wrapper does not serialize braid
+        // options: no Patches: N header, no http-patches content-type, no
+        // version header, no body -- and none of our patch contents anywhere
+        // in the request. this pins that a multi-patch array doesn't corrupt
+        // the request either. (if the wrapper ever learns to send patches,
+        // these assertions are the ones to update)
+        assert(seen.headers.patches === undefined, 'expected no patches header on the wire')
+        assert(!(seen.headers['content-type'] || '').includes('http-patches'),
+               'expected no http-patches content-type on the wire')
+        assert(seen.headers.version === undefined, 'expected no version header on the wire')
+        assert(seen.body === '', 'expected an empty request body')
+        assert(markers.every(m => !JSON.stringify(seen).includes(m)),
+               'expected none of the patch markers in the arriving request')
     }
 )
 
@@ -6583,8 +6594,11 @@ run_test(
         // and it should really have reached our endpoint as a PUT
         assert(result.method === 'PUT', 'expected the server to receive a PUT')
 
-        // an empty patches array means an empty update: no patches -- and
-        // no stray body bytes -- should arrive on the wire
+        // zero patches and zero body bytes arrive -- but not because the
+        // wrapper serialized an empty update: it drops braid options
+        // wholesale (see the three tests above), so every patches value,
+        // [] included, yields this same plain empty PUT. this pins that a
+        // braid server parses that as a clean zero-patch, zero-byte update
         assert(result.num_patches === 0, 'expected no patches in the parsed update')
         assert(result.body_bytes === 0, 'expected an empty update body')
     }
