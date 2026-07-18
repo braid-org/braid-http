@@ -1003,7 +1003,10 @@ async function send_update(res, update, url, peer) {
     if (res.isSubscription && status) {
         var reason =
             status === 200 ? 'OK'
+            : status === 204 ? 'No Content'
+            : status === 304 ? 'Not Modified'
             : status === 404 ? 'Not Found'
+            : status === 410 ? 'Gone'
             : 'Unknown'
         res.write(`HTTP ${status} ${reason}\r\n`)
     }

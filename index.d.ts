@@ -2,8 +2,19 @@ import { IncomingMessage, ServerResponse, Server } from 'http';
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
+export declare function braidify(handler: RequestHandler): RequestHandler;
+export declare function braidify(req: IncomingMessage, res: ServerResponse, next?: () => void): void;
+export declare function braidify(server: Server): Server;
+
+// The http_bus API is still settling; these types are deliberately loose
+export declare function http_bus(cb: (message: Record<string, any>) => void,
+                                 options?: Record<string, any>): any;
+
+/** @deprecated Renamed to `braidify` */
 export declare function http_server(handler: RequestHandler): RequestHandler;
+/** @deprecated Renamed to `braidify` */
 export declare function http_server(req: IncomingMessage, res: ServerResponse, next?: () => void): void;
+/** @deprecated Renamed to `braidify` */
 export declare function http_server(server: Server): Server;
 
 export declare function free_cors(res: ServerResponse): void;
@@ -24,4 +35,5 @@ export declare function reliable_update_channel(url: string, options?: {
     close(): void;
 };
 
+/** @deprecated Use `fetch` instead */
 export declare function http_client(httpModule: any): any;

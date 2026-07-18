@@ -38,12 +38,11 @@ npm install braid-http
 
 ```javascript
 // Import with require()
-require('braid-http').fetch       // A polyfill for fetch
-require('braid-http').http_client // A polyfill for require('http') clients
-require('braid-http').http_server // A polyfill for require('http') servers
+require('braid-http').fetch     // A polyfill for fetch
+require('braid-http').braidify  // Braidifies node servers, handlers, and (req, res)
 
 // Or as es6 module
-import {fetch, http_client, http_server} from 'braid-http'
+import {fetch, braidify} from 'braid-http'
 ```
 
 ## Using it in Browsers
@@ -277,7 +276,7 @@ behaviors for free:
 You can braidify your nodejs server with:
 
 ```javascript
-var braidify = require('braid-http').http_server
+var {braidify} = require('braid-http')
 ```
 
 Braidify adds these new abilities to requests and responses:
@@ -297,9 +296,9 @@ You can call it in two ways:
 ### Example Nodejs server with the built-in HTTP module
 
 ```javascript
-var braidify = require('braid-http').http_server
+var {braidify} = require('braid-http')
 // or:
-import {http_server as braidify} from 'braid-http'
+import {braidify} from 'braid-http'
 
 require('http').createServer(
     braidify((req, res) => {
@@ -346,9 +345,9 @@ Or if you're using `express`, you can just call `app.use(braidify)` to get
 braid features added to every request and response.
 
 ```javascript
-var braidify = require('braid-http').http_server
+var {braidify} = require('braid-http')
 // or:
-import {http_server as braidify} from 'braid-http'
+import {braidify} from 'braid-http'
 
 var app = require('express')()
 
@@ -378,61 +377,6 @@ app.get('/', (req, res) => {
 })
 
 require('http').createServer(app).listen(8583)
-```
-
-
-### Example Nodejs client with `require('http')`
-
-```javascript
-// Use this line if necessary for self-signed certs
-// process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0
-
-var https = require('braid-http').http_client(require('https'))
-// or:
-// import braid_http from 'braid-http'
-// https = braid_http.http_client(require('https'))
-
-https.get(
-   'https://braid.org/chat',
-   {subscribe: true},
-   (res) => {
-      res.on('update', (update) => {
-          console.log('well we got one', update)
-      })
-   }
-)
-```
-
-To get auto-reconnections use:
-
-```javascript
-function connect () {
-    https.get(
-        'https://braid.org/chat',
-        {subscribe: true},
-        (res) => {
-            res.on('update', (update) => {
-                // {
-                //   version: ["me"],
-                //   parents: ["mom", "dad"],
-                //   patches: [{
-                //.      unit: "json",
-                //       range: ".foo",
-                //       content: new Uint8Array([51]),
-                //       content_text: "3" <-- getter
-                //.  }],
-                //   body: new Uint8Array([51]),
-                //   body_text: "3" <-- getter
-                // }
-                // Update will contain either patches *or* body, but not both
-                console.log('We got a new update!', update)
-            })
-
-            res.on('end',   e => setTimeout(connect, 1000))
-            res.on('error', e => setTimeout(connect, 1000))
-        })
-}
-connect()
 ```
 
 

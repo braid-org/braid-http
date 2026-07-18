@@ -5,7 +5,8 @@ function define_tests(run_test, context) {
     // Get all the Javascript functions and variables we will be using.
     // These are set differently in nodejs and the browser.
     var { fetch, og_fetch, port, add_section_header, multiplex_fetch,
-          braid_fetch, reliable_update_channel, update_pipe, base_url, assert } = context
+          braid_fetch, reliable_update_channel, http_bus, base_url, assert
+        } = context
 
     // base_url is 'https://localhost:${port}' in console tests; in the browser
     // we derive it from the page's origin, so that endpoints returned by the
@@ -132,6 +133,7 @@ run_test(
         // subscribe to the endpoint we added,
         // forcing the request to be multiplexed
         var a = new AbortController()
+
         var r = await fetch(endpoint, {
             signal: a.signal,
             subscribe: true,
@@ -311,7 +313,8 @@ run_test(
         // the timeout, so the multiplexer finally dies
         await sleep(400)
         assert(!multiplex_fetch.multiplexers[m], 'expected multiplexer to time out')
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -597,7 +600,7 @@ run_test(
             u.body = u.body_text
             done(JSON.stringify(u))
         }))
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update through relative-url multiplexer')
 
         a1.abort()
@@ -634,7 +637,7 @@ run_test(
             u.body = u.body_text
             done(JSON.stringify(u))
         }))
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update through full-url multiplexer')
 
         a1.abort()
@@ -682,7 +685,7 @@ run_test(
         // old node has no global fetch server-side, so braid_fetch can't run
         // there; nothing to assert in that case (counts as a pass)
         if (got === 'old node version') return
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update through server-side full-url multiplexer')
     }
 )
@@ -766,7 +769,7 @@ run_test(
             u.body = u.body_text
             done(JSON.stringify(u))
         }))
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected multiplexed message')
 
         a.abort()
@@ -856,7 +859,7 @@ run_test(
             u.body = u.body_text
             done(JSON.stringify(u))
         }))
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected multiplexed message')
 
         a.abort()
@@ -980,7 +983,7 @@ run_test(
 
         // the update received after the retry should match what we sent, plus
         // the status the server attaches on the way out
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update after retry')
 
         // and aborting the underlying request should end the subscription
@@ -1025,7 +1028,7 @@ run_test(
 
         // the update should match what we sent, plus the status the server
         // attaches on the way out
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update')
 
         // and the abort should have surfaced as an AbortError
@@ -1065,7 +1068,7 @@ run_test(
         var update_count = 0
         await new Promise((done, fail) => r.subscribe(u => {
             u.body = u.body_text
-            if (JSON.stringify(u) === JSON.stringify({ ...update, status: '200' })) update_count++
+            if (JSON.stringify(u) === JSON.stringify({ ...update, status: 200 })) update_count++
             if (update_count === 2) done()
         }, fail))
 
@@ -2577,7 +2580,7 @@ run_test(
             u.body = u.body_text
             done(JSON.stringify(u))
         }))
-        assert(got === JSON.stringify({ ...update, status: '200' }),
+        assert(got === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update through braidify.server multiplexer')
 
         // abort the subscription -- the client DELETEs its request on the
@@ -2966,7 +2969,7 @@ run_test(
         // the update's metadata should come through intact
         assert(JSON.stringify(update.version) === '["test"]', 'got unexpected version')
         assert(JSON.stringify(update.parents) === '["oldie"]', 'got unexpected parents')
-        assert(update.status === '200', 'got unexpected status')
+        assert(update.status === 200, 'got unexpected status')
 
         // the single patch should arrive alone, with its unit and range intact
         assert(update.patches.length === 1, 'expected exactly one patch')
@@ -4472,7 +4475,8 @@ run_test(
         assert(connect_count === '2', 'expected exactly two connections to the server')
 
         a.abort()
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -4811,16 +4815,16 @@ run_test(
         // versions, parents, bodies, patches, the custom 115 status, and the
         // hash headers (surfacing as extra_headers on the update and patch)
         var expected = [
-            { version: ['test'], parents: ['oldie'], body: JSON.stringify({this: 'stuff'}), status: '200' },
+            { version: ['test'], parents: ['oldie'], body: JSON.stringify({this: 'stuff'}), status: 200 },
             { version: ['test1'], parents: ['oldie', 'goodie'],
               patches: [{unit: 'json', range: '[1]', content: '1'}],
-              status: '115', extra_headers: {hash: '42'} },
-            { version: ['test2'], patches: [{unit: 'json', range: '[2]', content: '2'}], status: '200' },
+              status: 115, extra_headers: {hash: '42'} },
+            { version: ['test2'], patches: [{unit: 'json', range: '[2]', content: '2'}], status: 200 },
             { version: ['test3'],
               patches: [{unit: 'json', range: '[3]', content: '3', extra_headers: {hash: '43'}},
                         {unit: 'json', range: '[4]', content: '4'}],
-              status: '200' },
-            { version: ['another!'], body: '"!"', status: '200' }
+              status: 200 },
+            { version: ['another!'], body: '"!"', status: 200 }
         ]
         for (var i = 0; i < expected.length; i++)
             assert(JSON.stringify(got[i]) === JSON.stringify(expected[i]),
@@ -5054,7 +5058,7 @@ run_test(
         // make sure the parser delivered the update we sent (each update on
         // the wire carries a status line, which parses into update.status)
         assert(JSON.stringify({...u, body: u.body_text}) ===
-               JSON.stringify({...update, status: '200'}), 'got unexpected update')
+               JSON.stringify({...update, status: 200}), 'got unexpected update')
 
         // make sure onBytes got raw bytes...
         assert(!got_non_bytes, 'expected onBytes chunks to be Uint8Arrays')
@@ -5320,7 +5324,8 @@ run_test(
         assert(elapsed >= 3500, `expected the client to wait the full heartbeat window, got ${elapsed}ms`)
 
         a.abort()
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -5394,7 +5399,8 @@ run_test(
         assert(connect_count === '2', 'expected exactly two connections to the server')
 
         a.abort()
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -5455,7 +5461,8 @@ run_test(
         assert(hits === '1', `expected exactly one request at the server, saw ${hits}`)
 
         a.abort()
-    }
+    },
+    undefined, {timeout: 10000}
 )
 
 run_test(
@@ -5869,8 +5876,8 @@ run_test(
         }
 
         // each update should come back as sent, plus the protocol's
-        // mechanical reshaping: statuses come back as strings (defaulting to
-        // '200'), a singular patch: comes back as a one-element patches
+        // mechanical reshaping: statuses come back as numbers (defaulting to
+        // 200), a singular patch: comes back as a one-element patches
         // array, and hash headers surface as extra_headers on the update or
         // patch. build each expected update in the field order the client
         // emits, since we compare json strings
@@ -5881,7 +5888,7 @@ run_test(
             if (u.body != null) e.body = u.body
             if (u.patch || u.patches) e.patches = (u.patches ?? [u.patch]).map(
                 ({hash, ...p}) => hash ? {...p, extra_headers: {hash}} : p)
-            e.status = '' + (u.status ?? 200)
+            e.status = u.status ?? 200
             if (u.hash) e.extra_headers = {hash: u.hash}
             return e
         })
@@ -5971,7 +5978,7 @@ run_test(
 
         // each sent update should arrive in order and intact, normalized by
         // the protocol: an inline patch becomes a patches array, the status
-        // arrives as a string (defaulting to '200'), and unknown headers
+        // arrives as a number (defaulting to 200), and unknown headers
         // (like hash) surface as extra_headers on the update and patch.
         // field order below matters, since we compare JSON strings
         var as_received = u => {
@@ -5984,7 +5991,7 @@ run_test(
                 ...(parents && {parents}),
                 ...(body != null && {body}),
                 ...(patches && {patches}),
-                status: '' + (status ?? 200),
+                status: status ?? 200,
                 ...(Object.keys(extra_headers).length && {extra_headers})
             }
         }
@@ -6011,12 +6018,12 @@ run_test(
             send: { version: ['test'], parents: ['oldie'], body: JSON.stringify({this: 'stuff'}) }
         }, {
             send:   { version: ['test1'], parents: ['oldie', 'goodie'], patch: {unit: 'json', range: '[1]', content: '1'}, hash: '42', status: 115 },
-            expect: { version: ['test1'], parents: ['oldie', 'goodie'], patches: [{unit: 'json', range: '[1]', content: '1'}], status: '115', extra_headers: {hash: '42'} }
+            expect: { version: ['test1'], parents: ['oldie', 'goodie'], patches: [{unit: 'json', range: '[1]', content: '1'}], status: 115, extra_headers: {hash: '42'} }
         }, {
             send: { version: ['test2'], patches: [{unit: 'json', range: '[2]', content: '2'}] }
         }, {
             send:   { version: ['test3'], patches: [{unit: 'json', range: '[3]', content: '3', hash: '43'}, {unit: 'json', range: '[4]', content: '4'}] },
-            expect: { version: ['test3'], patches: [{unit: 'json', range: '[3]', content: '3', extra_headers: {hash: '43'}}, {unit: 'json', range: '[4]', content: '4'}], status: '200' }
+            expect: { version: ['test3'], patches: [{unit: 'json', range: '[3]', content: '3', extra_headers: {hash: '43'}}, {unit: 'json', range: '[4]', content: '4'}], status: 200 }
         }, {
             send: { version: ['another!'], body: '"!"' }
         }]
@@ -6046,7 +6053,7 @@ run_test(
             if (u.body != null) u.body = u.body_text
             if (u.patches) for (var p of u.patches) p.content = p.content_text
             var { send, expect } = updates[count]
-            assert(JSON.stringify(u) === JSON.stringify(expect ?? { ...send, status: '200' }),
+            assert(JSON.stringify(u) === JSON.stringify(expect ?? { ...send, status: 200 }),
                    `got unexpected update at index ${count}`)
             if (++count === updates.length) break
         }
@@ -6319,13 +6326,13 @@ run_test(
         // systematic differences: an inline patch: comes back as a
         // one-element patches: array, a non-braid header (here: hash) comes
         // back under extra_headers on whatever carried it, and every update
-        // gets a string status -- the one we set, or the default 200
+        // gets a numeric status -- the one we set, or the default 200
         var hash_to_extra = ({hash, ...x}) => hash ? {...x, extra_headers: {hash}} : x
         var to_expected = u => hash_to_extra({
             ...u,
             patch: undefined,
             patches: (u.patch ? [u.patch] : u.patches)?.map(hash_to_extra),
-            status: `${u.status ?? 200}`
+            status: u.status ?? 200
         })
 
         // compare as json with object keys sorted, so key order doesn't matter
@@ -6623,22 +6630,22 @@ run_test(
                       hash: '42', ':status': '115' },
               expect: { version: ['test1'], parents: ['oldie', 'goodie'],
                         patches: [{unit: 'json', range: '[1]', content: '1'}],
-                        status: '115', extra_headers: {hash: '42'} } },
+                        status: 115, extra_headers: {hash: '42'} } },
             { send: { Version: ['test2'],
                       patch: {unit: 'json', range: '[2]', content: '2'} },
               expect: { version: ['test2'],
                         patches: [{unit: 'json', range: '[2]', content: '2'}],
-                        status: '200' } },
+                        status: 200 } },
             { send: { version: ['test3'],
                       patches: [{unit: 'json', range: '[3]', content: '3', hash: '43'},
                                 {unit: 'json', range: '[4]', content: '4'}] },
               expect: { version: ['test3'],
                         patches: [{unit: 'json', range: '[3]', content: '3', extra_headers: {hash: '43'}},
                                   {unit: 'json', range: '[4]', content: '4'}],
-                        status: '200' } },
+                        status: 200 } },
             { send: { version: ['another!'], body: '"!"' } }
         ]
-        var expected = updates.map(u => u.expect || { ...u.send, status: '200' })
+        var expected = updates.map(u => u.expect || { ...u.send, status: 200 })
 
         // add a handler that streams those updates over a subscription,
         // holding the last one back 200ms so the subscription really streams
@@ -7549,7 +7556,7 @@ run_test(
         // update should have arrived intact (subscription updates carry a
         // status)
         if (got.body != null) got.body = got.body_text
-        assert(JSON.stringify(got) === JSON.stringify({ ...update, status: '200' }),
+        assert(JSON.stringify(got) === JSON.stringify({ ...update, status: 200 }),
                'expected the update to arrive before the abort')
 
         // the abort must surface as an AbortError. if the client had treated
@@ -7612,7 +7619,7 @@ run_test(
         for (var i = 0; i < 2; i++) {
             updates[i].body = updates[i].body_text
             assert(JSON.stringify(updates[i]) ===
-                       JSON.stringify({ ...update, version: ['conn-' + (i + 1)], status: '200' }),
+                       JSON.stringify({ ...update, version: ['conn-' + (i + 1)], status: 200 }),
                    `got unexpected update from connection ${i + 1}`)
         }
 
@@ -7661,7 +7668,8 @@ run_test(
         var requests = await server_eval((req, res, s) =>
             res.end('' + global['_hits_' + s]), s)
         assert(requests === '3', `expected exactly three requests at the server, got ${requests}`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -7738,7 +7746,7 @@ run_test(
         var update_count = 0
         await new Promise((done, fail) => r.subscribe(u => {
             u.body = u.body_text
-            if (JSON.stringify(u) === JSON.stringify({ ...update, status: '200' })) update_count++
+            if (JSON.stringify(u) === JSON.stringify({ ...update, status: 200 })) update_count++
             if (update_count === 2) done()
         }, fail))
 
@@ -7790,7 +7798,7 @@ run_test(
         // rides on the first update of a response, so seeing it on all three
         // confirms each one arrived on a fresh connection
         for (var u of updates)
-            assert(JSON.stringify(u) === JSON.stringify({ ...update, status: '200' }),
+            assert(JSON.stringify(u) === JSON.stringify({ ...update, status: 200 }),
                    'got unexpected update after reconnection')
 
         // and make sure the client really did reconnect: the server should
@@ -7798,7 +7806,8 @@ run_test(
         var connects = await server_eval((req, res, s) =>
             res.end('' + global['_connects_' + s]), s)
         assert(connects === '3', `expected exactly three connections, got ${connects}`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -7839,7 +7848,7 @@ run_test(
         // dropped, and nothing else
         assert(updates.length === 1, `expected exactly one update, got ${updates.length}`)
         if (updates[0].body != null) updates[0].body = updates[0].body_text
-        assert(JSON.stringify(updates[0]) === JSON.stringify({ ...update, status: '200' }),
+        assert(JSON.stringify(updates[0]) === JSON.stringify({ ...update, status: 200 }),
                'got unexpected update')
 
         // make sure the 500 came from a real reconnection attempt: the server
@@ -7855,7 +7864,8 @@ run_test(
         hits = await server_eval((req, res, s) =>
             res.end('' + global['_gets_' + s]), s)
         assert(hits === '2', `expected no more requests after giving up, got ${hits}`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -7897,7 +7907,7 @@ run_test(
             // intact (with the status the server attaches on the way out)
             assert(updates.length === 1,
                    `expected exactly one update before the error, got ${updates.length}`)
-            assert(JSON.stringify(updates[0]) === JSON.stringify({ ...update, status: '200' }),
+            assert(JSON.stringify(updates[0]) === JSON.stringify({ ...update, status: 200 }),
                    'got unexpected update before the error')
 
             // and the 500 really came from a reconnection attempt: the
@@ -7988,7 +7998,7 @@ run_test(
         // body, with the status the server attaches on the way out
         assert(JSON.stringify(update.version) === JSON.stringify(['test']), 'got unexpected version')
         assert(JSON.stringify(update.parents) === JSON.stringify(['oldie']), 'got unexpected parents')
-        assert(update.status === '200', 'expected status 200 on the update')
+        assert(update.status === 200, 'expected status 200 on the update')
 
         a.abort()
     }
@@ -8839,7 +8849,7 @@ run_test(
         // the update should carry the version and status from its status line
         // and headers...
         assert(JSON.stringify(update.version) === '["v1"]', 'got unexpected version')
-        assert(update.status === '200', 'got unexpected status')
+        assert(update.status === 200, 'got unexpected status')
 
         // ...and both patches, framed by the count=2 in the content-type
         assert(update.patches.length === 2, 'expected two patches')
@@ -9202,8 +9212,8 @@ run_test(
 
         // ...and the following update still carries its default 200
         assert(updates[1].version[0] === 'with-status', 'got unexpected second version')
-        assert(updates[1].status === '200',
-            `expected status '200' on the second update, got: ${updates[1].status}`)
+        assert(updates[1].status === 200,
+            `expected status 200 on the second update, got: ${updates[1].status}`)
         assert(updates[1].body_text === '"shown"', 'got unexpected second body')
 
         a2.abort()
@@ -9518,7 +9528,8 @@ run_test(
         assert(conns === '2', `expected the server to see exactly 2 connections, saw ${conns}`)
 
         channel.close()
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -9679,7 +9690,8 @@ run_test(
         // honored rather than either default kicking in
         assert(gets[1] - gets[0] >= 3600,
                `expected the reconnect to wait ~4s, waited ${gets[1] - gets[0]}ms`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -9924,7 +9936,8 @@ run_test(
         // 503 and 432 are silent-retry codes: the whole dance should have
         // happened without a single warning
         assert(warnings.length === 0, `expected no warnings, got: ${warnings}`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -9998,7 +10011,8 @@ run_test(
         // rather than either default kicking in
         assert(log.puts[1] - log.puts[0] >= 3600,
                `expected the retry to wait ~4s, waited ${log.puts[1] - log.puts[0]}ms`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -10059,7 +10073,8 @@ run_test(
 
         // a put timeout is a transient failure: it retries without warning
         assert(warnings.length === 0, `expected no warnings, got: ${warnings}`)
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -10496,9 +10511,9 @@ run_test(
 )
 
 
-    add_section_header("update_pipe Tests")
+    add_section_header("HTTP Bus Tests")
 
-    // ── shared helpers for the update_pipe tests ──────────────────────────
+    // ── shared helpers for the HTTP Bus tests ──────────────────────────
     var rid   = () => Math.random().toString(36).slice(2)
     var sleep = ms => new Promise(r => setTimeout(r, ms))
     var drop_conn    = ep => og_fetch(ep + '?_drop')       // cut the live subscriptions
@@ -10570,64 +10585,64 @@ run_test(
     }
 
     run_test(
-        "update_pipe: A dropped connection takes the host offline",
+        "HTTP Bus: A dropped connection takes the host offline",
         async () => {
             // 0. Subscribe to a healthy 209 host.
             var ep = await add_main_handler(pipe_server('drop_' + rid()))
             var host = new URL(ep).host
             var updates = []
-            var pipe = update_pipe(m => updates.push(m), {reconnect_interval: 60})
-            pipe.get(ep)
+            var bus = http_bus(m => updates.push(m), {reconnect_interval: 60})
+            bus.get(ep)
 
             // 1. It delivers its first update (a 'set'), and the host is online.
             await sleep(300)
             assert(updates.length === 1, 'should receive one update')
             assert(updates[0].type === 'set', "delivered as a 'set' message")
             assert(decode(updates[0].body) === 'hello', 'body should be "hello"')
-            assert(pipe.network.hosts[host].online === true, 'host online after 209')
+            assert(bus.network.hosts[host].online === true, 'host online after 209')
 
             // 2. Drop the connection — the host should go offline.
             await drop_conn(ep)
             await sleep(500)
-            assert(pipe.network.hosts[host].online === false, 'host offline after the drop')
+            assert(bus.network.hosts[host].online === false, 'host offline after the drop')
 
-            pipe.forget(ep)
+            bus.forget(ep)
         }
     )
 
     run_test(
-        "update_pipe: A silent connection (no heartbeats) times out to offline",
+        "HTTP Bus: A silent connection (no heartbeats) times out to offline",
         async () => {
             // 0. Subscribe to a host that ignores our heartbeat request, with a 1s timeout.
             var ep = await add_main_handler(pipe_server('hb_' + rid(), {send_heartbeats: false}))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {timeout: 1, reconnect_interval: 60})
-            pipe.get(ep)
+            var bus = http_bus(() => {}, {timeout: 1, reconnect_interval: 60})
+            bus.get(ep)
 
             // 1. The 209 arrives, so we're online.
             await sleep(300)
-            assert(pipe.network.hosts[host].online === true, 'online after the 209')
+            assert(bus.network.hosts[host].online === true, 'online after the 209')
 
             // 2. No bytes arrive for longer than the timeout — the host should go offline.
             await sleep(1200)
-            assert(pipe.network.hosts[host].online === false, 'offline after the heartbeat timeout')
+            assert(bus.network.hosts[host].online === false, 'offline after the heartbeat timeout')
 
-            pipe.forget(ep)
+            bus.forget(ep)
         }
     )
 
     run_test(
-        "update_pipe: The reconnection poll brings a dropped host back online",
+        "HTTP Bus: The reconnection poll brings a dropped host back online",
         async () => {
             // 0. Subscribe; we're online with one update.
             var ep = await add_main_handler(pipe_server('rc_' + rid()))
             var host = new URL(ep).host
             var updates = []
-            var pipe = update_pipe(m => updates.push(m), {reconnect_interval: 0.3})
-            pipe.get(ep)
+            var bus = http_bus(m => updates.push(m), {reconnect_interval: 0.3})
+            bus.get(ep)
 
             await sleep(300)
-            assert(pipe.network.hosts[host].online === true, 'online initially')
+            assert(bus.network.hosts[host].online === true, 'online initially')
             assert(updates.length === 1, 'one update initially')
 
             // 1. Drop the connection — the host goes offline.
@@ -10635,15 +10650,15 @@ run_test(
 
             // 2. The poll (every 0.3s) reconnects and delivers a fresh update.
             await sleep(900)
-            assert(pipe.network.hosts[host].online === true, 'back online after reconnect')
+            assert(bus.network.hosts[host].online === true, 'back online after reconnect')
             assert(updates.length >= 2, 'reconnect delivered a fresh update')
 
-            pipe.forget(ep)
+            bus.forget(ep)
         }
     )
 
     run_test(
-        "update_pipe: One host going down leaves the others online (per-host isolation)",
+        "HTTP Bus: One host going down leaves the others online (per-host isolation)",
         async () => {
             // 0. Subscribe to two URLs on each of two separate hosts.
             var ep1 = await add_main_handler(pipe_server('m1_' + rid()))     // host 1 (main server)
@@ -10651,39 +10666,39 @@ run_test(
             var h1 = new URL(ep1).host, h2 = new URL(ep2).host
             var urls = [ep1 + '?u=a', ep1 + '?u=b', ep2 + '?u=a', ep2 + '?u=b']
             var got = {}
-            var pipe = update_pipe(m => { got[m.url] = (got[m.url] || 0) + 1 }, {reconnect_interval: 0.3})
-            for (var u of urls) pipe.get(u)
+            var bus = http_bus(m => { got[m.url] = (got[m.url] || 0) + 1 }, {reconnect_interval: 0.3})
+            for (var u of urls) bus.get(u)
 
             // 1. All four are online; both hosts and the network are up.
             await sleep(500)
             for (var u of urls) assert(got[u] === 1, 'one update for ' + u)
-            assert(pipe.network.hosts[h1].online === true, 'host1 online')
-            assert(pipe.network.hosts[h2].online === true, 'host2 online')
-            assert(pipe.network.online === true, 'network online')
+            assert(bus.network.hosts[h1].online === true, 'host1 online')
+            assert(bus.network.hosts[h2].online === true, 'host2 online')
+            assert(bus.network.online === true, 'network online')
 
             // 2. Drop host 1 only — host 2 (and so the network) stay up.
             await drop_conn(ep1)
             await sleep(150)
-            assert(pipe.network.hosts[h2].online === true, 'host2 unaffected by host1 drop')
-            assert(pipe.network.online === true, 'network stays online while host2 is up')
+            assert(bus.network.hosts[h2].online === true, 'host2 unaffected by host1 drop')
+            assert(bus.network.online === true, 'network stays online while host2 is up')
 
             // 3. The poll reconnects host 1, cascading fresh updates to both its URLs.
             await sleep(900)
-            assert(pipe.network.hosts[h1].online === true, 'host1 reconnected')
+            assert(bus.network.hosts[h1].online === true, 'host1 reconnected')
             assert(got[ep1 + '?u=a'] >= 2 && got[ep1 + '?u=b'] >= 2, 'both host1 urls got fresh updates')
 
-            for (var u of urls) pipe.forget(u)
+            for (var u of urls) bus.forget(u)
         }
     )
 
     run_test(
-        "update_pipe: A write lands and its write-only host is garbage-collected",
+        "HTTP Bus: A write lands and its write-only host is garbage-collected",
         async () => {
             // 0. Write once to a write-only host (no subscription).
             var ep = await add_main_handler(pipe_server('pb_' + rid()))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
-            pipe.set(ep, {version: ['a1'], body: 'hi'})
+            var bus = http_bus(() => {}, {reconnect_interval: 60})
+            bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. The server receives the PUT, with the right body.
             await sleep(300)
@@ -10692,23 +10707,23 @@ run_test(
             assert(puts[0].body === 'hi', 'server got the body')
 
             // 2. On the ack the host holds no more work, so it's GC'd and the network reads idle.
-            assert(pipe.network.hosts[host] === undefined, "spent write-only host is GC'd")
-            assert(pipe.network.online === 'maybe', 'idle network reads maybe')
+            assert(bus.network.hosts[host] === undefined, "spent write-only host is GC'd")
+            assert(bus.network.online === 'maybe', 'idle network reads maybe')
         }
     )
 
     run_test(
-        "update_pipe: Writes pipeline up to max_outstanding_puts; the rest queue and drain",
+        "HTTP Bus: Writes pipeline up to max_outstanding_puts; the rest queue and drain",
         async () => {
             // 0. Queue 25 writes at a cap of 10, with the server holding every response.
             var ep = await add_main_handler(pipe_server('pp_' + rid(), {hold_puts: true}))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {reconnect_interval: 60, max_outstanding_puts: 10})
-            for (var i = 0; i < 25; i++) pipe.set(ep, {version: ['v' + i], body: String(i)})
+            var bus = http_bus(() => {}, {reconnect_interval: 60, max_outstanding_puts: 10})
+            for (var i = 0; i < 25; i++) bus.set(ep, {version: ['v' + i], body: String(i)})
 
             // 1. Exactly 10 are in flight; all 25 wait in the queue, unacked.
             await sleep(300)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.outstanding_puts_count === 10, 'in-flight capped at 10')
             assert((await server_puts(ep)).length === 10, 'server received exactly 10')
             assert(h.urls[ep].put_queue.size === 25, 'all 25 still queued, unacked')
@@ -10717,19 +10732,19 @@ run_test(
             await release_puts(ep)
             await sleep(600)
             assert((await server_puts(ep)).length === 25, 'all 25 eventually sent')
-            assert(pipe.network.hosts[host] === undefined, "host GC'd once all PUTs drained")
+            assert(bus.network.hosts[host] === undefined, "host GC'd once all PUTs drained")
         }
     )
 
     run_test(
-        "update_pipe: A non-2xx write is a give-up: reported as an error, then dropped",
+        "HTTP Bus: A non-2xx write is a give-up: reported as an error, then dropped",
         async () => {
             // 0. Write to a host that answers 500.
             var ep = await add_main_handler(pipe_server('pg_' + rid(), {put_status: 500}))
             var host = new URL(ep).host
             var errors = []
-            var pipe = update_pipe(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
-            pipe.set(ep, {version: ['a1'], body: 'hi'})
+            var bus = http_bus(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
+            bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. It's reported once as an error, carrying the status.
             await sleep(300)
@@ -10737,29 +10752,29 @@ run_test(
             assert(errors[0].description === 500, 'status surfaced')
 
             // 2. The write is dropped, so its write-only host is GC'd.
-            assert(pipe.network.hosts[host] === undefined, "gave-up PUT's host is GC'd")
+            assert(bus.network.hosts[host] === undefined, "gave-up PUT's host is GC'd")
         }
     )
 
     run_test(
-        "update_pipe: A write whose pipe fails is requeued, then re-probed back to success",
+        "HTTP Bus: A write whose pipe fails is requeued, then re-probed back to success",
         async () => {
             // 0. Write to a host that drops the first PUT's connection.
             var ep = await add_main_handler(pipe_server('prw_' + rid(), {fail_first_put: true}))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3})
-            pipe.set(ep, {version: ['a1'], body: 'hi'})
+            var bus = http_bus(() => {}, {reconnect_interval: 0.3})
+            bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. The pipe failure takes the host offline; the PUT is requeued, not lost.
             await sleep(300)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.online === false, 'write-only host offline on the pipe failure')
             assert(h.urls[ep].put_queue.size === 1, 'the PUT is requeued, not lost')
 
             // 2. The poll re-probes with the queued PUT; this one lands, and the host GCs.
             await sleep(600)
-            assert(pipe.network.hosts[host] === undefined, "revived host GC'd after its PUT drained")
-            assert(pipe.network.online === 'maybe', 'network settles at maybe')
+            assert(bus.network.hosts[host] === undefined, "revived host GC'd after its PUT drained")
+            assert(bus.network.online === 'maybe', 'network settles at maybe')
             var puts = await server_puts(ep)
             assert(puts.length === 1, 'server got the PUT only on the retry')
             assert(puts[0].body === 'hi', 'with the right body')
@@ -10767,20 +10782,20 @@ run_test(
     )
 
     run_test(
-        "update_pipe: A PUT ack revives a multi-write host to online='maybe' (not online=true)",
+        "HTTP Bus: A PUT ack revives a multi-write host to online='maybe' (not online=true)",
         async () => {
             // 0. Queue three writes, one at a time; the server drops #1, acks #2 (the retry), holds #3.
             var ep = await add_main_handler(pipe_server('prk_' + rid(),
                 {put_behavior: 'n => n === 1 ? "drop" : n === 2 ? "ok" : "hold"'}))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3, max_outstanding_puts: 1})
-            pipe.set(ep, {version: ['a1'], body: '1'})
-            pipe.set(ep, {version: ['a2'], body: '2'})
-            pipe.set(ep, {version: ['a3'], body: '3'})
+            var bus = http_bus(() => {}, {reconnect_interval: 0.3, max_outstanding_puts: 1})
+            bus.set(ep, {version: ['a1'], body: '1'})
+            bus.set(ep, {version: ['a2'], body: '2'})
+            bus.set(ep, {version: ['a3'], body: '3'})
 
             // 1. The ack lifts the offline host to 'maybe' — never online=true, since it has no subscription.
             await sleep(800)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.online === 'maybe', 'a landed PUT lifts the offline host to maybe')
 
             // 2. The remaining queued writes keep the host alive.
@@ -10789,72 +10804,72 @@ run_test(
     )
 
     run_test(
-        "update_pipe: forget() drops a subscription and garbage-collects its resource and host",
+        "HTTP Bus: forget() drops a subscription and garbage-collects its resource and host",
         async () => {
             // 0. Subscribe to two URLs on one host — both online, host green.
             var ep = await add_main_handler(pipe_server('fg_' + rid()))
             var host = new URL(ep).host
             var a = ep + '?u=a', b = ep + '?u=b'
-            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
-            pipe.get(a); pipe.get(b)
+            var bus = http_bus(() => {}, {reconnect_interval: 60})
+            bus.get(a); bus.get(b)
 
             await sleep(300)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(Object.keys(h.urls).length === 2, 'two resources subscribed')
             assert(h.online === true, 'green while subscribed')
 
             // 1. Forget the first URL — its resource is collected; the host survives on the other sub.
-            pipe.forget(a)
+            bus.forget(a)
             await sleep(50)
             assert(h.urls[a] === undefined, 'forgotten resource collected')
             assert(Object.keys(h.urls).length === 1, 'one resource left')
-            assert(pipe.network.hosts[host] === h, 'host survives on its other sub')
+            assert(bus.network.hosts[host] === h, 'host survives on its other sub')
             assert(h.online === true, 'still green')
 
             // 2. Forget the second — the host is GC'd; the network settles at 'maybe'.
-            pipe.forget(b)
+            bus.forget(b)
             await sleep(50)
-            assert(pipe.network.hosts[host] === undefined, "host GC'd once last sub forgotten")
-            assert(pipe.network.online === 'maybe', 'network settles at maybe')
+            assert(bus.network.hosts[host] === undefined, "host GC'd once last sub forgotten")
+            assert(bus.network.online === 'maybe', 'network settles at maybe')
         }
     )
 
     run_test(
-        "update_pipe: A connecting (not-yet-209) subscription can't hold its host green",
+        "HTTP Bus: A connecting (not-yet-209) subscription can't hold its host green",
         async () => {
             // 0. Subscribe to /a (gets its 209 → online) and /hang (server never answers → still connecting).
             var ep = await add_main_handler(pipe_server('fc_' + rid()))
             var host = new URL(ep).host
             var a = ep + '?u=a', hang = ep + '?u=hang'
-            var pipe = update_pipe(() => {}, {reconnect_interval: 60})
-            pipe.get(a)
-            pipe.get(hang)
+            var bus = http_bus(() => {}, {reconnect_interval: 60})
+            bus.get(a)
+            bus.get(hang)
 
             // 1. The host is green, but only /a counts as online — the connecting /hang doesn't.
             await sleep(300)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.online === true, 'green because /a is online')
             assert(h.online_subs.size === 1, 'only /a is online; hang is just connecting')
 
             // 2. Forget /a — the only online sub — and the host falls to 'maybe', not stuck green.
-            pipe.forget(a)
+            bus.forget(a)
             await sleep(50)
             assert(h.online_subs.size === 0, 'no online subscriptions remain')
             assert(h.online === 'maybe', 'host falls to maybe, not stuck green')
 
-            pipe.forget(hang)
+            bus.forget(hang)
         }
     )
 
     run_test(
-        "update_pipe: A forbidden (403) subscription is a give-up: error, then cancel the URL",
+        "HTTP Bus: A forbidden (403) subscription is a give-up: error, then cancel the URL",
         async () => {
             // 0. Subscribe to a host that answers 403.
             var ep = await add_main_handler(pipe_server('gg_' + rid(), {subscribe_status: 403}))
             var host = new URL(ep).host
             var errors = []
-            var pipe = update_pipe(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
-            pipe.get(ep)
+            var bus = http_bus(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
+            bus.get(ep)
 
             // 1. It's reported once as an error — the 403, on the GET.
             await sleep(300)
@@ -10863,47 +10878,47 @@ run_test(
             assert(errors[0].method === 'GET', 'on the GET')
 
             // 2. The subscription is cancelled, so its host is GC'd.
-            assert(pipe.network.hosts[host] === undefined, "subscription cancelled, host GC'd")
+            assert(bus.network.hosts[host] === undefined, "subscription cancelled, host GC'd")
         }
     )
 
     run_test(
-        "update_pipe: A 503 write retries the request without taking the host offline",
+        "HTTP Bus: A 503 write retries the request without taking the host offline",
         async () => {
             // 0. Write to a host that answers 503 the first time, then 200.
             var ep = await add_main_handler(pipe_server('pr_' + rid(), {put_behavior: 'n => n === 1 ? 503 : 200'}))
             var host = new URL(ep).host
-            var pipe = update_pipe(() => {}, {reconnect_interval: 0.3})
-            pipe.set(ep, {version: ['a1'], body: 'hi'})
+            var bus = http_bus(() => {}, {reconnect_interval: 0.3})
+            bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. A 503 is a per-resource retry: the host stays 'maybe' (never offline), the PUT waits.
             await sleep(150)
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.online === 'maybe', '503 keeps the host maybe, never offline')
             assert(h.urls[ep].put_queue.size === 1, 'the PUT waits in its queue to retry')
 
             // 2. The retry lands (the server saw it twice); the write acks and the host is GC'd.
             await sleep(500)
             assert((await server_puts(ep)).length === 2, 'server saw the PUT twice (503 then 200)')
-            assert(pipe.network.hosts[host] === undefined, "PUT finally acked; host GC'd")
+            assert(bus.network.hosts[host] === undefined, "PUT finally acked; host GC'd")
         }
     )
 
     run_test(
-        "update_pipe: A server with no 209 support is polled, and stays online='maybe'",
+        "HTTP Bus: A server with no 209 support is polled, and stays online='maybe'",
         async () => {
             // 0. Subscribe to a host with no 209 — it answers a plain 200 with the current state.
             var ep = await add_main_handler(pipe_server('poll_' + rid(), {poll_mode: true}))
             var host = new URL(ep).host
             var updates = []
-            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.3})
-            pipe.get(ep)
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.3})
+            bus.get(ep)
 
             // 1. The first poll delivers the current state; the URL is 'maybe' (never green — no 209 sub).
             await sleep(150)
             assert(updates.length === 1, 'first poll delivered the current state')
             assert(decode(updates[0].body) === 'state1', 'with the right body')
-            var h = pipe.network.hosts[host]
+            var h = bus.network.hosts[host]
             assert(h.online === 'maybe', 'a polled url is maybe, never green')
             assert(h.online_subs.size === 0, 'no online (209) subscription')
 
@@ -10912,7 +10927,7 @@ run_test(
             assert(updates.length >= 2, 'polling re-fetched and delivered again')
 
             // 3. forget() stops the polling.
-            pipe.forget(ep)
+            bus.forget(ep)
             var at_forget = updates.length
             await sleep(500)
             assert(updates.length === at_forget, 'forget stops the polling')
@@ -10953,13 +10968,13 @@ run_test(
     var poll_status  = async ep => (await og_fetch(ep + '?_polls')).json()
 
     run_test(
-        "update_pipe: Polling suppresses an unchanged version, and delivers a new one",
+        "HTTP Bus: Polling suppresses an unchanged version, and delivers a new one",
         async () => {
             // 0. Poll a server that keeps the same version until told to change.
             var ep = await add_main_handler(poll_server('cdv_' + rid(), 'version'))
             var updates = []
-            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
-            pipe.get(ep)
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            bus.get(ep)
 
             // 1. The first poll delivers the current state.
             await sleep(150)
@@ -10978,18 +10993,18 @@ run_test(
             assert(updates.length === 2, 'a new version is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
-            pipe.forget(ep)
+            bus.forget(ep)
         }
     )
 
     run_test(
-        "update_pipe: Polling sends If-None-Match; a 304 stays silent, a changed etag delivers",
+        "HTTP Bus: Polling sends If-None-Match; a 304 stays silent, a changed etag delivers",
         async () => {
             // 0. Poll a server that supports conditional GET (etag + 304).
             var ep = await add_main_handler(poll_server('cde_' + rid(), 'etag'))
             var updates = []
-            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
-            pipe.get(ep)
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            bus.get(ep)
 
             // 1. The first poll (no etag held yet) delivers the current state.
             await sleep(150)
@@ -11009,18 +11024,18 @@ run_test(
             assert(updates.length === 2, 'a changed etag is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
-            pipe.forget(ep)
+            bus.forget(ep)
         }
     )
 
     run_test(
-        "update_pipe: Polling with no version or etag dedups by hashing the body",
+        "HTTP Bus: Polling with no version or etag dedups by hashing the body",
         async () => {
             // 0. Poll a server that sends only a body — no version, no etag.
             var ep = await add_main_handler(poll_server('cdh_' + rid(), 'hash'))
             var updates = []
-            var pipe = update_pipe(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
-            pipe.get(ep)
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            bus.get(ep)
 
             // 1. The first poll delivers the current state.
             await sleep(150)
@@ -11039,7 +11054,35 @@ run_test(
             assert(updates.length === 2, 'a changed body is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
-            pipe.forget(ep)
+            bus.forget(ep)
+        }
+    )
+
+    add_section_header("Package Root Tests")
+
+    run_test(
+        "The CJS and ESM roots (index.js, index.mjs) export the same API",
+        async () => {
+            // Browsers don't load the package roots; this is a node-only test
+            if (typeof require === 'undefined') return
+
+            // An ESM root that can't even parse (e.g. exporting a misspelled
+            // name) rejects this import()
+            var cjs = require('../index.js')
+            var mjs = await import('../index.mjs')
+
+            var cjs_names = Object.keys(cjs).sort().join(', ')
+            var mjs_names = Object.keys(mjs).filter(k => k !== 'default').sort().join(', ')
+            assert(cjs_names === mjs_names,
+                `cjs root exports [${cjs_names}] but esm root exports [${mjs_names}]`)
+
+            // And each export should be the same actual function in both
+            // roots, as a named export and on the esm default export
+            for (var name of Object.keys(cjs)) {
+                assert(mjs[name] === cjs[name], `esm ${name} !== cjs ${name}`)
+                assert(mjs.default[name] === cjs[name],
+                    `esm default ${name} !== cjs ${name}`)
+            }
         }
     )
 

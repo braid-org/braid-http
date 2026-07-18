@@ -760,6 +760,11 @@ function format_update (parser_state) {
     for (var k in update)
         if (update[k] === undefined) delete update[k]
 
+    // Ignore content-type if it's application/http-patches, because that has
+    // already been parsed and handled by now.
+    if (update.content_type?.includes('http-patches'))
+        delete update.content_type
+
     // Install .body_text helper on body
     var body_text_cache = null
     Object.defineProperty(update, 'body_text', {
@@ -948,7 +953,7 @@ function parse_headers (input) {
     return { result: 'success', headers, input }
 }
 
-// Parse the Version, Parents, and Patches values into JS primitves
+// Parse the Version, Parents, Patches, and :status values into JS primitves
 function parse_header_values (state) {
     var headers = state.headers
     try {
@@ -958,6 +963,8 @@ function parse_header_values (state) {
             headers.parents = JSON.parse('['+headers.parents+']')
         if (headers.patches !== undefined)
             headers.patches = JSON.parse(headers.patches)
+        if (headers[':status'] !== undefined)
+            headers[':status'] = parseInt(headers[':status'])
     } catch (e) {
         throw Err({
             type: 'parse',
@@ -2040,9 +2047,9 @@ function reliable_update_channel (url, params) {
 }
 
 // ============================================================
-// Interstate / Statebus
+// http_bus
 //
-// Abstracts HTTP behind the Braid Interstate Protocol.
+// Abstracts HTTP behind a statebus.
 //
 // This maps between concrete braid_fetch() HTTP requests and responses, and
 // the standard Interstate messages:
@@ -2054,7 +2061,7 @@ function reliable_update_channel (url, params) {
 //   - ack
 //
 // Usage:
-// > state = interstate(cb)
+// > state = http_bus(cb)
 // > state.get('https://foo.com/bar')
 // > // Updates will stream to you via cb({type: 'set', url: 'https://foo.com/bar', update})
 // > state.set('https://foo.com/bar', update)
@@ -2071,7 +2078,7 @@ function reliable_update_channel (url, params) {
 // with little probes, rather than sending 10,000s of useless requests off a
 // cliff to their death.
 
-function interstate (cb, options = {}) {
+function http_bus (cb, options = {}) {
 
     var base_url             = options.base_url,
         reconnect_interval   = options.reconnect_interval   ?? 3,    // Probe offline pipes every N seconds
@@ -2313,11 +2320,10 @@ function interstate (cb, options = {}) {
 
 
     function process_mime_type (update, resource) {
-        // Store the content_type, if it's changed
-        if (update.content_type)
-            resource.content_type = update.content_type
+        // Store the repr_type, if it's changed
+        if (update.content_type) resource.repr_type = update.content_type
         // Otherwise, import it from the past
-        update.content_type = resource.content_type
+        update.content_type = resource.repr_type
 
         // Decode a text/* body to a string, and a JSON body to a parsed value.
         if (update.body == null) return update
@@ -2430,13 +2436,13 @@ function interstate (cb, options = {}) {
                 on_heartbeat:    reset_timeout
             })
             clearTimeout(req.timeout_timer)
-            if (req.aborter.signal.aborted) return
+            if (!req.aborter || req.aborter.signal.aborted) return
 
             // We got a response!
 
             // Store the content-type
-            var content_type = res.headers.get('repr-type')
-            if (content_type) resource.content_type = content_type
+            var repr_type = res.headers.get('repr-type')
+            if (repr_type) resource.repr_type = repr_type
 
             // Figure out how to respond to the response:
             var disposition = classify_response_status('GET', res.status)
@@ -2464,7 +2470,7 @@ function interstate (cb, options = {}) {
 
             // Or maybe we're just polling
             } else if (disposition === 'poll') {
-                if (req.aborter.signal.aborted) return
+                if (!req.aborter || req.aborter.signal.aborted) return
 
                 // Host's online is now at least 'maybe'
                 host_showed_life(host)
@@ -2491,7 +2497,7 @@ function interstate (cb, options = {}) {
         // failure, in which case we'll go offline.
         catch (err) {
             clearTimeout(req.timeout_timer)
-            if (req.aborter.signal.aborted) return
+            if (!req.aborter || req.aborter.signal.aborted) return
             get_failed(req, err)
         }
     }
@@ -2501,7 +2507,7 @@ function interstate (cb, options = {}) {
         if (err.type === 'abort') return
         if (err.type === 'pipe') {
             if (err.cause?.code === 'ERR_TLS_CERT_ALTNAME_INVALID')
-                console.warn(`update_pipe: TLS hostname mismatch on ${req.url}, likely a captive portal`)
+                console.warn(`TLS hostname mismatch on ${req.url}, likely a captive portal`)
             return pipe_failed(host_of(req.url))
         }
         // parse / protocol / app: reconnecting won't help — cancel the URL.
@@ -2531,7 +2537,7 @@ function interstate (cb, options = {}) {
                 signal: req.aborter.signal
             })
             clearTimeout(req.timeout_timer)
-            if (req.aborter.signal.aborted) return
+            if (!req.aborter || req.aborter.signal.aborted) return
 
             // Classify the response status code
             var disposition = classify_response_status(req.method, res.status)
@@ -2543,7 +2549,7 @@ function interstate (cb, options = {}) {
                 handle_issue(req, res, disposition)
         } catch (err) {
             clearTimeout(req.timeout_timer)
-            if (req.aborter.signal.aborted) return
+            if (!req.aborter || req.aborter.signal.aborted) return
             if (err.type === 'pipe')
                 return pipe_failed(host)   // host down; PUT stays queued for a resend
             // parse / protocol / app: the write itself is bad — cancel it.
@@ -2689,8 +2695,6 @@ function interstate (cb, options = {}) {
     }
 }
 
-// I'm not sure what to call this abstraction yet
-var update_pipe = interstate
 
 // ****************************
 // Exports
@@ -2700,11 +2704,11 @@ if (typeof module !== 'undefined' && module.exports)
     module.exports = {
         fetch: braid_fetch,
         multiplex_fetch,
-        http: braidify_http,
+        http: braidify_http,   // Deprecated: use fetch instead
         parse_update,
         parse_headers,
         parse_header_values,
         parse_body,
         reliable_update_channel,
-        update_pipe
+        http_bus
     }

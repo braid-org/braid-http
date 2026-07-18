@@ -7,8 +7,12 @@ var client = require('./braid-http-client'),
 
 module.exports = {
     fetch: client.fetch,
+    braidify: server.braidify,
+    http_bus: client.http_bus,
+    free_cors: server.free_cors,
     reliable_update_channel: client.reliable_update_channel,
-    http_client: client.http,
-    http_server: server.braidify,
-    free_cors: server.free_cors
+
+    // Deprecated names, kept working for backwards-compatibility:
+    http_server: server.braidify,  // Deprecated: renamed to braidify
+    http_client: client.http       // Deprecated: use fetch instead
 }
