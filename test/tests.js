@@ -4152,7 +4152,7 @@ run_test(
 )
 
 run_test(
-    "Test version header is parsing prints error on corrupt version",
+    "Test that a corrupt version header prints an error, and doesn't become res.version",
     async () => {
         // add a handler that responds with a corrupt version header: legal
         // values are json-encoded strings, so a bare unquoted token can't
@@ -4956,7 +4956,7 @@ run_test(
 
 
 run_test(
-    "onFetch test 1",
+    "Test onFetch exposes the underlying fetch's url, params, and aborter",
     async () => {
         // add a handler that counts its hits in a global keyed by a random id
         // (so we can check later how many requests really reached the server)
@@ -5019,7 +5019,7 @@ run_test(
 )
 
 run_test(
-    "onBytes test 1",
+    "Test onBytes sees the subscription's exact wire bytes, as Uint8Arrays",
     async () => {
         // add a handler that sends one update and holds the subscription
         // open. the update is passed as an arg (the handler runs server-side
