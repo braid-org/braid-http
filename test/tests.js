@@ -5516,82 +5516,84 @@ run_test(
     }
 )
 
+// Tests that set braid_fetch.reconnect_delay_ms -- a global knob -- take
+// turns through this chain (the browser runner runs tests in parallel), with
+// the knob set to `value` for the duration and the pristine value restored
+// afterwards, even if fn throws. The pristine value is captured on first
+// use, which serialization guarantees is before any test has twiddled the
+// knob. Restoring assigns rather than deletes: the client reads the knob
+// with ??, so undefined behaves as unset -- and in the node runner
+// braid_fetch is a wrapper whose reconnect_delay_ms is a non-configurable
+// accessor, so a delete would silently fail and leak the value
+var delay_turn = Promise.resolve()
+var pristine_delay, pristine_delay_captured = false
+var with_reconnect_delay = (value, fn) => {
+    var go = async () => {
+        if (!pristine_delay_captured) {
+            pristine_delay = braid_fetch.reconnect_delay_ms
+            pristine_delay_captured = true
+        }
+        braid_fetch.reconnect_delay_ms = value
+        try { return await fn() }
+        finally { braid_fetch.reconnect_delay_ms = pristine_delay }
+    }
+    return delay_turn = delay_turn.then(go, go)
+}
+
 run_test(
     "Test reconnect_delay_ms default path",
-    async () => {
-        // the reconnect delay knob is global state on braid_fetch, and the
-        // browser runner runs tests in parallel -- so the reconnect_delay
-        // tests serialize themselves on this shared promise chain. take our
-        // turn, and release it in the finally below even if an assert throws
-        await braid_fetch.reconnect_delay_test_chain
-        var release_chain
-        braid_fetch.reconnect_delay_test_chain = new Promise(done => release_chain = done)
-        try {
-            // make sure the knob is unset, so this exercises the default
-            // delay formula: Math.min(retry_count + 1, 3) * 1000
-            delete braid_fetch.reconnect_delay_ms
+    // undefined leaves the knob unset, so this exercises the default delay
+    // formula: Math.min(retry_count + 1, 3) * 1000
+    () => with_reconnect_delay(undefined, async () => {
+        // add a handler that always 500s, counting its hits in a global
+        // keyed by a random id (passed as an arg, since the handler runs
+        // server-side and can't close over test variables), so we can
+        // prove later that the retry really went back to the server
+        var s = Math.random().toString(36).slice(2)
+        var endpoint = await add_main_handler((req, res, s) => {
+            global['_500s_' + s] = (global['_500s_' + s] ?? 0) + 1
+            res.writeHead(500)
+            res.end('')
+        }, s)
 
-            // add a handler that always 500s, counting its hits in a global
-            // keyed by a random id (passed as an arg, since the handler runs
-            // server-side and can't close over test variables), so we can
-            // prove later that the retry really went back to the server
-            var s = Math.random().toString(36).slice(2)
-            var endpoint = await add_main_handler((req, res, s) => {
-                global['_500s_' + s] = (global['_500s_' + s] ?? 0) + 1
-                res.writeHead(500)
-                res.end('')
-            }, s)
+        // fetch it with a retry function that notes when each 500
+        // arrives: retry the first (return true), accept the second
+        // (return false), which lets the fetch resolve with it. the
+        // function is needed because plain retry: true doesn't retry
+        // bare 500s -- they resolve normally
+        var arrivals = []
+        var r = await fetch(endpoint, {
+            retry: res => {
+                arrivals.push(Date.now())
+                return arrivals.length < 2
+            }
+        })
 
-            // fetch it with a retry function that notes when each 500
-            // arrives: retry the first (return true), accept the second
-            // (return false), which lets the fetch resolve with it. the
-            // function is needed because plain retry: true doesn't retry
-            // bare 500s -- they resolve normally
-            var arrivals = []
-            var r = await fetch(endpoint, {
-                retry: res => {
-                    arrivals.push(Date.now())
-                    return arrivals.length < 2
-                }
-            })
+        // accepting the second 500 should resolve the fetch with it
+        assert(r.status === 500, `expected the fetch to resolve with the second 500, got ${r.status}`)
+        assert(arrivals.length === 2, `expected 2 attempts, saw ${arrivals.length}`)
 
-            // accepting the second 500 should resolve the fetch with it
-            assert(r.status === 500, `expected the fetch to resolve with the second 500, got ${r.status}`)
-            assert(arrivals.length === 2, `expected 2 attempts, saw ${arrivals.length}`)
+        // make sure the retry actually re-hit the server, rather than
+        // the client fabricating a second response locally
+        var hits = await server_eval((req, res, s) =>
+            res.end('' + global['_500s_' + s]), s)
+        assert(hits === '2', `expected the server to see 2 requests, saw ${hits}`)
 
-            // make sure the retry actually re-hit the server, rather than
-            // the client fabricating a second response locally
-            var hits = await server_eval((req, res, s) =>
-                res.end('' + global['_500s_' + s]), s)
-            assert(hits === '2', `expected the server to see 2 requests, saw ${hits}`)
-
-            // the first reconnect uses retry_count = 0, so the default delay
-            // is Math.min(0 + 1, 3) * 1000 = 1000ms. allow slack above for
-            // the retry's round-trip, but stay below the backoff ladder's
-            // next rung at 2000ms
-            var elapsed = arrivals[1] - arrivals[0]
-            assert(elapsed >= 900 && elapsed < 1800,
-                   `expected the default ~1000ms reconnect delay, measured ${elapsed}ms`)
-        } finally {
-            release_chain()
-        }
-    }
+        // the first reconnect uses retry_count = 0, so the default delay
+        // is Math.min(0 + 1, 3) * 1000 = 1000ms. allow slack above for
+        // the retry's round-trip, but stay below the backoff ladder's
+        // next rung at 2000ms
+        var elapsed = arrivals[1] - arrivals[0]
+        assert(elapsed >= 900 && elapsed < 1800,
+               `expected the default ~1000ms reconnect delay, measured ${elapsed}ms`)
+    })
 )
 
 run_test(
     "Test reconnect_delay_ms as number",
-    async () => {
-        // the reconnect delay knob is a global on braid_fetch, shared with the
-        // other reconnect_delay_ms tests, so the three of them take turns
-        // through this promise chain. claim our turn synchronously -- awaiting
-        // the chain before swapping in our own promise would let the next test
-        // latch onto the same turn in the browser's parallel runner -- and
-        // wait out the previous test without inheriting its failure
-        var release_chain
-        var prev_chain = braid_fetch.reconnect_delay_test_chain
-        braid_fetch.reconnect_delay_test_chain = new Promise(done => release_chain = done)
-        try { await prev_chain } catch (e) {}
-
+    // the knob under test: a fixed number of milliseconds between
+    // reconnects, overriding the default 1000/2000/3000ms backoff
+    () => with_reconnect_delay(200, async () => {
         // add a handler that always responds 500, counting its hits in a
         // global keyed by a random id, so we can verify later that each retry
         // really re-sent the request over the wire
@@ -5601,10 +5603,6 @@ run_test(
             res.writeHead(500)
             res.end('')
         }, s)
-
-        // set the knob under test: a fixed number of milliseconds between
-        // reconnects, overriding the default 1000/2000/3000ms backoff
-        braid_fetch.reconnect_delay_ms = 200
 
         // fetch with a retry function that timestamps each 500 as it arrives,
         // okays the first two retries, and gives up on the third response,
@@ -5619,15 +5617,6 @@ run_test(
                 return attempts.length < 3
             }
         }).catch(e => fetch_error = e)
-
-        // restore the default backoff and let the next reconnect_delay_ms
-        // test take its turn, before any assert can bail out of this one.
-        // assign undefined rather than delete: in the node runner, braid_fetch
-        // is a wrapper whose reconnect_delay_ms property proxies to the real
-        // client and can't be deleted, and the client treats undefined as
-        // unset anyway
-        braid_fetch.reconnect_delay_ms = undefined
-        release_chain()
 
         // ask the server how many requests it actually saw
         var hits = await server_eval((req, res, s) =>
@@ -5649,104 +5638,74 @@ run_test(
             var gap = attempts[i].time - attempts[i - 1].time
             assert(gap >= 190 && gap < 800, `expected ~200ms between attempts, got ${gap}ms`)
         }
-    }
+    })
 )
 
 run_test(
     "Test reconnect_delay_ms as function",
-    async () => {
-        // add a handler that 500s every request, counting hits in a global
-        // keyed by a random id, so we can check later that the client really
-        // re-sent the request over the wire
-        var s = Math.random().toString(36).slice(2)
-        var endpoint = await add_main_handler((req, res, s) => {
-            global['_hits_' + s] = (global['_hits_' + s] ?? 0) + 1
-            res.writeHead(500)
-            res.end('')
-        }, s)
-
-        // reconnect_delay_ms is a global knob on braid_fetch, and in the
-        // browser tests run in parallel, so the reconnect_delay_ms tests take
-        // turns through a shared promise chain. it's our turn once the chain
-        // settles without anyone having added a new link while we waited
-        while (true) {
-            var turn = braid_fetch.reconnect_delay_test_chain
-            await turn
-            if (turn === braid_fetch.reconnect_delay_test_chain) break
+    () => {
+        // the delay function under test: it logs each retry_count it is
+        // asked about (with a timestamp -- see below), and answers a
+        // distinct delay per retry: 100ms for the first, 300ms for the
+        // second -- both far below the default's 1000ms minimum, so the
+        // timing checks below can tell our answers were actually used
+        var delay_calls = []
+        var delay_fn = retry_count => {
+            delay_calls.push({ n: retry_count, t: Date.now() })
+            return 100 + 200 * retry_count
         }
-        var run = (async () => {
-            try {
-                var delay_calls, response_times, r
-                for (var attempt = 0; ; attempt++) {
-                    // install a delay function that logs each retry_count it
-                    // is asked about (with a timestamp -- see below), and
-                    // answers a distinct delay per retry: 100ms for the
-                    // first, 300ms for the second -- both far below the
-                    // default's 1000ms minimum, so the timing checks below
-                    // can tell our answers were actually used
-                    delay_calls = []
-                    var delay_fn = retry_count => {
-                        delay_calls.push({ n: retry_count, t: Date.now() })
-                        return 100 + 200 * retry_count
-                    }
-                    braid_fetch.reconnect_delay_ms = delay_fn
+        return with_reconnect_delay(delay_fn, async () => {
+            // add a handler that 500s every request, counting hits in a
+            // global keyed by a random id, so we can check later that the
+            // client really re-sent the request over the wire
+            var s = Math.random().toString(36).slice(2)
+            var endpoint = await add_main_handler((req, res, s) => {
+                global['_hits_' + s] = (global['_hits_' + s] ?? 0) + 1
+                res.writeHead(500)
+                res.end('')
+            }, s)
 
-                    // fetch the 500ing endpoint with a retry function that
-                    // allows exactly two retries, timestamping each response
-                    // as it lands
-                    response_times = []
-                    r = await fetch(endpoint, { retry: res => {
-                        response_times.push(Date.now())
-                        return response_times.length < 3
-                    }})
+            // fetch the 500ing endpoint with a retry function that allows
+            // exactly two retries, timestamping each response as it lands.
+            // (no clobber-detection needed: every test that sets the knob
+            // takes a turn through with_reconnect_delay, so nothing can
+            // change it out from under us mid-run)
+            var response_times = []
+            var r = await fetch(endpoint, { retry: res => {
+                response_times.push(Date.now())
+                return response_times.length < 3
+            }})
 
-                    // our function still installed? then no concurrent test
-                    // clobbered the knob mid-run (some tests set
-                    // reconnect_delay_ms without taking a turn on the chain),
-                    // and the observations below are trustworthy
-                    if (braid_fetch.reconnect_delay_ms === delay_fn) break
-                    assert(attempt < 3, 'gave up: other tests kept clobbering reconnect_delay_ms')
-                }
+            // once the retry function says stop, the 500 resolves
+            // normally instead of reconnecting or throwing
+            assert(r.status === 500, `expected the final 500 to resolve normally, got status ${r.status}`)
 
-                // once the retry function says stop, the 500 resolves
-                // normally instead of reconnecting or throwing
-                assert(r.status === 500, `expected the final 500 to resolve normally, got status ${r.status}`)
+            // the client should have asked our function for a delay once
+            // per reconnect, passing the number of retries so far. the
+            // knob is global, so in the parallel browser runner OTHER
+            // tests' retries call our function too (and the client passes
+            // only retry_count -- there's nothing to filter foreign calls
+            // by). so instead we match by time: the client asks for the
+            // delay at the moment our retry decision fires, so our calls
+            // land right after each of our recorded response arrivals
+            assert([0, 1].every(i => delay_calls.some(c =>
+                       c.n === i && c.t >= response_times[i] && c.t < response_times[i] + 150)),
+                   `expected our two reconnects to consult reconnect_delay_ms with retry counts `
+                   + `0 and 1, saw ${JSON.stringify(delay_calls)} against arrivals `
+                   + `${JSON.stringify(response_times)}`)
 
-                // the client should have asked our function for a delay once
-                // per reconnect, passing the number of retries so far. the
-                // knob is global, so in the parallel browser runner OTHER
-                // tests' retries call our function too (and the client passes
-                // only retry_count -- there's nothing to filter foreign calls
-                // by). so instead we match by time: the client asks for the
-                // delay at the moment our retry decision fires, so our calls
-                // land right after each of our recorded response arrivals
-                assert([0, 1].every(i => delay_calls.some(c =>
-                           c.n === i && c.t >= response_times[i] && c.t < response_times[i] + 150)),
-                       `expected our two reconnects to consult reconnect_delay_ms with retry counts `
-                       + `0 and 1, saw ${JSON.stringify(delay_calls)} against arrivals `
-                       + `${JSON.stringify(response_times)}`)
+            // and each reconnect should have waited about as long as our
+            // function said -- not the >= 1000ms the default would use
+            var gap1 = response_times[1] - response_times[0]
+            var gap2 = response_times[2] - response_times[1]
+            assert(gap1 >= 90 && gap1 < 600, `expected first reconnect after ~100ms, got ${gap1}ms`)
+            assert(gap2 >= 290 && gap2 < 900, `expected second reconnect after ~300ms, got ${gap2}ms`)
 
-                // and each reconnect should have waited about as long as our
-                // function said -- not the >= 1000ms the default would use
-                var gap1 = response_times[1] - response_times[0]
-                var gap2 = response_times[2] - response_times[1]
-                assert(gap1 >= 90 && gap1 < 600, `expected first reconnect after ~100ms, got ${gap1}ms`)
-                assert(gap2 >= 290 && gap2 < 900, `expected second reconnect after ~300ms, got ${gap2}ms`)
-
-                // confirm with the server that the client really made three
-                // requests per attempt -- one original plus two retries
-                var hits = await server_eval((req, res, s) => res.end(`${global['_hits_' + s]}`), s)
-                assert(hits === `${3 * (attempt + 1)}`,
-                       `expected ${3 * (attempt + 1)} requests at the server, got ${hits}`)
-            } finally {
-                // clean up the global knob for whoever goes next
-                delete braid_fetch.reconnect_delay_ms
-            }
-        })()
-        // publish our link in the chain, swallowing rejection there so an
-        // assert failure here doesn't also fail the next test in line
-        braid_fetch.reconnect_delay_test_chain = run.catch(() => {})
-        await run
+            // confirm with the server that the client really made three
+            // requests -- one original plus two retries
+            var hits = await server_eval((req, res, s) => res.end(`${global['_hits_' + s]}`), s)
+            assert(hits === '3', `expected 3 requests at the server, got ${hits}`)
+        })
     }
 )
 
@@ -8159,10 +8118,10 @@ run_test(
 
 run_test(
     "onSubscriptionStatus lifecycle: true, false, true",
-    async () => {
-        // speed up the client's reconnect delay so the retry happens fast
-        braid_fetch.reconnect_delay_ms = 150
-
+    // speed up the client's reconnect delay so the retry happens fast.
+    // (the delay knob is global, so setters take a serialized turn through
+    // with_reconnect_delay, which also restores it afterwards)
+    () => with_reconnect_delay(150, async () => {
         // add a handler that counts its connections in a global keyed by a
         // random id (the handler runs server-side via eval, so it can't close
         // over test-side variables). it sends one update, then ends the first
@@ -8214,8 +8173,7 @@ run_test(
         assert(conns === '2', `expected exactly two connections, got ${conns}`)
 
         a.abort()
-        delete braid_fetch.reconnect_delay_ms
-    }
+    })
 )
 
 run_test(
@@ -8330,7 +8288,10 @@ run_test(
 
 run_test(
     "onSubscriptionStatus cycles through 5 transitions",
-    async () => {
+    // speed up the retry loop so the cycling doesn't take seconds. (the
+    // delay knob is global, so setters take a serialized turn through
+    // with_reconnect_delay, which also restores it afterwards)
+    () => with_reconnect_delay(150, async () => {
         // add a handler that sends one update and then ends the response,
         // dropping the subscription -- each retry reconnects to it and gets
         // dropped again, cycling the connection up and down. it counts its
@@ -8344,9 +8305,6 @@ run_test(
             res.sendUpdate({ version: ['v' + n], body: 'hi' })
             res.end()
         }, s)
-
-        // speed up the retry loop so the cycling doesn't take seconds
-        braid_fetch.reconnect_delay_ms = 150
 
         // subscribe with retry on, recording every status callback
         var a = new AbortController()
@@ -8373,9 +8331,9 @@ run_test(
         })
 
         // tear down before asserting, so a failed assert doesn't leave the
-        // subscription retrying or the global retry knob set
+        // subscription retrying (the delay knob restores itself via
+        // with_reconnect_delay's finally)
         a.abort()
-        delete braid_fetch.reconnect_delay_ms
 
         // the callback must have alternated: online on each (re)connect,
         // offline on each drop
@@ -8401,7 +8359,7 @@ run_test(
         var conns = await server_eval((req, res, s) =>
             res.end('' + (global['_conns_' + s] ?? 0)), s)
         assert(conns === '3', 'expected the server to see exactly 3 connections, got: ' + conns)
-    }
+    })
 )
 
 run_test(
