@@ -130,9 +130,6 @@ function create_test_server() {
         for (var { fn, args } of pre_braidify_handlers)
             if (fn(req, res, ...args)) return
 
-        // MULTIPLEX
-        var is_mux = req.method === 'MULTIPLEX' || req.url.startsWith('/.well-known/multiplexer/')
-
         var eval_func = () => new Promise((done, fail) => {
             var body = ''
             req.on('data', chunk => {
@@ -155,9 +152,6 @@ function create_test_server() {
 
         if (req.url.startsWith('/eval') && req.method === 'POST')
             if ((await eval_func()) !== 'keep going') return
-
-        // MULTIPLEX
-        if (is_mux) res.end('hm..')
 
         // Lets tests register their own handlers on the fly, and serves the
         // handlers they've registered (see create_added_handlers above)
