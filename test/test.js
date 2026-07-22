@@ -96,15 +96,21 @@ process.stderr.on('error', die_quietly)
 //         GET /added-handler/g01lljltcfj
 //     ✓ Test receiving multiplexed message.
 //
-// Everything logs with plain console.log, which routes into the report
-// tree while tests run -- test code, the client library's own chatter, and
-// test-supplied server-side handler code all file under the right test.
-// test_context (an AsyncLocalStorage) follows each test across its awaits
-// and timers to find its report. It can't follow a request across the HTTP
-// hop, so the servers attribute each request by its test-id header
-// (stamped by og_fetch) or by the path's owner, and run test-supplied
-// handlers inside the owning test's context. Unattributed lines print at
-// the margin, immediately.
+// Everything logs with plain console.log/debug/warn/error, which route
+// into the report tree while tests run -- test code, the client library's
+// own chatter, and test-supplied server-side handler code all file under
+// the right test. test_context (an AsyncLocalStorage) follows each test
+// across its awaits and timers to find its report. It can't follow a
+// request across the HTTP hop, so the runner stamps every outgoing request
+// with a test-id header (a set_fetch wrapper covers braid_fetch and all
+// its internal traffic; og_fetch stamps its own), and each server door
+// calls claim_request(req) to read it. A line whose test has already
+// printed appears at the margin tagged (t<id>); a line with no test at
+// all prints at the margin untagged.
+//
+// The whole attribution system is this section, claim_request() at each
+// server's door, the two stamping wrappers, and the console patch around
+// the test pool -- remove those and the runner logs plainly again.
 
 var test_context = new AsyncLocalStorage()
 var reports = []            // one report per test, in registration order
@@ -113,24 +119,31 @@ var real_log = console.log.bind(console)
 var next_to_print = 0       // the report whose turn the console is on
 var last_section = null
 
-// The report a server request belongs to: by test-id header if the runner's
-// og_fetch stamped one, else by who registered the path it's hitting
-function report_for_request(req) {
+// Reads the request's test-id header, resolving the test it belongs to --
+// by the header if a runner wrapper stamped one, else by who registered
+// the path it's hitting -- and stashes it as req.test_report. The header
+// is scrubbed off: braidify parses unrecognized request headers into
+// updates' extra_headers, where a stamp would corrupt tests' asserts
+function claim_request(req) {
     var id = req.headers['test-id']
-    if (id !== undefined) return reports[+id]
-    return path_owners.get(req.url.split('?')[0])
+    delete req.headers['test-id']
+    return req.test_report = (id !== undefined)
+        ? reports[+id]
+        : path_owners.get(req.url.split('?')[0])
 }
 
 // log('a line')    -> the running test's report
 // log(req)         -> the request's test's report, as "GET /foo"
 function log(...args) {
     var req = args[0]?.method && args[0],
-        report = req ? report_for_request(req) : test_context.getStore(),
+        report = req ? req.test_report : test_context.getStore(),
         line = req ? `${req.method} ${req.url}` : args[0]
-    if (report) {
+    if (report && report.index >= next_to_print) {
         report.lines.push(line)
         print_reports_in_order()
-    } else
+    } else if (report)
+        real_log(`(t${report.index}) ${line}`)  // its report already printed
+    else
         real_log(line)
 }
 
@@ -189,7 +202,7 @@ function create_added_handlers() {
     return {
         handle(req, res) {
             if (req.url === '/add-handler' && req.method === 'POST') {
-                var owner = report_for_request(req)
+                var owner = req.test_report
                 read_posted_handler(req, entry => {
                     var path = '/added-handler/' + Math.random().toString(36).slice(2)
                     handlers.set(path, entry)
@@ -201,7 +214,7 @@ function create_added_handlers() {
             var path = req.url.split('?')[0]
             var entry = handlers.get(path)
             if (entry) {
-                test_context.run(path_owners.get(path),
+                test_context.run(req.test_report ?? path_owners.get(path),
                                  () => entry.fn(req, res, ...entry.args))
                 return true
             }
@@ -217,6 +230,7 @@ function create_test_server() {
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
         allowHTTP1: true
     }, async (req, res) => {
+        claim_request(req)
         log(req)
 
         // Lets tests register a handler that runs *before* braidify (and before
@@ -231,7 +245,8 @@ function create_test_server() {
                 res.end('ok')
             })
         for (var { fn, args } of pre_braidify_handlers)
-            if (fn(req, res, ...args)) return
+            if (test_context.run(req.test_report, () => fn(req, res, ...args)))
+                return
 
         var eval_func = () => new Promise((done, fail) => {
             var body = ''
@@ -254,7 +269,7 @@ function create_test_server() {
         if (req.is_multiplexer) return
 
         if (req.url.startsWith('/eval') && req.method === 'POST')
-            if ((await test_context.run(report_for_request(req), eval_func))
+            if ((await test_context.run(req.test_report, eval_func))
                 !== 'keep going') return
 
         // Lets tests register their own handlers on the fly, and serves the
@@ -277,7 +292,7 @@ function create_test_server() {
 function create_express_middleware_server() {
     var express_app = require("express")()
 
-
+    express_app.use((req, res, next) => { claim_request(req); next() })
     express_app.use(braidify)
 
     express_app.use((req, res, next) => {
@@ -305,6 +320,7 @@ function create_wrapper_server() {
         key: fs.readFileSync(path.join(__dirname, 'localhost-privkey.pem')),
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem'))
     }, braidify(async (req, res) => {
+        claim_request(req)
         if (mode === 'browser') console.log('Wrapped-Handler-Request:', req.url, req.method)
 
         free_cors(res)
@@ -331,6 +347,7 @@ function create_wrapped_server() {
     braidify.server(server)
 
     server.on('request', (req, res) => {
+        claim_request(req)
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
@@ -352,6 +369,7 @@ function create_no_mux_server() {
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
         allowHTTP1: true
     }, async (req, res) => {
+        claim_request(req)
         free_cors(res)
         if (req.method === 'OPTIONS') return res.end()
 
@@ -518,6 +536,20 @@ async function run_console_tests() {
     // Store tests to run sequentially
     var tests_to_run = []
 
+    // Stamp braid_fetch's underlying transport with the running test's id,
+    // so every request -- including the library's internal multiplexer
+    // traffic -- tells the servers whose it is (claim_request reads and
+    // scrubs the header on the other side)
+    var og_transport = braid_fetch.set_fetch((url, params = {}) => {
+        var report = test_context.getStore()
+        if (report) {
+            var headers = new Headers(params.headers)
+            headers.set('test-id', report.index)
+            params = { ...params, headers }
+        }
+        return og_transport(url, params)
+    })
+
     // Create wrapped fetch that points to localhost
     // Use HTTP/2 fetch for og_fetch since Node's native fetch uses HTTP/1.1
     // which doesn't support custom methods like MULTIPLEX. Each request is
@@ -678,9 +710,14 @@ async function run_console_tests() {
         print_reports_in_order()
     }
 
-    // Run the tests, in_parallel at a time. While they run, console.log
-    // routes into the report tree, catching the client library's own chatter
-    console.log = (...args) => log(util.format(...args))
+    // Run the tests, in_parallel at a time. While they run, the console's
+    // log/debug/warn/error route into the report tree, catching the client
+    // library's own chatter
+    var console_methods = ['log', 'debug', 'warn', 'error']
+    var real_console = Object.fromEntries(
+        console_methods.map(m => [m, console[m]]))
+    for (var m of console_methods)
+        console[m] = (...args) => log(util.format(...args))
     try {
         var next = 0
         await Promise.all(Array.from({ length: in_parallel }, async () => {
@@ -688,7 +725,7 @@ async function run_console_tests() {
                 await run_one(tests_to_run[next++])
         }))
     } finally {
-        console.log = real_log
+        Object.assign(console, real_console)
     }
 
     // Print summary
