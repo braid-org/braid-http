@@ -85,16 +85,17 @@ process.stderr.on('error', die_quietly)
 // Ordered, indented test output
 // ============================================================================
 //
-// Tests run in parallel, but the console tells their stories one at a time:
-// each test accumulates a report (its start, every line it provokes, its
-// verdict), and reports print in registration order -- the test whose turn
-// it is streams live; later tests hold their reports until their turn.
+// Tests run in parallel, and each test accumulates a report: every line it
+// provokes, and its verdict. Reports print whole, in completion order --
+// whichever test finishes next appears next, verdict line tagged with its
+// section, logged lines beneath:
 //
-//   --- Multiplexing Tests ---
-//     ▶ Test receiving multiplexed message.
+//   ✓ [Multiplexing Tests] Test receiving multiplexed message.
 //         POST /add-handler
 //         GET /added-handler/g01lljltcfj
-//     ✓ Test receiving multiplexed message.
+//
+// Meanwhile a footer, pinned below the scrollback on a live terminal,
+// shows the whole suite: a glyph per test, counts, and what's running.
 //
 // Everything logs with plain console.log/debug/warn/error, which route
 // into the report tree while tests run -- test code, the client library's
@@ -116,8 +117,15 @@ var test_context = new AsyncLocalStorage()
 var reports = []            // one report per test, in registration order
 var path_owners = new Map() // added-handler path -> owning test's report
 var real_log = console.log.bind(console)
-var next_to_print = 0       // the report whose turn the console is on
-var last_section = null
+
+// Color and the live footer only make sense on a real terminal -- piped
+// output (files, CI, grep) stays plain text
+var is_tty = !!process.stdout.isTTY
+var use_color = is_tty && !process.env.NO_COLOR
+var green  = s => use_color ? `\x1b[32m${s}\x1b[39m` : s
+var red    = s => use_color ? `\x1b[31m${s}\x1b[39m` : s
+var yellow = s => use_color ? `\x1b[33m${s}\x1b[39m` : s
+var dim    = s => use_color ? `\x1b[2m${s}\x1b[22m`  : s
 
 // Reads the request's test-id header, resolving the test it belongs to --
 // by the header if a runner wrapper stamped one, else by who registered
@@ -138,36 +146,71 @@ function log(...args) {
     var req = args[0]?.method && args[0],
         report = req ? req.test_report : test_context.getStore(),
         line = req ? `${req.method} ${req.url}` : args[0]
-    if (report && report.index >= next_to_print) {
+    if (report && !report.printed)
         report.lines.push(line)
-        print_reports_in_order()
-    } else if (report)
-        real_log(`(t${report.index}) ${line}`)  // its report already printed
+    else if (report)
+        emit(dim(`(t${report.index}) `) + line)  // its report already printed
     else
-        real_log(line)
+        emit(line)
 }
 
-// Prints the reports in order, as far as they're ready -- the first
-// unfinished test holds the turn, streaming as it goes
-function print_reports_in_order() {
-    while (next_to_print < reports.length) {
-        var report = reports[next_to_print]
-        if (report.state === 'pending') return
-        if (!report.announced) {
-            if (report.section && report.section !== last_section) {
-                last_section = report.section
-                real_log(`\n--- ${report.section} ---`)
-            }
-            real_log(`  ▶ ${report.test_name}`)
-            report.announced = true
-        }
-        while (report.printed < report.lines.length)
-            real_log('      ' + report.lines[report.printed++])
-        if (report.state !== 'done') return
-        for (var line of report.verdict)
-            real_log('  ' + line)
-        next_to_print++
+// Writes a line of scrollback, lifting the footer out of the way first --
+// every print path goes through here so the footer always sits below
+// everything
+var footer_rows = 0
+function emit(text) {
+    if (footer_rows) {
+        process.stdout.write(`\x1b[${footer_rows}A\x1b[0J`)
+        footer_rows = 0
     }
+    real_log(text)
+}
+
+// Prints a finished test's whole report: its verdict line, tagged with its
+// section, then everything it logged. Reports print in completion order --
+// whichever test finishes next appears next -- so the console flows
+// continuously while the footer shows what's still in flight
+function print_report(report) {
+    var mark = report.mark === '✓' ? green('✓')
+             : report.mark === '✗' ? red('✗') : report.mark
+    var tag = report.section ? dim(`[${report.section}] `) : ''
+    emit(`${mark} ${tag}${report.mark === '✗' ? red(report.test_name) : report.test_name}`)
+    for (var d of report.details) emit('    ' + d)
+    for (var l of report.lines)   emit('      ' + l)
+    report.printed = true
+    draw_footer()
+}
+
+// The footer: a glyph per test (· pending, ▸ running, ✓/✗ done), counts,
+// and the currently-running tests with their elapsed times
+function draw_footer() {
+    if (!is_tty) return
+    if (footer_rows) {
+        process.stdout.write(`\x1b[${footer_rows}A\x1b[0J`)
+        footer_rows = 0
+    }
+    var width = process.stdout.columns || 80
+    var glyphs = reports.map(r =>
+        r.state === 'done'    ? (r.mark === '✗' ? red('✗') : green('✓'))
+      : r.state === 'running' ? yellow('▸')
+      : dim('·'))
+    var rows = []
+    for (var i = 0; i < glyphs.length; i += width)
+        rows.push(glyphs.slice(i, i + width).join(''))
+
+    var done    = reports.filter(r => r.state === 'done')
+    var failed  = done.filter(r => r.mark === '✗').length
+    var running = reports.filter(r => r.state === 'running')
+    var names = running.slice(0, 2).map(r =>
+        `${r.test_name} (${((Date.now() - r.started_at) / 1000).toFixed(1)}s)`
+    ).join(', ') + (running.length > 2 ? `, +${running.length - 2} more` : '')
+    var status = `${done.length}/${reports.length}`
+        + (failed ? `  ${red('✗ ' + failed)}` : '')
+        + (names ? `  ${dim('▸ ' + names.slice(0, width - 12))}` : '')
+    rows.push(status)
+
+    process.stdout.write(rows.join('\n') + '\n')
+    footer_rows = rows.length
 }
 
 // ============================================================================
@@ -613,10 +656,11 @@ async function run_console_tests() {
             test_name,
             section: add_section_header.current_section,
             state: 'pending',
+            started_at: null,
             lines: [],
-            printed: 0,
-            announced: false,
-            verdict: null
+            mark: null,       // '✓', '✗', or '○'
+            details: [],      // Expected/Got/Error lines under a failure
+            printed: false
         }
         reports.push(report)
         tests_to_run.push({ report, test_function, expected_result, ...params })
@@ -659,7 +703,7 @@ async function run_console_tests() {
     async function run_one(item) {
         var { report, test_function, expected_result, timeout = 2000 } = item
         report.state = 'running'
-        print_reports_in_order()
+        report.started_at = Date.now()
 
         try {
             var timer = null
@@ -681,25 +725,26 @@ async function run_console_tests() {
                 // (without throwing). An assert() failure throws and is
                 // handled by the catch below.
                 passed_tests++
-                report.verdict = [`✓ ${report.test_name}`]
+                report.mark = '✓'
             } else if (result == expected_result) {
                 passed_tests++
-                report.verdict = [`✓ ${report.test_name}`]
+                report.mark = '✓'
             } else if (result === 'old node version') {
                 skipped_tests++
-                report.verdict = [`○ ${report.test_name} (skipped: old node version)`]
+                report.mark = '○'
+                report.details.push('(skipped: old node version)')
             } else {
                 failed_tests++
                 failed_test_names.push(report.test_name)
-                report.verdict = [`✗ ${report.test_name}`,
-                                  `  Expected: ${expected_result}`,
-                                  `  Got: ${result}`]
+                report.mark = '✗'
+                report.details.push(`Expected: ${expected_result}`,
+                                    `Got: ${result}`)
             }
         } catch (error) {
             failed_tests++
             failed_test_names.push(report.test_name)
-            report.verdict = [`✗ ${report.test_name}`,
-                              `  Error: ${error.message || error}`]
+            report.mark = '✗'
+            report.details.push(`Error: ${error.message || error}`)
         } finally {
             // otherwise a passing test's timer fires 10s later, and with
             // --hangs would print a bogus report during a later test
@@ -707,7 +752,7 @@ async function run_console_tests() {
         }
 
         report.state = 'done'
-        print_reports_in_order()
+        print_report(report)
     }
 
     // Run the tests, in_parallel at a time. While they run, the console's
@@ -718,6 +763,7 @@ async function run_console_tests() {
         console_methods.map(m => [m, console[m]]))
     for (var m of console_methods)
         console[m] = (...args) => log(util.format(...args))
+    var footer_timer = is_tty && setInterval(draw_footer, 100)
     try {
         var next = 0
         await Promise.all(Array.from({ length: in_parallel }, async () => {
@@ -726,6 +772,11 @@ async function run_console_tests() {
         }))
     } finally {
         Object.assign(console, real_console)
+        if (footer_timer) clearInterval(footer_timer)
+        if (footer_rows) {
+            process.stdout.write(`\x1b[${footer_rows}A\x1b[0J`)
+            footer_rows = 0
+        }
     }
 
     // Print summary
