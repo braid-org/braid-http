@@ -16,7 +16,10 @@
 var async_hooks = require('async_hooks')
 var path = require('path')
 
-var root = path.dirname(__dirname) + path.sep
+// "This project" = wherever the tests are being run from, so that a
+// consumer project's frames survive the filtering below even though this
+// file ships inside braid-http's package
+var root = process.cwd() + path.sep
 var pending = new Map()   // asyncId -> {trace, born}
 var last_id = 0           // asyncId of the newest promise we've seen
 var mark_id = 0           // promises with id <= mark_id are old news

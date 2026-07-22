@@ -1,6 +1,6 @@
 {
   "name": "braid-http",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "An implementation of Braid-HTTP for Node.js and Browsers",
   "scripts": {
     "test": "node test/test.js",
@@ -14,14 +14,19 @@
     "braid-http-server.js",
     "index.js",
     "index.mjs",
-    "index.d.ts"
+    "index.d.ts",
+    "run-tests.js",
+    "show-hangs.js"
   ],
   "main": "./index.js",
   "types": "./index.d.ts",
   "exports": {
-    "types": "./index.d.ts",
-    "require": "./index.js",
-    "import": "./index.mjs"
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "import": "./index.mjs"
+    },
+    "./run-tests": "./run-tests.js"
   },
   "dependencies": {
     "http2-express-bridge": "^1.0.7",
