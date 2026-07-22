@@ -92,7 +92,7 @@ function define_tests(run_test, context) {
         }, m)
     }
 
-add_section_header("Multiplexing Tests")
+add_section_header("Multiplexing")
 
 var multiplex_version = '1.0'
 braid_fetch.enable_multiplex = {after: Infinity}
@@ -2191,7 +2191,7 @@ run_test(
     }
 )
 
-add_section_header("Express Middleware Tests")
+add_section_header("Express Middleware")
 
 run_test(
     "Test braidify as Express middleware with subscription",
@@ -2293,7 +2293,7 @@ run_test(
     }
 )
 
-add_section_header("Wrapper Function Tests")
+add_section_header("Wrapper Function")
 
 run_test(
     "Test braidify as wrapper function with subscription",
@@ -2399,7 +2399,7 @@ run_test(
     }
 )
 
-add_section_header("braidify.server() Tests")
+add_section_header("braidify.server()")
 
 // braidify.server() attaches to an existing http.Server.  Listens on port+3.
 
@@ -5120,7 +5120,7 @@ run_test(
     }
 )
 
-add_section_header("Heartbeat Tests")
+add_section_header("Heartbeat")
 
 run_test(
     "Verify heartbeats don't prevent user writing headers",
@@ -5726,7 +5726,7 @@ run_test(
     }
 )
 
-add_section_header("Read Tests")
+add_section_header("Read")
 
 run_test(
     "Subscribe with empty Subscribe header value",
@@ -6072,7 +6072,7 @@ run_test(
     }
 )
 
-add_section_header("Write Tests")
+add_section_header("Write")
 
 run_test(
     "PUT with single patch, not in array",
@@ -6947,7 +6947,7 @@ run_test(
     }
 )
 
-add_section_header("Retry Tests")
+add_section_header("Retry")
 
 run_test(
     "Verify that retry.retryRes gets heeded when true.",
@@ -7932,7 +7932,7 @@ run_test(
     }
 )
 
-add_section_header('Binary Tests')
+add_section_header('Binary')
 
 run_test(
     "Verify basic binary GET",
@@ -8014,7 +8014,7 @@ run_test(
     }
 )
 
-add_section_header("onSubscriptionStatus Tests")
+add_section_header("onSubscriptionStatus")
 
 run_test(
     "onSubscriptionStatus fires online:true on initial connection",
@@ -8540,7 +8540,7 @@ run_test(
     }
 )
 
-add_section_header("already_buffered_body Tests")
+add_section_header("already_buffered_body")
 
 run_test(
     "already_buffered_body works for multiple patches",
@@ -8598,7 +8598,7 @@ run_test(
     }
 )
 
-add_section_header("Content-Type: application/http-patches Tests")
+add_section_header("Content-Type: application/http-patches")
 
 run_test(
     "Multi-patch PUT sends Content-Type: application/http-patches",
@@ -9230,7 +9230,7 @@ run_test(
     }
 )
 
-add_section_header("reliable_update_channel Tests")
+add_section_header("reliable_update_channel")
 
 run_test(
     "reliable_update_channel receives updates via on_update and put sends a PUT",
@@ -10508,7 +10508,7 @@ run_test(
 )
 
 
-    add_section_header("HTTP Bus Tests")
+    add_section_header("HTTP Bus")
 
     // ── shared helpers for the HTTP Bus tests ──────────────────────────
     var rid   = () => Math.random().toString(36).slice(2)
@@ -11055,7 +11055,7 @@ run_test(
         }
     )
 
-    add_section_header("Package Root Tests")
+    add_section_header("Package Root")
 
     run_test(
         "The CJS and ESM roots (index.js, index.mjs) export the same API",
