@@ -447,25 +447,12 @@ function braidify_request_internal (req, res, done) {
 
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
-    // If the subscribe header exists...
-    if ((subscribe === '' || subscribe)
-        // And this is a GET, because `Subscribe:` is only
-        // specified for GET thus far...
-        && req.method === 'GET') {
-        // Then let's set 'subscribe' on.  We default to "true", but if the
-        // client actually specified a value other than empty string '', let's
-        // use that rich value.
-        subscribe = subscribe || true
 
-        // Great. Now we also need to set the response body's content-type, so
-        // that FireFox doesn't try to sniff the content-type on a stream and
-        // hang forever waiting for 512 bytes (see firefox issue
-        // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313)
-        res.setHeader('Content-Type', 'application/http-history')
-
-        // And we don't want any caches trying to store these stream bodies.
-        res.setHeader('Cache-Control', 'no-store')
-    }
+    // Setting subscribe to the empty string is considered "Yes, subscribe!"
+    // in braid-http, but falsy in Javascript.  So we encode '' as explicitly
+    // true here:
+    if (subscribe === '')
+        subscribe = true
 
     // Define convenience variables
     req.version   = version
@@ -803,6 +790,27 @@ function add_braid_helpers (req, res, res2, peer) {
             ))
         )
     )
+    req.startMultiresponse = res2.startMultiresponse =
+        function startMultiresponse () {
+            res2.isMultiresponse = true
+
+            // Ensure Content-Type isn't already set; because we are about to
+            // clobber it
+            assert(res2.getHeader('Content-Type') === undefined ||
+                   res2.getHeader('Content-Type').includes('application/http-history'),
+                   'Cannot set Content-Type to ' + res2.getHeader('Content-Type')
+                   + ' on a multiresponse.')
+
+            res2.statusCode = 209
+            res2.statusMessage = 'Multiresponse'
+            res2.setHeader('Content-Type', 'application/http-history')
+
+            // Note: setting the content-type ^^ prevents FireFox from trying
+            // to sniff the content-type on a stream and hang forever waiting
+            // for 512 bytes (see firefox issue
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=1544313)
+        }
+
     req.startSubscription = res2.startSubscription =
         function startSubscription (args = {}) {
             // console.log('Starting subscription!')
@@ -826,12 +834,16 @@ function add_braid_helpers (req, res, res2, peer) {
                 // req.socket.server.headersTimeout = 0
             }
 
-            // We have a subscription!
-            res2.statusCode = 209
-            res2.statusMessage = 'Multiresponse'
-            res2.setHeader("subscribe", req.headers.subscribe ?? 'true')
-            res2.setHeader('cache-control', 'no-cache, no-transform, no-store')
+            // Ensure the request asked for a subscription on a GET
+            assert(req.subscribe, 'Trying to start a subscription when it was not requested')
+            console.assert(req.method === 'GET', 'Trying to subscribe in response to a ',
+                           req.method + '. Must be GET.')
+            // Todo: the GET part should respond with some 4xx client error
 
+            // A subscription is a multiresponse that stays open
+            res2.startMultiresponse()
+            res2.setHeader("Subscribe", req.headers.subscribe)
+            res2.setHeader('Cache-Control', 'no-cache, no-transform, no-store')
 
             // Note: I used to explicitly disable transfer-encoding chunked
             // here by setting the header to empty string.  This is the only
@@ -898,14 +910,17 @@ function add_braid_helpers (req, res, res2, peer) {
         res.sendUpdate = res2.sendUpdate
         res.sendVersion = res2.sendVersion
         res.startSubscription = res2.startSubscription
+        res.startMultiresponse = res2.startMultiresponse
     }
 }
 
 async function send_update(res, update, url, peer) {
-    // Normalize all headers in update to lowercase
+    // Normalize all headers in update to lowercase, and let repr_type be
+    // spelled with a dash or an underscore
     update = Object.fromEntries(
         Object.entries(update)
             .map(([k, v]) => [k.toLowerCase(), v])
+            .map(([k, v]) => [k === 'repr-type' ? 'repr_type' : k, v])
     )
 
     var {version, parents, patches, patch, body, status} = update
@@ -919,7 +934,7 @@ async function send_update(res, update, url, peer) {
     }
 
     function set_header (key, val) {
-        if (res.isSubscription)
+        if (res.isMultiresponse)
             res.write(`${key}: ${val}\r\n`)
         else
             res.setHeader(key, val)
@@ -927,15 +942,15 @@ async function send_update(res, update, url, peer) {
     function set_headers (headers) {
         for (key in headers)
             set_header(key, headers[key])
-        if (res.isSubscription)
+        if (res.isMultiresponse)
             res.write('\r\n')
     }
     function write_body (body) {
-        if (res.isSubscription) res.write('\r\n')
+        if (res.isMultiresponse) res.write('\r\n')
         write_binary(res, body)
     }
 
-    // console.log('Sending Update', {url, peer, update, subscription: res.isSubscription})
+    // console.log('Sending Update', {url, peer, update, subscription: res.isMultiresponse})
 
     // Validate the body and patches
     assert(!(patch && patches),
@@ -944,6 +959,13 @@ async function send_update(res, update, url, peer) {
            'sendUpdate: cannot have both `update.body` and `update.patch(es)')
     assert(!patches || Array.isArray(patches),
            'sendUpdate: `patches` provided is not array')
+
+    // Content-Type on updates is owned by this library (it frames patches
+    // with it).  The representation's media type is `repr_type`.
+    assert(update.content_type === undefined
+           && update['content-type'] === undefined,
+           'sendUpdate: use `repr_type` (not `content_type`) to convey'
+           + " the representation's media type")
 
     // Now the caller has specified EITHER `patch:` or `patches:`.  IFF he
     // specified the latter, we will ultimately output a "Patches: N" block,
@@ -975,32 +997,14 @@ async function send_update(res, update, url, peer) {
             // And convert blobs to... what?   Because... why?  What is this?
             if (typeof Blob !== 'undefined' && p.content instanceof Blob)
                 p.content = await p.content.arrayBuffer()
-
-            // //   - Move content-type onto each patch if as_multiple_patches
-            // if (as_multiple_patches && content_type)
-            //     p['content-type'] = content_type
         }
     }
-
-    if (as_multiple_patches && update['content-type']) {
-        // Clear content_type, because it will get clobbered in write_patches()
-        console.warn('braid-http: content-type ' + update['content-type']
-                     + ' ignored on update with multiple patches'
-                     + ' (of type application/http-patches)')
-        delete update['content-type']
-    }
-
-    // if (as_multiple_patches) {
-    //     // Clear content_type, because we moved it onto the patches
-    //     content_type = undefined
-    //     delete update.content_type
-    // }
 
     // To send a response without a body, we just send an empty body
     if (!patches && !body)
         body = ''
 
-    if (res.isSubscription && status) {
+    if (res.isMultiresponse && status) {
         var reason =
             status === 200 ? 'OK'
             : status === 204 ? 'No Content'
@@ -1032,6 +1036,15 @@ async function send_update(res, update, url, peer) {
             value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         }
 
+        // The representation's media type travels as Repr-Type.  A solo
+        // snapshot response's body IS the representation, so it ALSO gets the
+        // normal Content-Type (RFC 9110).
+        else if (header === 'repr_type') {
+            if (!res.isMultiresponse && !patches)
+                set_header('Content-Type', value)
+            header = 'Repr-Type'
+        }
+
         // We don't output patches or body yet
         else if (header === 'patches' || header === 'body' || header === 'patch')
             continue
@@ -1051,7 +1064,7 @@ async function send_update(res, update, url, peer) {
 
     // Add a newline to prepare for the next update
     // See also https://github.com/braid-org/braid-spec/issues/73
-    if (res.isSubscription) {
+    if (res.isMultiresponse) {
         var extra_newlines = 1
 
         // Note: this firefox workaround was replaced with a content-type fix

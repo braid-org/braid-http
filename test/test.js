@@ -3,6 +3,8 @@
 // Unified test runner - can run in console mode (Node.js) or browser mode (server)
 var fs = require('fs')
 var path = require('path')
+var util = require('util')
+var { AsyncLocalStorage } = require('async_hooks')
 var define_tests = require('./tests.js')
 
 // The server library keeps enable_multiplex as state on the module instance,
@@ -24,6 +26,13 @@ var filter_arg = args.find(arg => arg.startsWith('--filter='))?.split('=')[1]
     || args.find(arg => arg.startsWith('--grep='))?.split('=')[1]
 var show_hangs = args.includes('--hangs') && require('./show-hangs.js')
 
+// Tests run --in-parallel by default, 16 at a time (or --in-parallel=N).
+// --serial runs them one at a time (--hangs implies it: a hung-promise
+// report is only attributable when a single test is running)
+var serial = args.includes('--serial') || !!show_hangs
+var in_parallel = serial ? 1
+    : parseInt(args.find(arg => arg.startsWith('--in-parallel='))?.split('=')[1] || 16)
+
 // Show help if requested
 if (args.includes('--help') || args.includes('-h')) {
     console.log(`
@@ -34,7 +43,9 @@ Options:
   --filter=PATTERN       Only run tests matching pattern (case-insensitive)
   --grep=PATTERN         Alias for --filter
   --port=N               Base port (uses N, N+1, N+2, N+3, N+4). Default 9000. Or set PORT env.
-  --hangs                When a test times out, print the still-pending promises
+  --in-parallel=N        Run up to N tests at once (default 16)
+  --serial               Run tests one at a time
+  --hangs                When a test times out, print the still-pending promises (implies --serial)
   --help, -h             Show this help message
 
 Examples:
@@ -62,6 +73,89 @@ process.on("unhandledRejection", (x) =>
 process.on("uncaughtException", (x) =>
     console.log(`uncaughtException: ${x.stack}`)
 )
+
+// If our console goes away (e.g. piped into `head`), die quietly like a
+// good unix citizen -- otherwise the stdout error would bounce between the
+// uncaughtException handler and its own console.log, forever
+var die_quietly = e => { if (e.code === 'EPIPE') process.exit(0) }
+process.stdout.on('error', die_quietly)
+process.stderr.on('error', die_quietly)
+
+// ============================================================================
+// Ordered, indented test output
+// ============================================================================
+//
+// Tests run in parallel, but the console tells their stories one at a time:
+// each test accumulates a report (its start, every line it provokes, its
+// verdict), and reports print in registration order -- the test whose turn
+// it is streams live; later tests hold their reports until their turn.
+//
+//   --- Multiplexing Tests ---
+//     ▶ Test receiving multiplexed message.
+//         POST /add-handler
+//         GET /added-handler/g01lljltcfj
+//     ✓ Test receiving multiplexed message.
+//
+// Everything logs with plain console.log, which routes into the report
+// tree while tests run -- test code, the client library's own chatter, and
+// test-supplied server-side handler code all file under the right test.
+// test_context (an AsyncLocalStorage) follows each test across its awaits
+// and timers to find its report. It can't follow a request across the HTTP
+// hop, so the servers attribute each request by its test-id header
+// (stamped by og_fetch) or by the path's owner, and run test-supplied
+// handlers inside the owning test's context. Unattributed lines print at
+// the margin, immediately.
+
+var test_context = new AsyncLocalStorage()
+var reports = []            // one report per test, in registration order
+var path_owners = new Map() // added-handler path -> owning test's report
+var real_log = console.log.bind(console)
+var next_to_print = 0       // the report whose turn the console is on
+var last_section = null
+
+// The report a server request belongs to: by test-id header if the runner's
+// og_fetch stamped one, else by who registered the path it's hitting
+function report_for_request(req) {
+    var id = req.headers['test-id']
+    if (id !== undefined) return reports[+id]
+    return path_owners.get(req.url.split('?')[0])
+}
+
+// log('a line')    -> the running test's report
+// log(req)         -> the request's test's report, as "GET /foo"
+function log(...args) {
+    var req = args[0]?.method && args[0],
+        report = req ? report_for_request(req) : test_context.getStore(),
+        line = req ? `${req.method} ${req.url}` : args[0]
+    if (report) {
+        report.lines.push(line)
+        print_reports_in_order()
+    } else
+        real_log(line)
+}
+
+// Prints the reports in order, as far as they're ready -- the first
+// unfinished test holds the turn, streaming as it goes
+function print_reports_in_order() {
+    while (next_to_print < reports.length) {
+        var report = reports[next_to_print]
+        if (report.state === 'pending') return
+        if (!report.announced) {
+            if (report.section && report.section !== last_section) {
+                last_section = report.section
+                real_log(`\n--- ${report.section} ---`)
+            }
+            real_log(`  ▶ ${report.test_name}`)
+            report.announced = true
+        }
+        while (report.printed < report.lines.length)
+            real_log('      ' + report.lines[report.printed++])
+        if (report.state !== 'done') return
+        for (var line of report.verdict)
+            real_log('  ' + line)
+        next_to_print++
+    }
+}
 
 // ============================================================================
 // Test Server
@@ -95,16 +189,20 @@ function create_added_handlers() {
     return {
         handle(req, res) {
             if (req.url === '/add-handler' && req.method === 'POST') {
+                var owner = report_for_request(req)
                 read_posted_handler(req, entry => {
                     var path = '/added-handler/' + Math.random().toString(36).slice(2)
                     handlers.set(path, entry)
+                    if (owner) path_owners.set(path, owner)
                     res.end(path)
                 })
                 return true
             }
-            var entry = handlers.get(req.url.split('?')[0])
+            var path = req.url.split('?')[0]
+            var entry = handlers.get(path)
             if (entry) {
-                entry.fn(req, res, ...entry.args)
+                test_context.run(path_owners.get(path),
+                                 () => entry.fn(req, res, ...entry.args))
                 return true
             }
         }
@@ -119,7 +217,7 @@ function create_test_server() {
         cert: fs.readFileSync(path.join(__dirname, 'localhost-cert.pem')),
         allowHTTP1: true
     }, async (req, res) => {
-        console.log('Request:', req.url, req.method)
+        log(req)
 
         // Lets tests register a handler that runs *before* braidify (and before
         // the magic multiplex routes below), on every request, so it can
@@ -156,7 +254,8 @@ function create_test_server() {
         if (req.is_multiplexer) return
 
         if (req.url.startsWith('/eval') && req.method === 'POST')
-            if ((await eval_func()) !== 'keep going') return
+            if ((await test_context.run(report_for_request(req), eval_func))
+                !== 'keep going') return
 
         // Lets tests register their own handlers on the fly, and serves the
         // handlers they've registered (see create_added_handlers above)
@@ -421,8 +520,18 @@ async function run_console_tests() {
 
     // Create wrapped fetch that points to localhost
     // Use HTTP/2 fetch for og_fetch since Node's native fetch uses HTTP/1.1
-    // which doesn't support custom methods like MULTIPLEX
-    var og_fetch = create_http2_fetch(`https://localhost:${port}`)
+    // which doesn't support custom methods like MULTIPLEX. Each request is
+    // stamped with the running test's id, so the servers know whose it is
+    var http2_fetch = create_http2_fetch(`https://localhost:${port}`)
+    var og_fetch = (url, options = {}) => {
+        var report = test_context.getStore()
+        if (report) {
+            var headers = new Headers(options.headers || {})
+            headers.set('test-id', report.index)
+            options = { ...options, headers }
+        }
+        return http2_fetch(url, options)
+    }
     var wrapped_fetch = async (url, options = {}) => {
         var full_url = url.startsWith('http') ? url : `https://localhost:${port}${url}`
         return braid_fetch(full_url, options)
@@ -467,8 +576,18 @@ async function run_console_tests() {
         }
 
         total_tests++
-        var section = add_section_header.current_section
-        tests_to_run.push({ test_name, test_function, expected_result, section, ...params })
+        var report = {
+            index: reports.length,
+            test_name,
+            section: add_section_header.current_section,
+            state: 'pending',
+            lines: [],
+            printed: 0,
+            announced: false,
+            verdict: null
+        }
+        reports.push(report)
+        tests_to_run.push({ report, test_function, expected_result, ...params })
     }
 
     console.log('Starting braid-http tests...\n')
@@ -503,15 +622,12 @@ async function run_console_tests() {
         assert
     })
 
-    // Run tests sequentially
-    var current_section = null
-    for (var item of tests_to_run) {
-        var { test_name, test_function, expected_result, section,
-              timeout = 2000 } = item
-        if (section && section !== current_section) {
-            current_section = section
-            console.log(`\n--- ${section} ---`)
-        }
+    // Runs one test, recording its verdict on its report. test_context
+    // carries the report through everything the test does
+    async function run_one(item) {
+        var { report, test_function, expected_result, timeout = 2000 } = item
+        report.state = 'running'
+        print_reports_in_order()
 
         try {
             var timer = null
@@ -526,36 +642,53 @@ async function run_console_tests() {
             // itself appear in the report of the test's hung promises
             if (show_hangs) show_hangs.mark()
 
-            var result = await Promise.race([test_function(), timed_out])
+            var result = await Promise.race([
+                test_context.run(report, test_function), timed_out])
             if (expected_result === undefined) {
                 // Assertion-style test: success simply means it returned
                 // (without throwing). An assert() failure throws and is
                 // handled by the catch below.
                 passed_tests++
-                console.log(`✓ ${test_name}`)
+                report.verdict = [`✓ ${report.test_name}`]
             } else if (result == expected_result) {
                 passed_tests++
-                console.log(`✓ ${test_name}`)
+                report.verdict = [`✓ ${report.test_name}`]
             } else if (result === 'old node version') {
                 skipped_tests++
-                console.log(`○ ${test_name} (skipped: old node version)`)
+                report.verdict = [`○ ${report.test_name} (skipped: old node version)`]
             } else {
                 failed_tests++
-                failed_test_names.push(test_name)
-                console.log(`✗ ${test_name}`)
-                console.log(`  Expected: ${expected_result}`)
-                console.log(`  Got: ${result}`)
+                failed_test_names.push(report.test_name)
+                report.verdict = [`✗ ${report.test_name}`,
+                                  `  Expected: ${expected_result}`,
+                                  `  Got: ${result}`]
             }
         } catch (error) {
             failed_tests++
-            failed_test_names.push(test_name)
-            console.log(`✗ ${test_name}`)
-            console.log(`  Error: ${error.message || error}`)
+            failed_test_names.push(report.test_name)
+            report.verdict = [`✗ ${report.test_name}`,
+                              `  Error: ${error.message || error}`]
         } finally {
             // otherwise a passing test's timer fires 10s later, and with
             // --hangs would print a bogus report during a later test
             clearTimeout(timer)
         }
+
+        report.state = 'done'
+        print_reports_in_order()
+    }
+
+    // Run the tests, in_parallel at a time. While they run, console.log
+    // routes into the report tree, catching the client library's own chatter
+    console.log = (...args) => log(util.format(...args))
+    try {
+        var next = 0
+        await Promise.all(Array.from({ length: in_parallel }, async () => {
+            while (next < tests_to_run.length)
+                await run_one(tests_to_run[next++])
+        }))
+    } finally {
+        console.log = real_log
     }
 
     // Print summary
@@ -575,7 +708,7 @@ async function run_console_tests() {
         var suggest_hangs = hung_test && !show_hangs
         if (suggest_filter || suggest_hangs) {
             console.log(`\nTo debug, rerun a failing test by itself:`)
-            console.log(`  node test/test.js`
+            console.log(`  node test/test.js --serial`
                 + (hung_test ? ' --hangs' : '')
                 + ` --filter='${filter_arg || failed_test_names[0]}'`)
             if (suggest_hangs)

@@ -18,6 +18,14 @@ Filter tests by name:
 node test/test.js --filter="version"
 ```
 
+Tests run in parallel, 16 at a time, by default. To adjust, or to run one at
+a time (best for debugging, and what `--hangs` uses):
+
+```
+node test/test.js --in-parallel=4
+node test/test.js --serial
+```
+
 ### Test the server by hand
 
 Start the browser test server with `npm run test:browser`, then curl a subscription:

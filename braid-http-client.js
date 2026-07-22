@@ -235,6 +235,14 @@ async function braid_fetch (url, params = {}) {
         }
     }
 
+    // The representation's media type travels as Repr-Type.
+    if (params.repr_type) {
+        params.headers.set('Repr-Type', params.repr_type)
+        // A snapshot body IS the representation, so it also gets Content-Type
+        if (!params.patches)
+            params.headers.set('Content-Type', params.repr_type)
+    }
+
     // Wrap the AbortController with a new one that we control.
     //
     // This is because we want to be able to abort the fetch that the user
@@ -752,6 +760,7 @@ function format_update (parser_state) {
         body:         parser_state.body,
         patches:      parser_state.patches,
         status:       parser_state.status,
+        repr_type:    parser_state.repr_type,
         content_type: parser_state.content_type,
 
         // Output extra_headers if there are some
@@ -828,6 +837,7 @@ function parse_update (state) {
         state.parents       = state.headers.parents
         state.status        = state.headers[':status']
         state.content_type  = state.headers['content-type']
+        state.repr_type     = state.headers['repr-type']
 
         // Ignore the patches content-type, because we expect and handle it
         if (state.content_type?.includes('http-patches'))
@@ -856,6 +866,7 @@ async function parse_update_in_solo_response (res) {
             ':status': res.status,
             'content-type': headers['content-type'],
             'content-length': headers['content-length'],
+            'repr-type': headers['repr-type'],
         }
     }
 
@@ -871,6 +882,7 @@ async function parse_update_in_solo_response (res) {
         version: state.headers.version,
         parents: state.headers.parents,
         content_type: state.headers['content-type'],
+        repr_type: state.headers['repr-type'],
         status: res.status
     })
 
@@ -1149,7 +1161,8 @@ function extra_headers (headers) {
 
     // Remove the non-extra parts
     var known_headers = ['version', 'parents', 'patches', ':status',
-                         'content-length', 'content-range', 'content-type']
+                         'content-length', 'content-range', 'content-type',
+                         'repr-type']
     for (var i = 0; i < known_headers.length; i++)
         delete result[known_headers[i]]
 
@@ -1285,6 +1298,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         || random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
 
     var requests = new Map()
+    var burned_ids = new Set()  // request ids the server has 409'd as duplicates
     var mux_error = null
     var try_deleting = new Set()
     var not_used_timeout = null
@@ -1428,17 +1442,22 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             return await normal_fetch(url, params)
         }
 
-        // make up a new request id (unless it is being overriden)
-        var request = (attempt === 1
-            && params.headers.get('multiplex-through')?.split('/')[4])
-            || random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
-        
+        // make up a new request id -- or use the caller's pinned id from
+        // Multiplex-Through, honored whenever it isn't known to be taken
+        // (in use by a live request here, or burned by a server 409)
+        var submitted_mux_request_id = params.headers.get('multiplex-through')?.split('/')[4]
+        var request_id = (submitted_mux_request_id
+                          && !requests.has(submitted_mux_request_id)
+                          && !burned_ids.has(submitted_mux_request_id))
+            ? submitted_mux_request_id
+            : random_base64url(Math.ceil((mux_params?.id_bits ?? 72) / 6))
+
         // make sure this request id is not already in use
-        if (requests.has(request)) throw "retry"
+        if (requests.has(request_id)) throw "retry"
 
         // add the Multiplex-Through header without affecting the underlying params
         var mux_headers = new Headers(params.headers)
-        mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request}`)
+        mux_headers.set('Multiplex-Through', `/.well-known/multiplexer/${multiplexer}/${request_id}`)
         mux_headers.set('Multiplex-Version', multiplex_version)
 
         // also create our own aborter in case we need to abort ourselves
@@ -1469,7 +1488,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         }
 
         // tell the multiplexer to send bytes for this request to us
-        requests.set(request, bytes => {
+        requests.set(request_id, bytes => {
             if (!bytes) buffers.push(bytes)
             else if (!mux_error) buffers.push(bytes)
             bytes_available()
@@ -1479,7 +1498,7 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
         clearTimeout(not_used_timeout)
         var unset = async e => {
             unset = () => {}
-            requests.delete(request)
+            requests.delete(request_id)
             if (!requests.size)
                 not_used_timeout = setTimeout(() =>
                     mux_aborter.abort(),
@@ -1488,12 +1507,17 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             request_error = e
             bytes_available()
             if (e !== 'retry' && established)
-                await try_deleting_request(request).catch(e => {})
+                await try_deleting_request(request_id).catch(e => {})
         }
 
         // Do the underlying fetch
         try {
-            if (attempt > 1) await mux_created_promise
+
+            // For speed, a first attempt fires without waiting for the
+            // multiplexer to finish being created.  (If it arrives early,
+            // the server just sends a 424, and we retry.)  Retries wait.
+            if (attempt > 1)
+                await mux_created_promise
 
             // Wait until we know that the multiplexer has been created!
             var mux_was_done = await promise_done(mux_created_promise)
@@ -1513,8 +1537,10 @@ async function create_multiplexer(origin, mux_key, params, mux_params, attempt) 
             // normal_fetch throws and we never reach here.)
             established = true
 
-            if (await duplicate_multiplexer_error(res, "Request already multiplexed"))
+            if (await duplicate_multiplexer_error(res, "Request already multiplexed")) {
+                burned_ids.add(request_id)
                 throw "retry"
+            }
 
             if (res.status === 424) {
                 // the multiplexer isn't there,
@@ -1788,6 +1814,9 @@ function reliable_update_channel (url, params) {
     failure_status_codes = // Remove this in braid-http version 1.4+
         no_retry_status_codes || failure_status_codes
 
+    // The repr-type that we got from the subscription
+    var repr_type = null
+
     // Per the reliable-updates spec, these subscription response codes
     // indicate a transient failure we should retry without warning.
     var silent_retry_codes = [
@@ -1950,11 +1979,12 @@ function reliable_update_channel (url, params) {
                 }
                 reset_heartbeat_timer()
             }
+            if (res.headers.get('repr-type'))
+                repr_type = res.headers.get('repr-type')
             res.subscribe(
                 update => {
-                    // Mirror the server's content-type into PUT headers
-                    var type = update.extra_headers?.['content-type']
-                    if (type) put_headers['Content-Type'] = type
+                    // Mirror the server's repr-type into our PUTs
+                    if (update.repr_type) repr_type = update.repr_type
                     on_update?.(update)
                 },
                 err => {
@@ -1991,6 +2021,7 @@ function reliable_update_channel (url, params) {
                 var res = await braid_fetch(url, {
                     method: 'PUT',
                     signal: inner_signal,
+                    repr_type,
                     ...entry.update,
                     headers: {...put_headers, ...entry.update.headers}
                 })
@@ -2321,14 +2352,14 @@ function http_bus (cb, options = {}) {
 
     function process_mime_type (update, resource) {
         // Store the repr_type, if it's changed
-        if (update.content_type) resource.repr_type = update.content_type
+        if (update.repr_type) resource.repr_type = update.repr_type
         // Otherwise, import it from the past
-        update.content_type = resource.repr_type
+        else update.repr_type = resource.repr_type
 
         // Decode a text/* body to a string, and a JSON body to a parsed value.
         if (update.body == null) return update
 
-        var type = update.content_type ?? ''
+        var type = update.repr_type ?? ''
         if (type.includes('json'))
             update.body = JSON.parse(new TextDecoder().decode(update.body))
         else if (type.startsWith('text/'))
@@ -2440,7 +2471,7 @@ function http_bus (cb, options = {}) {
 
             // We got a response!
 
-            // Store the content-type
+            // Store the repr-type
             var repr_type = res.headers.get('repr-type')
             if (repr_type) resource.repr_type = repr_type
 

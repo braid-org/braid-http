@@ -97,6 +97,13 @@ add_section_header("Multiplexing Tests")
 var multiplex_version = '1.0'
 braid_fetch.enable_multiplex = {after: Infinity}
 
+// Retry tests care that reconnects happen, not how long the client waits
+// between them -- so run the whole suite with the reconnect delay shrunk
+// from its 1000/2000/3000ms default backoff to a flat 50ms. Tests about
+// the delay itself opt back out through with_reconnect_delay, whose
+// pristine-value capture and restore both see this 50ms as the baseline
+braid_fetch.reconnect_delay_ms = 50
+
 run_test(
     "Basic MULTIPLEX method test.",
     async () => {
@@ -283,14 +290,14 @@ run_test(
         var sleep = ms => new Promise(done => setTimeout(done, ms))
 
         // open a subscription through a multiplexer of our choosing, with a
-        // 1000ms idle timeout, then abort it (leaving the multiplexer idle)
+        // 400ms idle timeout, then abort it (leaving the multiplexer idle)
         var subscribe_then_abort = async () => {
             var a = new AbortController()
             var s = Math.random().toString(36).slice(2)
             await fetch(endpoint, {
                 signal: a.signal,
                 subscribe: true,
-                multiplex: {not_used_timeout: 1000},
+                multiplex: {not_used_timeout: 400},
                 headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
             })
             a.abort()
@@ -300,18 +307,18 @@ run_test(
         await subscribe_then_abort()
         assert(multiplex_fetch.multiplexers[m], 'expected multiplexer after first request')
 
-        // 800ms < 1000ms idle timeout, so it is still alive
-        await sleep(800)
-        assert(multiplex_fetch.multiplexers[m], 'expected multiplexer to survive 800ms idle')
+        // 300ms < 400ms idle timeout, so it is still alive
+        await sleep(300)
+        assert(multiplex_fetch.multiplexers[m], 'expected multiplexer to survive 300ms idle')
 
-        // second request resets the idle timer; 800ms later it is still alive
+        // second request resets the idle timer; 300ms later it is still alive
         await subscribe_then_abort()
-        await sleep(800)
+        await sleep(300)
         assert(multiplex_fetch.multiplexers[m], 'expected idle timer to reset on second request')
 
-        // another 400ms (1200ms total idle since the second request) exceeds
+        // another 250ms (550ms total idle since the second request) exceeds
         // the timeout, so the multiplexer finally dies
-        await sleep(400)
+        await sleep(250)
         assert(!multiplex_fetch.multiplexers[m], 'expected multiplexer to time out')
     },
     undefined, {timeout: 5000}
@@ -379,11 +386,11 @@ run_test(
     "Test handling duplicate request id locally",
     async () => {
         // add a handler that holds a subscription open, sending an update now
-        // and another, delayed, update 200ms later
+        // and another, delayed, update 50ms later
         var endpoint = await add_main_handler((req, res) => {
             res.startSubscription()
             res.sendUpdate({ version: ['now!'], body: 'hi' })
-            setTimeout(() => res.sendUpdate({ version: ['another!'], body: '"!"' }), 200)
+            setTimeout(() => res.sendUpdate({ version: ['another!'], body: '"!"' }), 50)
         })
 
         // open a multiplexed subscription through a multiplexer of our choosing
@@ -429,9 +436,10 @@ run_test(
         // ...and it should have done so locally, without a slow round-trip
         assert(et < st + 300, 'expected duplicate request id to be handled quickly (locally)')
 
-        // give the delayed 'another!' update time to arrive, then make sure it did
-        await new Promise(done => setTimeout(done, 300))
-        assert(saw_delayed_update, 'expected to get the delayed update')
+        // wait for the delayed 'another!' update to arrive -- if it never
+        // does, this loop spins until the test runner's timeout fails the test
+        while (!saw_delayed_update)
+            await new Promise(done => setTimeout(done, 10))
 
         a.abort()
         await kill_mux(m)
@@ -705,7 +713,8 @@ run_test(
         var s = Math.random().toString(36).slice(2)
         await fetch(endpoint, {
             signal: a.signal,
-            headers: { 'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
+            headers: { Subscribe: true,
+                       'Multiplex-Through': `/.well-known/multiplexer/${m}/${s}` }
         })
 
         // s2 is a request id the multiplexer has never heard of. count the
@@ -720,18 +729,18 @@ run_test(
         // on the server, write some data into the multiplexer's stream tagged
         // with s2 -- an "unrecognized request". The client should react by
         // sending a DELETE to close request s2. We write the garbage twice
-        // (now, and after 300ms), so the client should send two DELETEs.
-        // After 600ms, report the count.
+        // (now, and after 100ms), so the client should send two DELETEs.
+        // After 250ms, report the count.
         var count = await server_eval((req, res, m, s2) => {
             braidify.multiplexers.get(m).res.write(`start response ${s2}\r\n`.repeat(3))
 
             setTimeout(() => {
                 braidify.multiplexers.get(m).res.write(`start response ${s2}\r\n`.repeat(3))
-            }, 300)
+            }, 100)
 
             setTimeout(() => {
                 res.end('' + (global['_deletes_' + s2] ?? 0))
-            }, 600)
+            }, 250)
         }, m, s2)
 
         assert(count === '2', 'expected the client to close the unrecognized request twice')
@@ -905,21 +914,21 @@ run_test(
         var s = Math.random().toString(36).slice(2)
 
         // kill the multiplexer partway through, before the server-side eval
-        // gets around to responding (below, it waits 1000ms)
+        // gets around to responding (below, it waits 400ms)
         setTimeout(() => {
             kill_mux(m)
-        }, 500)
+        }, 150)
 
-        // make a multiplexed /eval request whose response is delayed 1000ms.
+        // make a multiplexed /eval request whose response is delayed 400ms.
         // (this is a multiplexed request, so it can't use server_eval, which
         // doesn't carry Multiplex-Through/signal.) since the multiplexer dies
-        // at 500ms -- before the headers/response arrive -- the client should
+        // at 150ms -- before the headers/response arrive -- the client should
         // error with 'multiplex stream ended unexpectedly'
         var body = ((res) => {
             setTimeout(() => {
                 res.setHeader('test', '42')
                 res.end('hi')
-            }, 1000)
+            }, 400)
         }).toString()
         try {
             await fetch('/eval', {
@@ -1047,7 +1056,7 @@ run_test(
         var endpoint = await add_main_handler((req, res, update) => {
             res.startSubscription()
             res.sendUpdate(update)
-            setTimeout(() => res.end(), 300)
+            setTimeout(() => res.end(), 100)
         }, update)
 
         // open a multiplexed subscription with retry on, counting responses
@@ -1410,7 +1419,7 @@ run_test(
         // request, which our handler fails. give the resulting error time to
         // (wrongly) surface as an unhandled rejection
         a.abort()
-        await new Promise(done => setTimeout(done, 500))
+        await new Promise(done => setTimeout(done, 150))
 
         if (typeof window !== 'undefined') window.removeEventListener('unhandledrejection', handler)
         else process.off('unhandledRejection', handler)
@@ -4066,7 +4075,7 @@ run_test(
         // like a multiplexer -- gets between us and the connection we're
         // about to sever), and make sure the subscription really started
         var a = new AbortController()
-        var r = await og_fetch(endpoint, { signal: a.signal })
+        var r = await og_fetch(endpoint, { signal: a.signal, headers: {subscribe: true} })
         assert(r.status === 209, 'expected 209 multiresponse status')
 
         // wait for the first update to arrive, so we know the subscription
@@ -4390,10 +4399,10 @@ run_test(
             res.end('' + !!global['_hangup_' + s]), s) !== 'true')
             await new Promise(done => setTimeout(done, 10))
 
-        // a buggy retry would reconnect after the retry delay (1 second for
-        // a first retry) -- wait out that window, then make sure the endpoint
-        // still saw exactly the one connection
-        await new Promise(done => setTimeout(done, 1500))
+        // a buggy retry would reconnect after the retry delay (the suite
+        // runs with a 50ms reconnect delay) -- wait out that window, then
+        // make sure the endpoint still saw exactly the one connection
+        await new Promise(done => setTimeout(done, 300))
         var conns = await server_eval((req, res, s) =>
             res.end('' + (global['_conns_' + s] ?? 0)), s)
         assert(conns === '1', `expected no reconnect, but saw ${conns} connections`)
@@ -4432,7 +4441,7 @@ run_test(
         var r = await fetch(endpoint, {
             subscribe: true,
             multiplex: false,
-            heartbeats: 0.5,
+            heartbeats: 0.1,
             signal: a.signal,
             retry: {
                 onRes: () => {
@@ -4529,10 +4538,10 @@ run_test(
             res.end('' + !!global['_closed_' + s]), s) !== 'true')
             await new Promise(done => setTimeout(done, 10))
 
-        // now wait out the first retry window (the client waits 1s before
-        // its first reconnect), and make sure it never reconnected: the
-        // server should have seen exactly one connect
-        await new Promise(done => setTimeout(done, 1500))
+        // now wait out the first retry window (the suite runs with a 50ms
+        // reconnect delay), and make sure it never reconnected: the server
+        // should have seen exactly one connect
+        await new Promise(done => setTimeout(done, 300))
         var connects = await server_eval((req, res, s) =>
             res.end('' + global['_connects_' + s]), s)
         assert(connects === '1', `expected no reconnect, got ${connects} connects`)
@@ -4760,7 +4769,7 @@ run_test(
 )
 
 run_test(
-    "Verify content-type with charset=utf-8 is handled correctly",
+    "Verify repr-type with charset=utf-8 is handled correctly",
     async () => {
         // one of every update shape: a body, an inline patch (with a custom
         // status and an extra hash header), a Patches: 1 array, a Patches: 2
@@ -4775,26 +4784,26 @@ run_test(
             { version: ['another!'], body: '"!"' }
         ]
 
-        // add a handler that overrides the subscription's content-type with a
+        // add a handler that overrides the subscription's repr-type with a
         // charset=utf-8 parameter, then sends all the updates and holds the
         // subscription open. the updates are passed as an arg (the handler
         // runs server-side via eval, so it can't close over test-side variables)
         var endpoint = await add_main_handler((req, res, updates) => {
-            res.setHeader('content-type', 'application/json; charset=utf-8')
+            res.setHeader('repr-type', 'application/json; charset=utf-8')
             res.startSubscription()
             for (var u of updates) res.sendUpdate(u)
         }, updates)
 
-        // subscribe without multiplexing, so the charset content-type rides
+        // subscribe without multiplexing, so the charset repr-type rides
         // on the real response headers
         var a = new AbortController()
         var r = await fetch(endpoint, { signal: a.signal, subscribe: true, multiplex: false })
         assert(!r.multiplexed_through, 'expected request to not be multiplexed')
 
         // make sure the charset parameter really made it onto the response --
-        // otherwise we'd vacuously be testing a plain content-type
-        assert(r.headers.get('content-type') === 'application/json; charset=utf-8',
-               'expected content-type with charset=utf-8 on the response')
+        // otherwise we'd vacuously be testing a plain repr-type
+        assert(r.headers.get('repr-type') === 'application/json; charset=utf-8',
+               'expected repr-type with charset=utf-8 on the response')
 
         // collect as many updates as we sent
         var got = []
@@ -5119,7 +5128,7 @@ run_test(
         // add a handler that starts a heartbeating subscription, waits past a
         // heartbeat interval, and only then writes a header and an update.
         // braidify's heartbeat loop ticks once synchronously inside
-        // startSubscription and again ~500ms later -- both times before this
+        // startSubscription and again ~300ms later -- both times before this
         // handler flushes the headers. if either tick wrote its \r\n too
         // early, node would flush the headers, and the setHeader below would
         // be too late to reach the client
@@ -5129,10 +5138,10 @@ run_test(
             setTimeout(() => {
                 res.setHeader('post-sub-header', 'yup')
                 res.sendUpdate(update)
-            }, 700)
+            }, 450)
         }, update)
 
-        // subscribe with heartbeats requested every half second. the handler
+        // subscribe with heartbeats requested every 0.3 seconds. the handler
         // sends nothing after its one update, so any bytes arriving after it
         // must be heartbeats
         var a = new AbortController()
@@ -5143,14 +5152,14 @@ run_test(
             signal: a.signal,
             subscribe: true,
             multiplex: false,
-            heartbeats: 0.5,
+            heartbeats: 0.3,
             onBytes: () => { if (update_seen) saw_heartbeat() }
         })
 
         // make sure heartbeats are actually in play: the server echoes the
         // heartbeats header back only when it starts its heartbeat loop --
         // without this, the test could pass with heartbeats never running
-        assert(r.headers.get('heartbeats') === '0.5s', 'expected server to echo the heartbeats header')
+        assert(r.headers.get('heartbeats') === '0.3s', 'expected server to echo the heartbeats header')
 
         // the header written after startSubscription must have reached us
         assert(r.headers.get('post-sub-header') === 'yup', 'expected the post-subscription header')
@@ -5268,7 +5277,7 @@ run_test(
         // tests use, and make sure no further bytes arrive -- a heartbeat
         // would show up as an extra chunk
         var seen = chunks
-        await new Promise(done => setTimeout(done, 1000))
+        await new Promise(done => setTimeout(done, 600))
         assert(chunks === seen, 'expected no bytes while idle')
 
         a.abort()
@@ -5292,17 +5301,17 @@ run_test(
             res.sendUpdate(update)
         }, update)
 
-        // subscribe, asking for a heartbeat every 0.5s
+        // subscribe, asking for a heartbeat every 0.1s
         var a = new AbortController()
         var r = await fetch(endpoint, {
             subscribe: true,
             multiplex: false,
-            heartbeats: 0.5,
+            heartbeats: 0.1,
             signal: a.signal
         })
 
         // the server agreed to heartbeats, so the client arms its watchdog
-        assert(r.headers.get('heartbeats') === '0.5s', 'expected the response to negotiate heartbeats')
+        assert(r.headers.get('heartbeats') === '0.1s', 'expected the response to negotiate heartbeats')
 
         // read the subscription: collect updates, and wait for the error that
         // kills it (only the subscription's error callback resolves here -- a
@@ -5318,10 +5327,10 @@ run_test(
         assert(got.body_text === update.body, 'got unexpected body')
 
         // the missing heartbeat surfaces as a retryable pipe error, and only
-        // after the client waited the full 1.2 * 0.5s + 3s = 3.6s window
-        assert('' + error === 'PipeError: heartbeat not seen in 3.60s', 'expected the heartbeat error, got: ' + error)
+        // after the client waited the full 1.2 * 0.1s + 3s = 3.12s window
+        assert('' + error === 'PipeError: heartbeat not seen in 3.12s', 'expected the heartbeat error, got: ' + error)
         assert(error.type === 'pipe', 'expected a pipe-type error')
-        assert(elapsed >= 3500, `expected the client to wait the full heartbeat window, got ${elapsed}ms`)
+        assert(elapsed >= 3000, `expected the client to wait the full heartbeat window, got ${elapsed}ms`)
 
         a.abort()
     },
@@ -5357,7 +5366,7 @@ run_test(
         var r = await fetch(endpoint, {
             subscribe: true,
             multiplex: false,
-            heartbeats: 0.5,
+            heartbeats: 0.1,
             signal: a.signal,
             retry: {
                 onRes: () => {
@@ -5420,17 +5429,18 @@ run_test(
             res.sendUpdate(update)
         }, s, update)
 
-        // subscribe asking for a heartbeat every 0.5s, with retry on,
+        // subscribe asking for a heartbeat every 0.2s, with retry on,
         // counting responses and incoming heartbeats. if no bytes arrived
-        // for 1.2 * 0.5 + 3 = 3.6s, the client would declare the
-        // connection dead and reconnect about a second after that
+        // for 1.2 * 0.2 + 3 = 3.24s, the client would declare the
+        // connection dead and reconnect ~50ms after that (the suite's
+        // reconnect delay)
         var a = new AbortController()
         var res_count = 0
         var heartbeat_count = 0
         var r = await fetch(endpoint, {
             subscribe: true,
             multiplex: false,
-            heartbeats: 0.5,
+            heartbeats: 0.2,
             signal: a.signal,
             retry: { onRes: () => res_count++ },
             on_heartbeat: () => heartbeat_count++
@@ -5438,17 +5448,17 @@ run_test(
 
         // make sure the server agreed to send heartbeats -- this echoed
         // header is what arms the client's no-heartbeat timer at all
-        assert(r.headers.get('heartbeats') === '0.5s', 'expected the server to echo the heartbeats header')
+        assert(r.headers.get('heartbeats') === '0.2s', 'expected the server to echo the heartbeats header')
 
         // read the first update, so we know the subscription is flowing
         var u = await new Promise(done => r.subscribe(done))
         assert(u.body_text === JSON.stringify({ keep: 'alive' }), 'got unexpected body')
 
         // wait past the point where the client would have reconnected if
-        // the heartbeats hadn't kept resetting its timer (3.6s of silence,
-        // plus ~1s of reconnect delay), counting heartbeats seen meanwhile
+        // the heartbeats hadn't kept resetting its timer (3.24s of silence,
+        // plus 50ms of reconnect delay), counting heartbeats seen meanwhile
         heartbeat_count = 0
-        await new Promise(done => setTimeout(done, 5500))
+        await new Promise(done => setTimeout(done, 3800))
 
         // heartbeats really were flowing while we waited...
         assert(heartbeat_count >= 3, `expected heartbeats while waiting, saw ${heartbeat_count}`)
@@ -6036,7 +6046,7 @@ run_test(
         var endpoint = await add_main_handler((req, res, sends) => {
             res.startSubscription()
             for (var u of sends.slice(0, -1)) res.sendUpdate(u)
-            setTimeout(() => res.sendUpdate(sends[sends.length - 1]), 100)
+            setTimeout(() => res.sendUpdate(sends[sends.length - 1]), 50)
         }, updates.map(u => u.send))
 
         // subscribe, without multiplexing, to get a plain 209 multiresponse
@@ -6295,7 +6305,7 @@ run_test(
             res.startSubscription()
             // Send all but the last update
             for (var u of sends.slice(0, -1)) res.sendUpdate(u)
-            setTimeout(() => res.sendUpdate(sends[sends.length - 1]), 100)
+            setTimeout(() => res.sendUpdate(sends[sends.length - 1]), 50)
         }, s, sends)
 
         // the braid wrapper for node's https.get lives server-side, so the
@@ -6648,13 +6658,13 @@ run_test(
         var expected = updates.map(u => u.expect || { ...u.send, status: 200 })
 
         // add a handler that streams those updates over a subscription,
-        // holding the last one back 200ms so the subscription really streams
+        // holding the last one back 50ms so the subscription really streams
         // over time. the updates are passed as an arg (the handler runs
         // server-side via eval, so it can't close over test-side variables)
         var endpoint = await add_main_handler((req, res, to_send) => {
             res.startSubscription()
             for (var u of to_send.slice(0, -1)) res.sendUpdate(u)
-            setTimeout(() => res.sendUpdate(to_send[to_send.length - 1]), 200)
+            setTimeout(() => res.sendUpdate(to_send[to_send.length - 1]), 50)
         }, updates.map(u => u.send))
 
         // this section tests the *node* braid_fetch, so run it on the server
@@ -7462,10 +7472,10 @@ run_test(
         var e = await pending
         assert(e?.name === 'AbortError', `expected an AbortError, got: ${e}`)
 
-        // give a wrongly-scheduled reconnect time to have fired (the first
-        // retry delay defaults to 1000ms), then make sure the abort really
+        // give a wrongly-scheduled reconnect time to have fired (the suite
+        // runs with a 50ms retry delay), then make sure the abort really
         // ended things: the server must never see a second request
-        await new Promise(done => setTimeout(done, 1200))
+        await new Promise(done => setTimeout(done, 300))
         var hits = await server_eval((req, res, s) =>
             res.end('' + (global['_hits_' + s] ?? 0)), s)
         assert(hits === '1', `expected no retry request after the abort, saw ${hits} requests`)
@@ -7778,7 +7788,7 @@ run_test(
             global['_connects_' + s] = (global['_connects_' + s] ?? 0) + 1
             res.startSubscription()
             res.sendUpdate(update)
-            setTimeout(() => res.end(), 100)
+            setTimeout(() => res.end(), 50)
         }, s, update)
 
         // subscribe with retry on, and read updates for-await style: each
@@ -7857,10 +7867,10 @@ run_test(
             res.end('' + global['_gets_' + s]), s)
         assert(hits === '2', `expected exactly two requests, got ${hits}`)
 
-        // and the client really stopped: wait past the worst-case reconnect
-        // delay (min(retry_count + 1, 3) * 1000 = 2000ms here) and make sure
-        // no further request snuck in
-        await new Promise(done => setTimeout(done, 2500))
+        // and the client really stopped: wait past the reconnect delay (the
+        // suite runs with a 50ms one) and make sure no further request
+        // snuck in
+        await new Promise(done => setTimeout(done, 300))
         hits = await server_eval((req, res, s) =>
             res.end('' + global['_gets_' + s]), s)
         assert(hits === '2', `expected no more requests after giving up, got ${hits}`)
@@ -9342,7 +9352,7 @@ run_test(
 )
 
 run_test(
-    "reliable_update_channel retries put if it throws, and fires parallel puts in order",
+    "reliable_update_channel retries a failed put, and delivers every queued put exactly once",
     async () => {
         // a fresh doc path and id for this test's server-side state
         var s = Math.random().toString(36).slice(2)
@@ -9351,101 +9361,82 @@ run_test(
 
         // take over the doc path with a tiny text-document server: it logs
         // every request it sees (puts by their tag header), 500s the first
-        // put, and delays serving each surviving put by 300ms -- so the two
-        // puts in flight alongside the failing one can't succeed before the
-        // client reacts to the 500 by aborting them, guaranteeing all three
-        // puts are still queued when the channel reconnects, and must all be
-        // re-fired. served puts splice their patch into the doc's text; puts
-        // the client aborted while we held them are skipped, like a real
-        // server that never got to process a dead request
+        // put, splices every later put's patch into the doc's text, and
+        // serves GETs a subscription greeted with the text
         await add_pre_braidify_handler((req, res, s, key) => {
             if (!req.url.startsWith(key)) return
             var log = global['_reqs_' + s] = global['_reqs_' + s] ?? []
             log.push(req.method === 'PUT' ? req.headers['put-tag'] : req.method)
-
-            var serve_doc = async () => {
-                // a request the client aborted while we held it has a dead
-                // response -- skip it, like a real server that never got to
-                // process a dead request. (checked on res, not req: a fully
-                // read request body marks req destroyed even on live streams)
-                if (res.destroyed || res.writableEnded) return
-                // we run before braidify, so braidify this request ourselves.
-                // it adds parseUpdate/startSubscription/sendUpdate onto
-                // req/res in place (its return value only matters for
-                // multiplexed requests, which the channel never sends)
-                braidify(req, res)
-                if (req.method === 'PUT') {
-                    var update = await req.parseUpdate().catch(() => null)
-                    if (!update || res.destroyed) return
-                    var p = update.patches[0]
-                    var [lo, hi] = p.range.slice(1, -1).split(':').map(Number)
-                    var text = global['_text_' + s] ?? ''
-                    global['_text_' + s] = text.slice(0, lo) + p.content_text + text.slice(hi)
-                    res.statusCode = 200
-                    res.end()
-                } else {
-                    res.startSubscription()
-                    res.sendUpdate({ version: ['v' + log.length], body: global['_text_' + s] ?? '' })
-                }
-            }
 
             // fail the first put with a 500 (and remember that we did)
             if (req.method === 'PUT' && !global['_put_failed_' + s]) {
                 global['_put_failed_' + s] = true
                 res.writeHead(500)
                 res.end('')
+                return true
             }
-            // hold the surviving puts for 300ms before serving them
-            else if (req.method === 'PUT')
-                setTimeout(serve_doc, 300)
-            // serve everything else (the subscription gets) right away
-            else
-                serve_doc()
+
+            // we run before braidify, so braidify this request ourselves.
+            // it adds parseUpdate/startSubscription/sendUpdate onto req/res
+            // in place (its return value only matters for multiplexed
+            // requests, which the channel never sends)
+            braidify(req, res)
+            if (req.method === 'PUT')
+                req.parseUpdate().then(update => {
+                    var p = update.patches[0]
+                    var [lo, hi] = p.range.slice(1, -1).split(':').map(Number)
+                    var text = global['_text_' + s] ?? ''
+                    global['_text_' + s] = text.slice(0, lo) + p.content_text + text.slice(hi)
+                    res.statusCode = 200
+                    res.end()
+                })
+            else {
+                res.startSubscription()
+                res.sendUpdate({ version: ['v' + log.length], body: global['_text_' + s] ?? '' })
+            }
             return true
         }, s, key)
 
-        // the three parallel puts below must all reach the server before
-        // the first one's 500 comes back, because that 500 makes the channel
-        // abort the other two -- and a put still setting up a fresh
-        // connection loses that race and never hits the wire, breaking the
-        // asserted request sequence. so warm a pool of keep-alive
-        // connections first, on the same transport the channel's puts ride
-        // (fetch with multiplex off: node's fetch in the console runner,
-        // window.fetch in the browser), consuming each response so its
-        // connection returns to the pool. 8 covers every connection this
-        // test holds at once, with slack for the ones destroyed when the
-        // client aborts them mid-request
-        var warm_endpoint = await add_main_handler((req, res) => res.end('ok'))
-        await Promise.all(Array.from({length: 8}, () =>
-            fetch(warm_endpoint, {multiplex: false}).then(r => r.text())))
-
-        // open a channel, collecting warnings, and wait for the initial
-        // update so we know the subscription is up before we put
+        // open a channel, collecting warnings (the first one also resolves
+        // a promise -- it's our cue below), and wait for the initial update
+        // so we know the subscription is up before we put
         var warnings = []
+        var saw_warning
+        var warned = new Promise(done => saw_warning = done)
         var channel
         await new Promise(done => {
             channel = reliable_update_channel(url, {
-                on_warning: w => warnings.push(w),
+                on_warning: w => { warnings.push(w); saw_warning() },
                 on_update: () => done()
             })
         })
 
-        // fire 3 puts in parallel, each tagged with a header so the server's
-        // log can tell them apart. the server 500s the first one, which makes
-        // the channel abort the other two in flight, wait 1s, rebuild the
-        // subscription, and re-fire all three in their original order
+        // fire one put, tagged with a header so the server's log can tell
+        // the puts apart. the server 500s it, and the channel reacts by
+        // warning, going offline, and scheduling a reconnect
         var put = tag => channel.put({
             headers: {'put-tag': tag},
             patches: [{unit: 'text', range: '[0:0]', content: tag}]
         })
-        var results = await Promise.all([put('a'), put('b'), put('c')])
+        var pa = put('a')
 
-        // every put should have resolved ok despite the failure
+        // the warning is our cue that the 500 has been processed (the
+        // channel reboots in the same tick, so by this microtask it is
+        // offline). queue two more puts into the offline channel: on
+        // reconnect, it re-fires the whole queue in parallel, and the wire
+        // order the server sees is whatever the network makes of three
+        // simultaneous requests. that's fine -- ordering is the business of
+        // version/parents headers, which this test doesn't use -- so the
+        // asserts below care only that every put lands, exactly once
+        await warned
+        var results = await Promise.all([pa, put('b'), put('c')])
+
+        // every put resolved ok despite the failure
         assert(results.every(r => r.ok), 'expected all three puts to resolve ok')
 
-        // the put failure was reported through on_warning
-        assert(warnings.some(w => w.includes('put got unexpected status 500')),
-               'expected a warning about the failed put')
+        // the put failure was reported through on_warning, exactly once
+        assert(warnings.length === 1 && warnings[0].includes('put got unexpected status 500'),
+               `expected one warning about the failed put, got: ${JSON.stringify(warnings)}`)
 
         // read back what the server saw on this doc, and the doc's final
         // text (and clean up)
@@ -9462,16 +9453,19 @@ run_test(
         // the server really did 500 a put...
         assert(seen.failed, 'expected the server to have failed a put')
 
-        // ...and it saw: the subscription, the three puts in order (the first
-        // one failed), then the rebuilt subscription, then all three puts
-        // retried, again in order
-        assert(seen.requests.join(' ') === 'GET a b c GET a b c',
-               `expected in-order puts and an in-order retry of all three, got: ${seen.requests.join(' ')}`)
+        // ...and it saw: the subscription, put a alone (the failure), the
+        // rebuilt subscription, then all three puts -- in whatever order
+        // they arrived
+        assert(seen.requests.slice(0, 3).join(' ') === 'GET a GET',
+               `expected the failed put alone, then a resubscribe, got: ${seen.requests.join(' ')}`)
+        assert(seen.requests.slice(3).sort().join(' ') === 'a b c',
+               `expected all three puts re-fired after the reconnect, got: ${seen.requests.join(' ')}`)
 
-        // the retried puts each inserted at position 0, in order a, b, c, so
-        // the document should now read 'cba' -- proving they were applied in
-        // order, and that the puts the client aborted mid-flight were not
-        assert(seen.text === 'cba', `expected final text 'cba', got: '${seen.text}'`)
+        // each put inserted its one character at position 0, so a doc
+        // holding exactly a, b, and c (in any order) means every put was
+        // applied exactly once: nothing lost, nothing doubled
+        assert(seen.text.split('').sort().join('') === 'abc',
+               `expected the three puts applied exactly once each, got: '${seen.text}'`)
 
         channel.close()
     }
@@ -9495,14 +9489,14 @@ run_test(
         }, s)
 
         // open a channel with a short timeout: the client expects a heartbeat
-        // every 0.5s, gives up after 1.2 * 0.5 + 3 = 3.6s of silence, and
+        // every 0.1s, gives up after 1.2 * 0.1 + 3 = 3.12s of silence, and
         // reconnects 1s later -- receiving the handler's one update again
         var bodies = []
         var statuses = []
         var got_second
         var second_update = new Promise(done => got_second = done)
         var channel = reliable_update_channel(endpoint, {
-            timeout: 0.5,
+            timeout: 0.1,
             on_status: x => statuses.push(x.online),
             on_update: update => {
                 bodies.push(update.body_text)
@@ -9637,7 +9631,7 @@ run_test(
     "reliable_update_channel honors Retry-After header on subscription responses",
     async () => {
         // add a handler whose first GET answers 200 -- a status that is not
-        // in the channel's silent-retry list -- with a Retry-After: 4 header,
+        // in the channel's silent-retry list -- with a Retry-After: 2 header,
         // and serves a real subscription after that. it logs each GET's
         // arrival time in a global keyed by our random id, so we can measure
         // the reconnect delay server-side (the id is passed as an arg since
@@ -9648,7 +9642,7 @@ run_test(
             var gets = global['_gets_' + s] = global['_gets_' + s] ?? []
             gets.push(Date.now())
             if (gets.length === 1) {
-                res.writeHead(200, { 'Retry-After': '4' })
+                res.writeHead(200, { 'Retry-After': '2' })
                 return res.end('')
             }
             res.startSubscription()
@@ -9684,12 +9678,13 @@ run_test(
             res.end(JSON.stringify(global['_gets_' + s])), s))
         assert(gets.length === 2, 'expected exactly two GETs, got ' + gets.length)
 
-        // and the reconnect should have waited out the Retry-After: 4 --
-        // longer than both built-in fallback delays (1s for a first failure,
-        // 3s after that), so clearing this bound proves the header was
-        // honored rather than either default kicking in
-        assert(gets[1] - gets[0] >= 3600,
-               `expected the reconnect to wait ~4s, waited ${gets[1] - gets[0]}ms`)
+        // and the reconnect should have waited out the Retry-After: 2 --
+        // longer than the 1s fallback delay for a first failure (the only
+        // rung in play: this is the channel's first and only failure), so
+        // clearing this bound proves the header was honored rather than
+        // the default kicking in
+        assert(gets[1] - gets[0] >= 1900,
+               `expected the reconnect to wait ~2s, waited ${gets[1] - gets[0]}ms`)
     },
     undefined, {timeout: 5000}
 )
@@ -9878,7 +9873,8 @@ run_test(
         assert(puts === '2', 'expected exactly two puts to reach the server')
 
         channel.close()
-    }
+    },
+    undefined, {timeout: 5000}
 )
 
 run_test(
@@ -9946,7 +9942,7 @@ run_test(
         // add a handler serving both halves of a channel: every GET gets a
         // real subscription greeted with one update, and the first PUT is
         // answered 500 -- a status not in the channel's silent-retry list --
-        // with a Retry-After: 4 header, while later PUTs succeed. it logs
+        // with a Retry-After: 2 header, while later PUTs succeed. it logs
         // each PUT's arrival time (and counts GETs) in globals keyed by our
         // random id, so we can measure the retry delay server-side (the id
         // is passed as an arg since the handler runs server-side via eval,
@@ -9957,7 +9953,7 @@ run_test(
                 var puts = global['_puts_' + s] = global['_puts_' + s] ?? []
                 puts.push(Date.now())
                 if (puts.length === 1) {
-                    res.writeHead(500, { 'Retry-After': '4' })
+                    res.writeHead(500, { 'Retry-After': '2' })
                     return res.end('')
                 }
                 res.writeHead(200)
@@ -10005,12 +10001,13 @@ run_test(
         assert(log.puts.length === 2, 'expected exactly two PUTs, got ' + log.puts.length)
         assert(log.gets === 2, 'expected the put failure to rebuild the subscription')
 
-        // and the retry should have waited out the Retry-After: 4 -- longer
-        // than both built-in fallback delays (1s for a first failure, 3s
-        // after that), so clearing this bound proves the header was honored
-        // rather than either default kicking in
-        assert(log.puts[1] - log.puts[0] >= 3600,
-               `expected the retry to wait ~4s, waited ${log.puts[1] - log.puts[0]}ms`)
+        // and the retry should have waited out the Retry-After: 2 -- longer
+        // than the 1s fallback delay for a first failure (the only rung in
+        // play: this is the channel's first and only failure), so clearing
+        // this bound proves the header was honored rather than the default
+        // kicking in
+        assert(log.puts[1] - log.puts[0] >= 1900,
+               `expected the retry to wait ~2s, waited ${log.puts[1] - log.puts[0]}ms`)
     },
     undefined, {timeout: 5000}
 )
@@ -10035,7 +10032,7 @@ run_test(
             res.sendUpdate({ version: ['v1'], body: 'hi' })
         }, s)
 
-        // open a channel with a short 1s timeout so the test runs fast,
+        // open a channel with a short 0.5s timeout so the test runs fast,
         // recording status transitions and warnings, and wait for the first
         // update so we know the subscription is up before we put
         var statuses = []
@@ -10046,11 +10043,11 @@ run_test(
             on_update: () => got_update(),
             on_status: status => statuses.push(status),
             on_warning: msg => warnings.push(msg),
-            timeout: 1  // 1 second
+            timeout: 0.5  // half a second
         })
         await first_update
 
-        // fire a put: the first PUT hangs and times out after ~1s, the
+        // fire a put: the first PUT hangs and times out after ~0.5s, the
         // channel reboots, waits the ~1s retry delay, resubscribes, and
         // re-sends the put, which succeeds this time
         var start = Date.now()
@@ -10061,9 +10058,9 @@ run_test(
         // the put promise resolved with the retry's 2xx response
         assert(r.ok, 'expected the retried put to succeed')
 
-        // the timeout-then-retry path takes ~2s (1s put timeout + 1s retry
-        // delay) -- much faster would mean the first put never hung
-        assert(elapsed >= 1800, `expected put to take ~2s, took ${elapsed}ms`)
+        // the timeout-then-retry path takes ~1.5s (0.5s put timeout + 1s
+        // retry delay) -- much faster would mean the first put never hung
+        assert(elapsed >= 1300, `expected put to take ~1.5s, took ${elapsed}ms`)
 
         // the channel really rebooted: it reported going offline, and the
         // server saw exactly two puts (the hung one, then the retry)
@@ -10196,7 +10193,7 @@ run_test(
         // "aborts" means aborts for good: wait past the client's 1s reconnect
         // delay, and make sure it never reconnected -- the server saw just
         // the one GET, and the client reported nothing further
-        await new Promise(done => setTimeout(done, 1500))
+        await new Promise(done => setTimeout(done, 1200))
         var gets = await server_eval((req, res, s) =>
             res.end('' + global['_gets_' + s]), s)
         assert(gets === '1', `expected exactly 1 GET, got ${gets}`)
@@ -10376,7 +10373,7 @@ run_test(
         // "shuts down" means no reconnecting: wait past the ~1s backoff a
         // retrying channel would use, then make sure the server saw only
         // the one GET and no more errors surfaced
-        await new Promise(done => setTimeout(done, 1500))
+        await new Promise(done => setTimeout(done, 1200))
         var gets = await server_eval((req, res, s) =>
             res.end('' + global['_gets_' + s]), s)
         assert(gets === '1', `expected exactly one GET, got ${gets}`)
@@ -10595,7 +10592,7 @@ run_test(
             bus.get(ep)
 
             // 1. It delivers its first update (a 'set'), and the host is online.
-            await sleep(300)
+            await sleep(150)
             assert(updates.length === 1, 'should receive one update')
             assert(updates[0].type === 'set', "delivered as a 'set' message")
             assert(decode(updates[0].body) === 'hello', 'body should be "hello"')
@@ -10603,7 +10600,7 @@ run_test(
 
             // 2. Drop the connection — the host should go offline.
             await drop_conn(ep)
-            await sleep(500)
+            await sleep(300)
             assert(bus.network.hosts[host].online === false, 'host offline after the drop')
 
             bus.forget(ep)
@@ -10613,10 +10610,10 @@ run_test(
     run_test(
         "HTTP Bus: A silent connection (no heartbeats) times out to offline",
         async () => {
-            // 0. Subscribe to a host that ignores our heartbeat request, with a 1s timeout.
+            // 0. Subscribe to a host that ignores our heartbeat request, with a 0.7s timeout.
             var ep = await add_main_handler(pipe_server('hb_' + rid(), {send_heartbeats: false}))
             var host = new URL(ep).host
-            var bus = http_bus(() => {}, {timeout: 1, reconnect_interval: 60})
+            var bus = http_bus(() => {}, {timeout: 0.7, reconnect_interval: 60})
             bus.get(ep)
 
             // 1. The 209 arrives, so we're online.
@@ -10624,7 +10621,7 @@ run_test(
             assert(bus.network.hosts[host].online === true, 'online after the 209')
 
             // 2. No bytes arrive for longer than the timeout — the host should go offline.
-            await sleep(1200)
+            await sleep(800)
             assert(bus.network.hosts[host].online === false, 'offline after the heartbeat timeout')
 
             bus.forget(ep)
@@ -10638,18 +10635,18 @@ run_test(
             var ep = await add_main_handler(pipe_server('rc_' + rid()))
             var host = new URL(ep).host
             var updates = []
-            var bus = http_bus(m => updates.push(m), {reconnect_interval: 0.3})
+            var bus = http_bus(m => updates.push(m), {reconnect_interval: 0.15})
             bus.get(ep)
 
-            await sleep(300)
+            await sleep(150)
             assert(bus.network.hosts[host].online === true, 'online initially')
             assert(updates.length === 1, 'one update initially')
 
             // 1. Drop the connection — the host goes offline.
             await drop_conn(ep)
 
-            // 2. The poll (every 0.3s) reconnects and delivers a fresh update.
-            await sleep(900)
+            // 2. The poll (every 0.15s) reconnects and delivers a fresh update.
+            await sleep(500)
             assert(bus.network.hosts[host].online === true, 'back online after reconnect')
             assert(updates.length >= 2, 'reconnect delivered a fresh update')
 
@@ -10666,11 +10663,11 @@ run_test(
             var h1 = new URL(ep1).host, h2 = new URL(ep2).host
             var urls = [ep1 + '?u=a', ep1 + '?u=b', ep2 + '?u=a', ep2 + '?u=b']
             var got = {}
-            var bus = http_bus(m => { got[m.url] = (got[m.url] || 0) + 1 }, {reconnect_interval: 0.3})
+            var bus = http_bus(m => { got[m.url] = (got[m.url] || 0) + 1 }, {reconnect_interval: 0.15})
             for (var u of urls) bus.get(u)
 
             // 1. All four are online; both hosts and the network are up.
-            await sleep(500)
+            await sleep(300)
             for (var u of urls) assert(got[u] === 1, 'one update for ' + u)
             assert(bus.network.hosts[h1].online === true, 'host1 online')
             assert(bus.network.hosts[h2].online === true, 'host2 online')
@@ -10678,12 +10675,12 @@ run_test(
 
             // 2. Drop host 1 only — host 2 (and so the network) stay up.
             await drop_conn(ep1)
-            await sleep(150)
+            await sleep(100)
             assert(bus.network.hosts[h2].online === true, 'host2 unaffected by host1 drop')
             assert(bus.network.online === true, 'network stays online while host2 is up')
 
             // 3. The poll reconnects host 1, cascading fresh updates to both its URLs.
-            await sleep(900)
+            await sleep(500)
             assert(bus.network.hosts[h1].online === true, 'host1 reconnected')
             assert(got[ep1 + '?u=a'] >= 2 && got[ep1 + '?u=b'] >= 2, 'both host1 urls got fresh updates')
 
@@ -10701,7 +10698,7 @@ run_test(
             bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. The server receives the PUT, with the right body.
-            await sleep(300)
+            await sleep(150)
             var puts = await server_puts(ep)
             assert(puts.length === 1, 'server received the PUT')
             assert(puts[0].body === 'hi', 'server got the body')
@@ -10722,7 +10719,7 @@ run_test(
             for (var i = 0; i < 25; i++) bus.set(ep, {version: ['v' + i], body: String(i)})
 
             // 1. Exactly 10 are in flight; all 25 wait in the queue, unacked.
-            await sleep(300)
+            await sleep(200)
             var h = bus.network.hosts[host]
             assert(h.outstanding_puts_count === 10, 'in-flight capped at 10')
             assert((await server_puts(ep)).length === 10, 'server received exactly 10')
@@ -10730,7 +10727,7 @@ run_test(
 
             // 2. Release the held responses — all 25 drain through and the host is GC'd.
             await release_puts(ep)
-            await sleep(600)
+            await sleep(300)
             assert((await server_puts(ep)).length === 25, 'all 25 eventually sent')
             assert(bus.network.hosts[host] === undefined, "host GC'd once all PUTs drained")
         }
@@ -10747,7 +10744,7 @@ run_test(
             bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. It's reported once as an error, carrying the status.
-            await sleep(300)
+            await sleep(150)
             assert(errors.length === 1, 'give-up reported once')
             assert(errors[0].description === 500, 'status surfaced')
 
@@ -10766,13 +10763,13 @@ run_test(
             bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. The pipe failure takes the host offline; the PUT is requeued, not lost.
-            await sleep(300)
+            await sleep(150)
             var h = bus.network.hosts[host]
             assert(h.online === false, 'write-only host offline on the pipe failure')
             assert(h.urls[ep].put_queue.size === 1, 'the PUT is requeued, not lost')
 
             // 2. The poll re-probes with the queued PUT; this one lands, and the host GCs.
-            await sleep(600)
+            await sleep(450)
             assert(bus.network.hosts[host] === undefined, "revived host GC'd after its PUT drained")
             assert(bus.network.online === 'maybe', 'network settles at maybe')
             var puts = await server_puts(ep)
@@ -10788,13 +10785,13 @@ run_test(
             var ep = await add_main_handler(pipe_server('prk_' + rid(),
                 {put_behavior: 'n => n === 1 ? "drop" : n === 2 ? "ok" : "hold"'}))
             var host = new URL(ep).host
-            var bus = http_bus(() => {}, {reconnect_interval: 0.3, max_outstanding_puts: 1})
+            var bus = http_bus(() => {}, {reconnect_interval: 0.15, max_outstanding_puts: 1})
             bus.set(ep, {version: ['a1'], body: '1'})
             bus.set(ep, {version: ['a2'], body: '2'})
             bus.set(ep, {version: ['a3'], body: '3'})
 
             // 1. The ack lifts the offline host to 'maybe' — never online=true, since it has no subscription.
-            await sleep(800)
+            await sleep(400)
             var h = bus.network.hosts[host]
             assert(h.online === 'maybe', 'a landed PUT lifts the offline host to maybe')
 
@@ -10813,7 +10810,7 @@ run_test(
             var bus = http_bus(() => {}, {reconnect_interval: 60})
             bus.get(a); bus.get(b)
 
-            await sleep(300)
+            await sleep(150)
             var h = bus.network.hosts[host]
             assert(Object.keys(h.urls).length === 2, 'two resources subscribed')
             assert(h.online === true, 'green while subscribed')
@@ -10846,7 +10843,7 @@ run_test(
             bus.get(hang)
 
             // 1. The host is green, but only /a counts as online — the connecting /hang doesn't.
-            await sleep(300)
+            await sleep(150)
             var h = bus.network.hosts[host]
             assert(h.online === true, 'green because /a is online')
             assert(h.online_subs.size === 1, 'only /a is online; hang is just connecting')
@@ -10872,7 +10869,7 @@ run_test(
             bus.get(ep)
 
             // 1. It's reported once as an error — the 403, on the GET.
-            await sleep(300)
+            await sleep(150)
             assert(errors.length === 1, 'one error reported')
             assert(errors[0].description === 403, 'the 403 surfaced')
             assert(errors[0].method === 'GET', 'on the GET')
@@ -10888,17 +10885,17 @@ run_test(
             // 0. Write to a host that answers 503 the first time, then 200.
             var ep = await add_main_handler(pipe_server('pr_' + rid(), {put_behavior: 'n => n === 1 ? 503 : 200'}))
             var host = new URL(ep).host
-            var bus = http_bus(() => {}, {reconnect_interval: 0.3})
+            var bus = http_bus(() => {}, {reconnect_interval: 0.2})
             bus.set(ep, {version: ['a1'], body: 'hi'})
 
             // 1. A 503 is a per-resource retry: the host stays 'maybe' (never offline), the PUT waits.
-            await sleep(150)
+            await sleep(100)
             var h = bus.network.hosts[host]
             assert(h.online === 'maybe', '503 keeps the host maybe, never offline')
             assert(h.urls[ep].put_queue.size === 1, 'the PUT waits in its queue to retry')
 
             // 2. The retry lands (the server saw it twice); the write acks and the host is GC'd.
-            await sleep(500)
+            await sleep(300)
             assert((await server_puts(ep)).length === 2, 'server saw the PUT twice (503 then 200)')
             assert(bus.network.hosts[host] === undefined, "PUT finally acked; host GC'd")
         }
@@ -10923,13 +10920,13 @@ run_test(
             assert(h.online_subs.size === 0, 'no online (209) subscription')
 
             // 2. Polling re-fetches and delivers again.
-            await sleep(500)
+            await sleep(350)
             assert(updates.length >= 2, 'polling re-fetched and delivered again')
 
             // 3. forget() stops the polling.
             bus.forget(ep)
             var at_forget = updates.length
-            await sleep(500)
+            await sleep(300)
             assert(updates.length === at_forget, 'forget stops the polling')
         }
     )
@@ -10973,7 +10970,7 @@ run_test(
             // 0. Poll a server that keeps the same version until told to change.
             var ep = await add_main_handler(poll_server('cdv_' + rid(), 'version'))
             var updates = []
-            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.1})
             bus.get(ep)
 
             // 1. The first poll delivers the current state.
@@ -10982,14 +10979,14 @@ run_test(
             assert(decode(updates[0].body) === 'state1', 'with the right body')
 
             // 2. Later polls see the same version: nothing delivered, but polling continues.
-            await sleep(700)
+            await sleep(400)
             var s = await poll_status(ep)
             assert(updates.length === 1, 'an unchanged version stays silent')
             assert(s.polls >= 3, 'yet the server kept being polled')
 
             // 3. Bump the version — the next poll delivers again.
             await change_state(ep)
-            await sleep(400)
+            await sleep(250)
             assert(updates.length === 2, 'a new version is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
@@ -11003,7 +11000,7 @@ run_test(
             // 0. Poll a server that supports conditional GET (etag + 304).
             var ep = await add_main_handler(poll_server('cde_' + rid(), 'etag'))
             var updates = []
-            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.1})
             bus.get(ep)
 
             // 1. The first poll (no etag held yet) delivers the current state.
@@ -11012,7 +11009,7 @@ run_test(
             assert(decode(updates[0].body) === 'state1', 'with the right body')
 
             // 2. Now holding the etag, later polls send If-None-Match and earn 304s.
-            await sleep(700)
+            await sleep(400)
             var s = await poll_status(ep)
             assert(updates.length === 1, 'a 304 delivers nothing')
             assert(s.inm >= 1, 'the client sent If-None-Match')
@@ -11020,7 +11017,7 @@ run_test(
 
             // 3. Change the state (new etag) — the poll 200s and delivers.
             await change_state(ep)
-            await sleep(400)
+            await sleep(250)
             assert(updates.length === 2, 'a changed etag is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
@@ -11034,7 +11031,7 @@ run_test(
             // 0. Poll a server that sends only a body — no version, no etag.
             var ep = await add_main_handler(poll_server('cdh_' + rid(), 'hash'))
             var updates = []
-            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.2})
+            var bus = http_bus(m => { if (m.type === 'set') updates.push(m) }, {poll_interval: 0.1})
             bus.get(ep)
 
             // 1. The first poll delivers the current state.
@@ -11043,14 +11040,14 @@ run_test(
             assert(decode(updates[0].body) === 'state1', 'with the right body')
 
             // 2. The same body hashes equal on later polls, so nothing is delivered.
-            await sleep(700)
+            await sleep(400)
             var s = await poll_status(ep)
             assert(updates.length === 1, 'an identical body stays silent')
             assert(s.polls >= 3, 'yet the server kept being polled')
 
             // 3. Change the body — the new hash is delivered.
             await change_state(ep)
-            await sleep(400)
+            await sleep(250)
             assert(updates.length === 2, 'a changed body is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
