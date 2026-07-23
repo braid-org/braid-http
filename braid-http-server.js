@@ -445,10 +445,12 @@ function braidify_request_internal (req, res, done) {
         parents = ('parents' in req.headers) && JSON.parse('['+req.headers.parents+']'),
         peer = req.headers['peer']
 
-    // Peer should be quoted, but some legacy peers might not quote it.
-    if (peer && peer[0] === '"' && peer[peer.length-1] === '"')
-        // So we parse the quotes only if they are there
-        peer = JSON.parse(peer)
+    // Peer should be quoted like a Structured Fields string, but some
+    // legacy peers don't quote, so unwrap only if quotes are there
+    var quoted_peer = peer?.match(/^"(.*)"$/)
+    if (quoted_peer)
+        // Unescape the two Structured Fields escapes, \" and \\
+        peer = quoted_peer[1].replace(/\\(["\\])/g, '$1')
 
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
