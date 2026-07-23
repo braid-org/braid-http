@@ -801,6 +801,10 @@ function add_braid_helpers (req, res, res2, peer) {
         function startMultiresponse () {
             res2.isMultiresponse = true
 
+            // The declared representation type, used to Content-Type each
+            // update's body.  Updates carrying repr_type amend it.
+            res2.current_repr_type = res2.getHeader('Repr-Type')
+
             // Ensure Content-Type isn't already set; because we are about to
             // clobber it
             assert(res2.getHeader('Content-Type') === undefined ||
@@ -1043,12 +1047,9 @@ async function send_update(res, update, url, peer) {
             value = value.map(JSON.stringify).map(ascii_ify).join(", ")
         }
 
-        // The representation's media type travels as Repr-Type.  A solo
-        // snapshot response's body IS the representation, so it ALSO gets the
-        // normal Content-Type (RFC 9110).
+        // The representation's media type travels as Repr-Type
         else if (header === 'repr_type') {
-            if (!res.isMultiresponse && !patches)
-                set_header('Content-Type', value)
+            res.current_repr_type = value
             header = 'Repr-Type'
         }
 
@@ -1058,6 +1059,17 @@ async function send_update(res, update, url, peer) {
 
         set_header(header, value)
     }
+
+    // Every body gets a Content-Type describing it:
+    //  - The application/http-patches framing multi-patches
+    //  - or the representation's type
+    //    - for a whole snapshot
+    //    - or a range-patch contents
+    if (res.current_repr_type === undefined && !res.isMultiresponse)
+        res.current_repr_type = res.getHeader('Repr-Type')
+    if (res.current_repr_type && !as_multiple_patches
+        && (res.isMultiresponse || !res.hasHeader('Content-Type')))
+        set_header('Content-Type', res.current_repr_type)
 
     // Write the patches or body
     if (body || body === '') {

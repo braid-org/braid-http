@@ -225,8 +225,8 @@ async function braid_fetch (url, params = {}) {
                 if (typeof patch.content === 'string')
                     patch.content = te.encode(patch.content)
 
-                var length = `content-length: ${get_binary_num_bytes(patch.content)}`
-                var range = `content-range: ${patch.unit} ${patch.range}`
+                var length = `Content-Length: ${get_binary_num_bytes(patch.content)}`
+                var range  = `Content-Range: ${patch.unit} ${patch.range}`
                 bufs.push(te.encode(`${length}\r\n${range}\r\n\r\n`))
                 bufs.push(patch.content)
                 bufs.push(te.encode(`\r\n`))
@@ -238,8 +238,8 @@ async function braid_fetch (url, params = {}) {
     // The representation's media type travels as Repr-Type.
     if (params.repr_type) {
         params.headers.set('Repr-Type', params.repr_type)
-        // A snapshot body IS the representation, so it also gets Content-Type
-        if (!params.patches)
+        // Set the Content-Type from Repr-Type
+        if (!params.headers.has('Content-Type'))
             params.headers.set('Content-Type', params.repr_type)
     }
 

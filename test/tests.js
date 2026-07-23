@@ -4822,18 +4822,22 @@ run_test(
 
         // each update should come through unharmed by the charset param:
         // versions, parents, bodies, patches, the custom 115 status, and the
-        // hash headers (surfacing as extra_headers on the update and patch)
+        // hash headers (surfacing as extra_headers on the update and patch).
+        // snapshots and inline single patches carry the subscription's
+        // repr-type as their content_type; http-patches framing does not.
+        var content_type = 'application/json; charset=utf-8'
         var expected = [
-            { version: ['test'], parents: ['oldie'], body: JSON.stringify({this: 'stuff'}), status: 200 },
+            { version: ['test'], parents: ['oldie'], body: JSON.stringify({this: 'stuff'}),
+              status: 200, content_type },
             { version: ['test1'], parents: ['oldie', 'goodie'],
               patches: [{unit: 'json', range: '[1]', content: '1'}],
-              status: 115, extra_headers: {hash: '42'} },
+              status: 115, content_type, extra_headers: {hash: '42'} },
             { version: ['test2'], patches: [{unit: 'json', range: '[2]', content: '2'}], status: 200 },
             { version: ['test3'],
               patches: [{unit: 'json', range: '[3]', content: '3', extra_headers: {hash: '43'}},
                         {unit: 'json', range: '[4]', content: '4'}],
               status: 200 },
-            { version: ['another!'], body: '"!"', status: 200 }
+            { version: ['another!'], body: '"!"', status: 200, content_type }
         ]
         for (var i = 0; i < expected.length; i++)
             assert(JSON.stringify(got[i]) === JSON.stringify(expected[i]),
@@ -4870,6 +4874,46 @@ run_test(
         // a fetch without the parents option should send no parents header
         var z = await (await fetch(endpoint)).json()
         assert(z.header === null, 'expected no parents header without the option')
+    }
+)
+
+run_test(
+    "Content-Type describes the body: snapshot, single patch, multi patch",
+    async () => {
+        // add a handler that echoes back the type-related request headers
+        var endpoint = await add_main_handler((req, res) => {
+            res.writeHead(200, {'Content-Type': 'application/json'})
+            res.end(JSON.stringify({
+                'content-type': req.headers['content-type'] ?? null,
+                'repr-type': req.headers['repr-type'] ?? null,
+                'content-range': req.headers['content-range'] ?? null,
+                patches: req.headers.patches ?? null
+            }))
+        })
+
+        // a snapshot PUT: the body IS the representation
+        var h = await (await fetch(endpoint, {method: 'PUT', body: 'hi',
+                                              repr_type: 'text/plain'})).json()
+        assert(h['content-type'] === 'text/plain', 'snapshot should have Content-Type')
+        assert(h['repr-type'] === 'text/plain', 'snapshot should have Repr-Type')
+
+        // a single-patch PUT: the body is a fragment of the representation,
+        // typed by Content-Type and scoped by Content-Range
+        h = await (await fetch(endpoint, {method: 'PUT', repr_type: 'text/plain',
+            patches: [{unit: 'text', range: '[0:0]', content: 'hi'}]})).json()
+        assert(h['content-type'] === 'text/plain', 'single patch should have Content-Type')
+        assert(h['repr-type'] === 'text/plain', 'single patch should have Repr-Type')
+        assert(h['content-range'] === 'text [0:0]', 'single patch should have Content-Range')
+
+        // a multi-patch PUT: the body is http-patches framing, which owns
+        // Content-Type; the patches' type is implied by Repr-Type
+        h = await (await fetch(endpoint, {method: 'PUT', repr_type: 'text/plain',
+            patches: [{unit: 'text', range: '[0:0]', content: 'hi'},
+                      {unit: 'text', range: '[5:5]', content: 'yo'}]})).json()
+        assert(h['content-type'] === 'application/http-patches; count=2',
+               'multi patch should have http-patches Content-Type')
+        assert(h['repr-type'] === 'text/plain', 'multi patch should have Repr-Type')
+        assert(h.patches === '2', 'multi patch should have Patches: 2')
     }
 )
 
