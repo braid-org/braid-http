@@ -10516,6 +10516,7 @@ run_test(
     var drop_conn    = ep => og_fetch(ep + '?_drop')       // cut the live subscriptions
     var release_puts = ep => og_fetch(ep + '?_release')    // free the held PUT responses
     var server_puts  = async ep => (await og_fetch(ep + '?_puts')).json()  // the received-PUT log
+    var server_subs  = async ep => (await og_fetch(ep + '?_subs')).json()  // parents header of each subscription
     var decode = b => typeof b === 'string' ? b : new TextDecoder().decode(b)
 
     // A configurable braid server:
@@ -10531,11 +10532,13 @@ run_test(
             poll_mode:        !!opts.poll_mode,
             send_heartbeats:  opts.send_heartbeats !== false,
             put_status:       opts.put_status ?? 200,
-            fail_first_put:   !!opts.fail_first_put
+            fail_first_put:   !!opts.fail_first_put,
+            echo_repr:        !!opts.echo_repr,
+            stream_error:     opts.stream_error ?? null
         })
         var put_behavior = opts.put_behavior ? '(' + opts.put_behavior + ')' : 'null'
         return `(req, res) => {
-            var G = (global._pipe_${test_id} ||= {puts: [], live: [], held: [], poll: 0, put_count: 0, holding: ${!!opts.hold_puts}})
+            var G = (global._pipe_${test_id} ||= {puts: [], subs: [], live: [], held: [], poll: 0, put_count: 0, holding: ${!!opts.hold_puts}})
             var o = ${o}
             var put_behavior = ${put_behavior}
             var q = new URL(req.url, 'http://x').searchParams
@@ -10544,9 +10547,11 @@ run_test(
             if (q.has('_drop'))    { for (var s of G.live) s.destroy(); G.live = []; return res.end('ok') }
             if (q.has('_release')) { G.holding = false; for (var f of G.held) f(); G.held = []; return res.end('ok') }
             if (q.has('_puts'))    { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify(G.puts)) }
+            if (q.has('_subs'))    { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify(G.subs)) }
 
             // subscriptions
             if (req.subscribe) {
+                G.subs.push(req.headers.parents ?? null)
                 if (q.get('u') === 'hang')  { G.live.push(res.socket); return }          // never answer
                 if (o.subscribe_status)     { res.statusCode = o.subscribe_status; return res.end() }
                 if (o.poll_mode) {                                                       // plain 200, no 209
@@ -10555,9 +10560,17 @@ run_test(
                     return res.end('state' + G.poll)
                 }
                 if (!o.send_heartbeats) delete req.headers['heartbeats']
+                if (o.echo_repr) {
+                    if (req.headers.accept) res.setHeader('Repr-Type', req.headers.accept)
+                    if (req.headers['merge-type']) res.setHeader('Merge-Type', req.headers['merge-type'])
+                }
                 G.live.push(res.socket)
                 res.startSubscription()
                 res.sendUpdate({version: ['v1'], body: 'hello'})
+                if (o.stream_error) {
+                    res.sendUpdate({status: o.stream_error, body: 'uh oh'})
+                    res.sendUpdate({version: ['v2'], parents: ['v1'], body: 'still here'})
+                }
                 return
             }
 
@@ -10569,7 +10582,11 @@ run_test(
                            : G.holding ? 'hold' : 'ok'
                 if (action === 'drop') return req.socket.destroy()
                 req.parseUpdate().then(update => {
-                    G.puts.push({version: update.version, body: update.body && Buffer.from(update.body).toString()})
+                    G.puts.push({version: req.version,
+                                 body: update.body && Buffer.from(update.body).toString(),
+                                 headers: {'repr-type': req.headers['repr-type'],
+                                           'merge-type': req.headers['merge-type'],
+                                           peer: req.headers.peer}})
                     var respond = () => { res.statusCode = typeof action === 'number' ? action : o.put_status; res.end() }
                     if (action === 'hold') G.held.push(respond)
                     else respond()
@@ -11054,6 +11071,200 @@ run_test(
             assert(updates.length === 2, 'a changed body is delivered')
             assert(decode(updates[1].body) === 'state2', 'with the new body')
 
+            bus.forget(ep)
+        }
+    )
+
+
+    run_test(
+        "HTTP Bus: A rejected write takes its descendants with it; other lineages survive",
+        async () => {
+            // 0. The server holds write #1, then rejects it with a 403.
+            var ep = await add_main_handler(pipe_server('ds_' + rid(),
+                {put_status: 403, put_behavior: 'n => n === 1 ? "hold" : 200'}))
+            var msgs = []
+            var bus = http_bus(m => msgs.push(m),
+                               {max_outstanding_puts: 1, reconnect_interval: 60})
+
+            // 1. Queue the lineage a1 <- a2 <- a3, plus an unrelated write b1.
+            bus.set(ep, {version: ['a1'], parents: [], body: 'one'})
+            await sleep(100)
+            bus.set(ep, {version: ['a2'], parents: ['a1'], body: 'two'})
+            bus.set(ep, {version: ['a3'], parents: ['a2'], body: 'three'})
+            bus.set(ep, {version: ['b1'], parents: ['zzz'], body: 'other'})
+
+            // 2. The 403 aborts a1, and a2 + a3 die with it, in causal order.
+            await release_puts(ep)
+            await sleep(300)
+            var acks = msgs.filter(m => m.type === 'ack')
+            assert(acks.length === 4, `every write ends in exactly one ack; got ${acks.length}`)
+            assert(acks[0].valid === 'abort' && acks[0].version[0] === 'a1', 'a1 aborted first')
+            assert(acks[0].message.includes('403'), "a1's ack names the status")
+            assert(decode(acks[0].body) === 'one', "a1's ack carries the write")
+            assert(acks[1].valid === 'abort' && acks[1].version[0] === 'a2', 'a2 died with a1')
+            assert(acks[2].valid === 'abort' && acks[2].version[0] === 'a3', 'a3 died with a2')
+            assert(acks[1].message.includes('a1'), "descendant acks name the rejected write")
+            assert(acks[3].valid === true && acks[3].version[0] === 'b1', 'the unrelated write landed')
+
+            // 3. The dead descendants never reached the wire.
+            var sent = (await server_puts(ep)).map(p => p.version[0])
+            assert(sent.join() === 'a1,b1', `server saw only a1 and b1; got: ${sent}`)
+        }
+    )
+
+    run_test(
+        "HTTP Bus: Online status is subscribable state, per network and per host",
+        async () => {
+            // 0. Watch connectivity before touching the network.
+            var ep = await add_main_handler(pipe_server('on_' + rid()))
+            var host = new URL(ep).host
+            var msgs = []
+            var bus = http_bus(m => msgs.push(m), {reconnect_interval: 60})
+            bus.get('online')
+            bus.get('online/' + host)
+
+            // 1. Both answer immediately: an untouched network reads 'maybe'.
+            assert(msgs.length === 2, 'both answer immediately')
+            assert(msgs[0].url === 'online' && msgs[0].body === 'maybe', 'the network reads maybe')
+            assert(msgs[1].url === 'online/' + host && msgs[1].body === 'maybe', 'the host reads maybe')
+
+            // 2. A healthy subscription turns both true.
+            var of = url => msgs.filter(m => m.url === url).map(m => m.body)
+            bus.get(ep)
+            await sleep(150)
+            assert(of('online').at(-1) === true, 'the network went green')
+            assert(of('online/' + host).at(-1) === true, 'the host went green')
+
+            // 3. Cutting the pipe turns both false.
+            await drop_conn(ep)
+            await sleep(300)
+            assert(of('online').at(-1) === false, 'the network went red')
+            assert(of('online/' + host).at(-1) === false, 'the host went red')
+
+            // 4. forget() unsubscribes: later transitions report nothing.
+            bus.forget('online'); bus.forget('online/' + host)
+            var n = msgs.length
+            bus.forget(ep)
+            await sleep(100)
+            assert(msgs.length === n, 'no reports after forgetting the online urls')
+        }
+    )
+
+    run_test(
+        "HTTP Bus: Repr negotiation flows from get() to sets, writes, and acks",
+        async () => {
+            // 0. A server that echoes back whatever repr we ask for.
+            var ep = await add_main_handler(pipe_server('rp_' + rid(), {echo_repr: true}))
+            var msgs = []
+            var bus = http_bus(m => msgs.push(m), {reconnect_interval: 60})
+
+            // 1. Ask for a repr; the set arrives stamped with the server's answer.
+            bus.get(ep, {repr: {type: 'text/x-frob', merge_type: 'frobble'}})
+            await sleep(150)
+            var set = msgs.find(m => m.type === 'set')
+            assert(set, 'got a set')
+            assert(set.repr.type === 'text/x-frob', 'the set carries the negotiated type')
+            assert(set.repr.merge_type === 'frobble', 'and the negotiated merge type')
+            assert(set.body === 'hello', 'text/* bodies arrive decoded to strings')
+
+            // 2. A write inherits the negotiated repr, and its ack reports it.
+            bus.set(ep, {version: ['w1'], parents: ['v1'], body: 'x'})
+            await sleep(150)
+            var ack = msgs.find(m => m.type === 'ack')
+            assert(ack.valid === true, 'the write landed')
+            assert(ack.repr.type === 'text/x-frob', "the ack reports the write's type")
+            var put = (await server_puts(ep))[0]
+            assert(put.headers['repr-type'] === 'text/x-frob', 'the write carried the type')
+            assert(put.headers['merge-type'] === 'frobble', 'and the merge type')
+            assert(put.headers.peer?.[0] === '"', 'and the quoted peer')
+
+            // 3. With no reads and no explicit repr, type_of supplies the default.
+            var ep2 = await add_main_handler(pipe_server('rp2_' + rid()))
+            var bus2 = http_bus(() => {}, {reconnect_interval: 60})
+            bus2.type_of = url => 'text/dflt'
+            bus2.set(ep2, {version: ['w2'], parents: [], body: 'y'})
+            await sleep(150)
+            assert((await server_puts(ep2))[0].headers['repr-type'] === 'text/dflt',
+                   'write-only usage falls back to type_of')
+        }
+    )
+
+    run_test(
+        "HTTP Bus: forget() forgets what reading learned, but queued writes survive",
+        async () => {
+            // 0. Subscribe, and learn version v1.
+            var ep = await add_main_handler(pipe_server('ff_' + rid(), {hold_puts: true}))
+            var msgs = []
+            var bus = http_bus(m => msgs.push(m), {reconnect_interval: 60})
+            bus.get(ep)
+            await sleep(150)
+
+            // 1. Queue a write (the server holds its response), then forget the url.
+            bus.set(ep, {version: ['w1'], parents: ['v1'], body: 'x'})
+            await sleep(100)
+            bus.forget(ep)
+
+            // 2. A fresh get() sends no parents: the version memory is gone.
+            bus.get(ep)
+            await sleep(150)
+            var subs = await server_subs(ep)
+            assert(subs.length === 2, `expected two subscriptions; got ${subs.length}`)
+            assert(subs[0] === null && subs[1] === null,
+                   'the re-subscription resumed from nothing')
+
+            // 3. The queued write outlived the forget.
+            await release_puts(ep)
+            await sleep(200)
+            assert((await server_puts(ep)).length === 1, 'the held write still landed')
+            assert(msgs.some(m => m.type === 'ack' && m.valid === true), 'and got its ack')
+        }
+    )
+
+    run_test(
+        "HTTP Bus: Reconnection resumes from our own acked writes",
+        async () => {
+            // 0. Subscribe (v1 arrives), then land a write on top of it.
+            var ep = await add_main_handler(pipe_server('fr_' + rid()))
+            var bus = http_bus(() => {}, {reconnect_interval: 0.2})
+            bus.get(ep)
+            await sleep(150)
+            bus.set(ep, {version: ['w1'], parents: ['v1'], body: 'x'})
+            await sleep(150)
+
+            // 1. Our writes never echo back down the subscription, so only the
+            //    ack can have advanced the frontier past v1.
+            await drop_conn(ep)
+            await sleep(700)
+            var subs = await server_subs(ep)
+            assert(subs.length === 2, `expected a reconnection; got ${subs.length} subscriptions`)
+            assert(subs[0] === null, 'the first subscription had no memory')
+            assert(subs[1] === JSON.stringify('w1'),
+                   `the reconnect resumed from our own write; got: ${subs[1]}`)
+            bus.forget(ep)
+        }
+    )
+
+    run_test(
+        "HTTP Bus: An in-stream error becomes an error event, and the stream survives",
+        async () => {
+            // 0. A subscription that streams v1, then a 403 update, then v2.
+            var ep = await add_main_handler(pipe_server('se_' + rid(), {stream_error: 403}))
+            var host = new URL(ep).host
+            var msgs = []
+            var bus = http_bus(m => msgs.push(m), {reconnect_interval: 60})
+            bus.get(ep)
+            await sleep(200)
+
+            // 1. The 403 is reported as an error, not impersonating data.
+            var errors = msgs.filter(m => m.type === 'error')
+            assert(errors.length === 1, `expected one error; got ${errors.length}`)
+            assert(errors[0].message.includes('403'), 'naming the status')
+
+            // 2. Both real updates arrived, and the subscription is still alive.
+            var sets = msgs.filter(m => m.type === 'set')
+            assert(sets.length === 2, `expected two sets; got ${sets.length}`)
+            assert(decode(sets[1].body) === 'still here', 'the update after the error still flowed')
+            assert(bus.network.hosts[host].online === true, 'still online')
             bus.forget(ep)
         }
     )

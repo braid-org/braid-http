@@ -2482,20 +2482,30 @@ function http_bus (cb, options = {}) {
     // Abort a write, plus every queued write built on it
     function abort_writes_built_on (req, message) {
         var resource = host_of(req.url)?.urls[req.url]
-        var abort = (r, message) => {
-            delete_request(r)
-            cb({type: 'ack', valid: 'abort', url: r.url, ...r.params,
-                repr: r.sent_repr ?? repr_for_write(r), message})
-        }
-        abort(req, message)
 
+        // Find the descendants
         var dead = new Set(req.params?.version ?? [])
-        if (!dead.size || !resource) return
-        for (var put of [...resource.put_queue])
-            if (put.params?.parents?.some(p => dead.has(p))) {
-                for (var v of put.params.version ?? []) dead.add(v)
-                abort(put, `builds on rejected write ${req.params.version[0]}`)
-            }
+        var descendants = []
+        if (resource && dead.size)
+            for (var put of resource.put_queue)
+                if (put !== req && put.params?.parents?.some(p => dead.has(p))) {
+                    for (var v of put.params.version ?? []) dead.add(v)
+                    descendants.push(put)
+                }
+
+        // Resolve the acks now, before deletions can GC the repr they report
+        var ack_of = (r, why) => ({type: 'ack', valid: 'abort', url: r.url, ...r.params,
+                                   repr: r.sent_repr ?? repr_for_write(r), message: why})
+        var acks = [ack_of(req, message)].concat(descendants.map(put =>
+            ack_of(put, `builds on rejected write ${req.params.version[0]}`)))
+
+        // Remove the descendants first: the rejected write still holds its
+        // queue slot, so removing them can't pump one onto the wire
+        for (var put of descendants) delete_request(put)
+        delete_request(req)
+
+        // Then report the deaths, in causal order
+        for (var a of acks) cb(a)
     }
 
     // Re-fire this request after a delay.
