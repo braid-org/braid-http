@@ -2229,7 +2229,7 @@ run_test(
 
         // make sure the middleware answered with a subscription
         assert(r.status === 209, `expected status 209, got: ${r.status}`)
-        assert(r.headers.get('subscribe') === 'true', 'expected subscribe response header')
+        assert(r.headers.get('subscribe') === '?1', 'expected subscribe response header')
 
         // collect updates as they arrive, and wait for the first one
         var updates = []
@@ -2344,7 +2344,7 @@ run_test(
         // the first update should be the one the handler sent, and show that
         // braidify parsed the subscribe request header into req.subscribe
         assert(updates[0].version[0] === 'first', 'got unexpected first version')
-        assert(JSON.parse(updates[0].body_text).subscribe === 'true',
+        assert(JSON.parse(updates[0].body_text).subscribe === '?1',
                'expected braidify to parse the subscribe header')
 
         // the subscription should still be open: poke the server (over the
@@ -2427,7 +2427,7 @@ run_test(
 
         // make sure the wrapped server marked the response as a subscription
         assert(r.status === 209, 'expected 209 subscription status')
-        assert(r.headers.get('subscribe') === 'true', 'expected subscribe header')
+        assert(r.headers.get('subscribe') === '?1', 'expected subscribe header')
 
         // collect both updates off the subscription
         var updates = []
@@ -4566,7 +4566,7 @@ run_test(
 
         // make sure the client really sent our peer as the peer header,
         // and that braidify surfaced that header as req.peer
-        assert(echoed.header === p, 'expected the peer param to be sent as the peer header')
+        assert(echoed.header === JSON.stringify(p), 'expected the peer param to be sent quoted, as the peer header')
         assert(echoed.peer === p, 'expected req.peer to be set from the peer header')
 
         // fetch again without a peer param -- the client should not invent
@@ -10734,19 +10734,23 @@ run_test(
     )
 
     run_test(
-        "HTTP Bus: A non-2xx write is a give-up: reported as an error, then dropped",
+        "HTTP Bus: A non-2xx write is a give-up: aborted with an ack, then dropped",
         async () => {
             // 0. Write to a host that answers 500.
             var ep = await add_main_handler(pipe_server('pg_' + rid(), {put_status: 500}))
             var host = new URL(ep).host
-            var errors = []
-            var bus = http_bus(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
+            var acks = []
+            var bus = http_bus(m => { if (m.type === 'ack') acks.push(m) }, {reconnect_interval: 60})
             bus.set(ep, {version: ['a1'], body: 'hi'})
 
-            // 1. It's reported once as an error, carrying the status.
+            // 1. The write ends in exactly one ack: an abort, carrying the
+            //    write and the reason.
             await sleep(150)
-            assert(errors.length === 1, 'give-up reported once')
-            assert(errors[0].description === 500, 'status surfaced')
+            assert(acks.length === 1, 'exactly one terminal ack')
+            assert(acks[0].valid === 'abort', 'the write was aborted')
+            assert(acks[0].version[0] === 'a1', 'carrying the write')
+            assert(acks[0].body === 'hi', 'body and all')
+            assert(acks[0].message.includes('500'), 'and the reason')
 
             // 2. The write is dropped, so its write-only host is GC'd.
             assert(bus.network.hosts[host] === undefined, "gave-up PUT's host is GC'd")
@@ -10868,11 +10872,10 @@ run_test(
             var bus = http_bus(m => { if (m.type === 'error') errors.push(m) }, {reconnect_interval: 60})
             bus.get(ep)
 
-            // 1. It's reported once as an error — the 403, on the GET.
+            // 1. It's reported once as an error, naming the 403.
             await sleep(150)
             assert(errors.length === 1, 'one error reported')
-            assert(errors[0].description === 403, 'the 403 surfaced')
-            assert(errors[0].method === 'GET', 'on the GET')
+            assert(errors[0].message.includes('403'), 'the 403 surfaced')
 
             // 2. The subscription is cancelled, so its host is GC'd.
             assert(bus.network.hosts[host] === undefined, "subscription cancelled, host GC'd")

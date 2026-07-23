@@ -445,6 +445,11 @@ function braidify_request_internal (req, res, done) {
         parents = ('parents' in req.headers) && JSON.parse('['+req.headers.parents+']'),
         peer = req.headers['peer']
 
+    // Peer should be quoted, but some legacy peers might not quote it.
+    if (peer && peer[0] === '"' && peer[peer.length-1] === '"')
+        // So we parse the quotes only if they are there
+        peer = JSON.parse(peer)
+
     // Parse the subscribe header
     var subscribe = req.headers.subscribe
 

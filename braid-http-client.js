@@ -41,7 +41,7 @@ function braidify_http (http) {
 
         // Add the subscribe header if this is a subscription
         if (options.subscribe)
-            options.headers.subscribe = 'true'
+            options.headers.subscribe = '?1'   // Structured Headers for true
 
         // // Always add the `peer` header
         // options.headers.peer = options.headers.peer || peer
@@ -178,13 +178,13 @@ async function braid_fetch (url, params = {}) {
         params.headers.set('parents', version_to_header(params.parents))
 
     if (params.subscribe) {
-        params.headers.set('subscribe', 'true')
+        params.headers.set('subscribe', '?1')   // Structured Headers for true
         // Prevent this response from being cached
         params.cache = 'no-store'
     }
 
     if (params.peer)
-        params.headers.set('peer', params.peer)
+        params.headers.set('peer', JSON.stringify(params.peer))
 
     if (params.heartbeats)
         params.headers.set('heartbeats',
@@ -2108,6 +2108,17 @@ function reliable_update_channel (url, params) {
 // When the network or pipe is offline, it throttles reconnection attempts
 // with little probes, rather than sending 10,000s of useless requests off a
 // cliff to their death.
+//
+// More API, once you want it:
+//
+//   - get(url, {repr: {type, merge_type}}) asks the server for that
+//     representation.  Sets arrive stamped with the repr it agreed to.
+//   - Every set(url, update) ends in exactly one ack:
+//     cb({type: 'ack', valid: true | 'abort', ...the write, repr, message})
+//   - Connectivity is state: get('online') or get('online/<host>')
+//     reports true | false | 'maybe', via ordinary sets.
+//   - bus.type_of = (url) => type supplies a default type for reads and
+//     writes that don't specify one.
 
 function http_bus (cb, options = {}) {
 
@@ -2129,6 +2140,9 @@ function http_bus (cb, options = {}) {
 
     // Each new host is born into `initial_online_status`.
     var initial_online_status = options.birth ?? 'maybe'
+
+    // Sent on every request, so servers don't echo our writes back to us
+    var peer = Math.random().toString(36).slice(2)
 
     var network = {
         online: initial_online_status,
@@ -2158,6 +2172,24 @@ function http_bus (cb, options = {}) {
           : hosts.length === 0                    ? 'maybe'
             // Otherwise, we're sitting in a world of network errors, so online === false
           :                                         false
+
+        report_online()
+    }
+
+    // == Online Status ==
+    // Apps subscribe to 'online' or 'online/<host>' with ordinary get()s.
+    var online_url = (url) => url === 'online' || url.startsWith('online/')
+    var online_of  = (url) => url === 'online'
+        ? network.online
+        : network.hosts[url.slice('online/'.length)]?.online ?? 'maybe'
+
+    var online_watchers = new Map()          // url -> value we last reported
+    function report_online () {
+        for (var [url, last] of online_watchers)
+            if (online_of(url) !== last) {
+                online_watchers.set(url, online_of(url))
+                cb({type: 'set', url, body: online_of(url)})
+            }
     }
 
     function create_host_state (name) {
@@ -2190,7 +2222,8 @@ function http_bus (cb, options = {}) {
         // File the request into its resource object:
         var resource = host.urls[req.url] || (host.urls[req.url] = {
             subscription: null, put_queue: new Set(),
-            last_version: null, last_etag: null, last_hash: null
+            last_version: null, last_etag: null, last_hash: null,
+            repr: null
         })
 
         // A GET becomes a subscription
@@ -2350,22 +2383,48 @@ function http_bus (cb, options = {}) {
     }
 
 
-    function process_mime_type (update, resource) {
-        // Store the repr_type, if it's changed
-        if (update.repr_type) resource.repr_type = update.repr_type
-        // Otherwise, import it from the past
-        else update.repr_type = resource.repr_type
+    // Remember the repr the server says it's speaking. We keep the same
+    // object until it changes, so apps can compare reprs with !==
+    function remember_repr (resource, type, merge_type) {
+        var r = resource.repr
+        if (!r || r.type !== type || r.merge_type !== merge_type)
+            resource.repr = {type, merge_type}
+        return resource.repr
+    }
 
-        // Decode a text/* body to a string, and a JSON body to a parsed value.
-        if (update.body == null) return update
+    // Turn a wire update into an app update: stamp its repr, decode its
+    // content, and drop the wire fields the bus has already consumed
+    function decode_update (update, resource) {
+        if (update.repr_type)
+            remember_repr(resource, update.repr_type, resource.repr?.merge_type)
+        update.repr = resource.repr
+        delete update.repr_type
+        delete update.content_type
+        delete update.status
 
-        var type = update.repr_type ?? ''
-        if (type.includes('json'))
-            update.body = JSON.parse(new TextDecoder().decode(update.body))
-        else if (type.startsWith('text/'))
-            update.body = new TextDecoder().decode(update.body)
+        // Decode text/* content to strings, and json to parsed values
+        var type = update.repr?.type ?? ''
+        function decode (bytes) {
+            if (type.includes('json') && bytes.length)
+                return JSON.parse(new TextDecoder().decode(bytes))
+            if (type.includes('json') || type.startsWith('text/'))
+                return new TextDecoder().decode(bytes)
+            return bytes
+        }
+        if (update.body != null) update.body = decode(update.body)
+        for (var p of update.patches ?? [])
+            if (p.content != null) p.content = decode(p.content)
 
         return update
+    }
+
+    // Fold an event into the version frontier: its parents stop being
+    // leaves, and it becomes one
+    function advance_frontier (frontier, event) {
+        var leaves = (frontier ?? []).filter(v => !event.parents.includes(v))
+        for (var v of event.version ?? [])
+            if (!leaves.includes(v)) leaves.push(v)
+        return leaves.sort()
     }
 
 
@@ -2413,8 +2472,30 @@ function http_bus (cb, options = {}) {
         host_showed_life(host_of(req.url))
         if (disposition === 'retry')
             return retry_request(req, compute_retry_after(res))
-        delete_request(req)   // give up on this resource
-        cb({type: 'error', url: req.url, method: req.method, description: res.status})
+        if (req.method === 'GET') {
+            delete_request(req)   // give up on this resource
+            cb({type: 'error', url: req.url, message: `status ${res.status}`})
+        } else
+            abort_writes_built_on(req, `rejected with status ${res.status}`)
+    }
+
+    // Abort a write, plus every queued write built on it
+    function abort_writes_built_on (req, message) {
+        var resource = host_of(req.url)?.urls[req.url]
+        var abort = (r, message) => {
+            delete_request(r)
+            cb({type: 'ack', valid: 'abort', url: r.url, ...r.params,
+                repr: r.sent_repr ?? repr_for_write(r), message})
+        }
+        abort(req, message)
+
+        var dead = new Set(req.params?.version ?? [])
+        if (!dead.size || !resource) return
+        for (var put of [...resource.put_queue])
+            if (put.params?.parents?.some(p => dead.has(p))) {
+                for (var v of put.params.version ?? []) dead.add(v)
+                abort(put, `builds on rejected write ${req.params.version[0]}`)
+            }
     }
 
     // Re-fire this request after a delay.
@@ -2453,6 +2534,10 @@ function http_bus (cb, options = {}) {
         }
         reset_timeout()
 
+        // Ask for the repr the caller wants, or the app's default
+        var wanted = req.params?.repr
+        var accept = wanted?.type ?? self.type_of?.(req.url)
+
         // Now fire the fetch()!
         try {
             var res = await braid_fetch(req.url, {
@@ -2460,20 +2545,21 @@ function http_bus (cb, options = {}) {
                 retry:           false,
                 heartbeats:      heartbeat_period,
                 heartbeat_timer: false,
+                peer,
                 parents:         req.params?.parents ?? resource.last_version,
-                headers:         resource.last_etag ?
-                                   {'If-None-Match': resource.last_etag} : undefined,
+                headers:         {...accept && {'Accept': accept},
+                                  ...wanted?.merge_type && {'Merge-Type': wanted.merge_type},
+                                  ...resource.last_etag && {'If-None-Match': resource.last_etag}},
                 signal:          req.aborter.signal,
                 on_heartbeat:    reset_timeout
             })
             clearTimeout(req.timeout_timer)
             if (!req.aborter || req.aborter.signal.aborted) return
 
-            // We got a response!
-
-            // Store the repr-type
-            var repr_type = res.headers.get('repr-type')
-            if (repr_type) resource.repr_type = repr_type
+            // We got a response!  Its headers say which repr the server chose
+            var served = res.headers.get('repr-type') ?? res.headers.get('content-type')
+            if (served || res.headers.get('merge-type'))
+                remember_repr(resource, served, res.headers.get('merge-type'))
 
             // Figure out how to respond to the response:
             var disposition = classify_response_status('GET', res.status)
@@ -2485,16 +2571,31 @@ function http_bus (cb, options = {}) {
                 reset_timeout()                      // now guard the stream
                 res.subscribe(
                     update => {
+                        var status = parseInt(update.status) || 200
+
                         // Remember the new version
-                        if (update.version) resource.last_version = update.version
+                        if (update.version)
+                            resource.last_version = update.parents?.length
+                                // With parents, it advances our frontier
+                                ? advance_frontier(resource.last_version, update)
+                                // Without, it's a snapshot that resets it
+                                : update.version
 
                         // Announce a delete
-                        if (update.status === 404 || update.status === 410)
-                            cb({type: 'delete', url: req.url, version: update.version})
+                        if (status === 404 || status === 410)
+                            cb({type: 'delete', url: req.url,
+                                version: update.version, repr: resource.repr})
+
+                        // Report other errors, but keep the subscription alive
+                        else if (status < 200 || status >= 300) {
+                            console.error(`http_bus: got ${status} in the subscription to ${req.url}`)
+                            cb({type: 'error', url: req.url,
+                                message: `status ${status} in subscription`})
+                        }
 
                         // Or an update!
                         else
-                            cb({...process_mime_type(update, resource), type: 'set', url: req.url})
+                            cb({...decode_update(update, resource), type: 'set', url: req.url})
                     },
                     err => get_failed(req, err)
                 )
@@ -2509,7 +2610,7 @@ function http_bus (cb, options = {}) {
                 // The update is in the respones
                 var update = await res.update()
                 if (await polled_update_differs(resource, update, res))
-                    cb({...process_mime_type(update, resource), type: 'set', url: req.url})
+                    cb({...decode_update(update, resource), type: 'set', url: req.url})
 
                 // And poll again in 30s!
                 retry_request(req, poll_interval)
@@ -2543,7 +2644,25 @@ function http_bus (cb, options = {}) {
         }
         // parse / protocol / app: reconnecting won't help — cancel the URL.
         delete_request(req)
-        cb({type: 'error', url: req.url, method: req.method, description: err.message})
+        cb({type: 'error', url: req.url, message: err.message})
+    }
+
+    function repr_for_write (req) {
+        // A write can choose its own repr
+        var asked = req.params?.repr
+
+        // Otherwise it inherits whatever the GET negotiated
+        var known = host_of(req.url)?.urls[req.url]?.repr
+
+        // Each field falls back separately; up to the app's default
+        var type       = asked?.type       ?? known?.type ?? self.type_of?.(req.url)
+        var merge_type = asked?.merge_type ?? known?.merge_type
+
+        // We either found a repr
+        return (type || merge_type)
+            ? {type, merge_type}
+            // or... if we have an empty repr, give no repr at all
+            : undefined
     }
 
     // Send one PUT (or DELETE).
@@ -2558,11 +2677,24 @@ function http_bus (cb, options = {}) {
         // clears this, so we need no abort listener.
         req.timeout_timer = setTimeout(() => pipe_failed(host), timeout * 1000)
 
+        // Resolve the repr now, and remember it, so the ack reports what we sent
+        var repr = req.sent_repr = repr_for_write(req)
+
+        // braid_fetch encodes patches in place, so give it a copy, keeping
+        // the caller's write pristine for its ack
+        var params = {...req.params}
+        delete params.repr
+        if (params.patches) params.patches = params.patches.map(p => ({...p}))
+
         try {
 
             // Send the PUT!!
             var res = await braid_fetch(req.url, {
-                ...req.params,          // version, parents, patches/body, headers
+                ...params,              // version, parents, patches/body, headers
+                repr_type: repr?.type,
+                headers: {...repr?.merge_type && {'Merge-Type': repr.merge_type},
+                          ...params.headers},
+                peer,
                 method: req.method,     // PUT or DELETE
                 retry:  false,
                 signal: req.aborter.signal
@@ -2574,7 +2706,15 @@ function http_bus (cb, options = {}) {
             var disposition = classify_response_status(req.method, res.status)
             if (disposition === 'acked') {
                 host_showed_life(host)
-                cb({type: 'ack', url: req.url, version: req.params?.version})
+
+                // Our writes never echo back down the subscription, so acks
+                // are what advance the frontier
+                var resource = host.urls[req.url]
+                if (resource && req.params.version && req.params.parents)
+                    resource.last_version =
+                        advance_frontier(resource.last_version, req.params)
+
+                cb({type: 'ack', valid: true, url: req.url, ...req.params, repr})
                 delete_request(req)
             } else
                 handle_issue(req, res, disposition)
@@ -2583,9 +2723,8 @@ function http_bus (cb, options = {}) {
             if (!req.aborter || req.aborter.signal.aborted) return
             if (err.type === 'pipe')
                 return pipe_failed(host)   // host down; PUT stays queued for a resend
-            // parse / protocol / app: the write itself is bad — cancel it.
-            delete_request(req)
-            cb({type: 'error', url: req.url, method: req.method, description: err.type})
+            // parse / protocol / app: the write itself is bad
+            abort_writes_built_on(req, `${err.type} error: ${err.message}`)
         }
     }
 
@@ -2700,8 +2839,14 @@ function http_bus (cb, options = {}) {
 
 
     // == The Abstract Braid Protocol interface ==
-    return {
+    var self = {
         get (url, params) {
+            // Online status answers immediately, from local state
+            if (online_url(url)) {
+                online_watchers.set(url, online_of(url))
+                return cb({type: 'set', url, body: online_of(url)})
+            }
+
             var host = host_of(url)
             var resource = host && host.urls[url]
             console.assert(!(resource && resource.subscription),
@@ -2709,10 +2854,17 @@ function http_bus (cb, options = {}) {
             schedule_request({url, method: 'GET', params})
         },
         forget (url) {
+            if (online_url(url)) return online_watchers.delete(url)
+
             var host     = host_of(url)
             var resource = host && host.urls[url]
-            if (resource && resource.subscription)
+            if (!resource) return
+            if (resource.subscription)
                 delete_request(resource.subscription)
+
+            // Forget what reading taught us, but leave queued writes alone
+            resource.last_version = resource.last_etag = null
+            resource.last_hash = resource.repr = null
         },
         set (url, update) {
             schedule_request({url, method: 'PUT', params: update})
@@ -2721,9 +2873,14 @@ function http_bus (cb, options = {}) {
             schedule_request({url, method: 'DELETE', params})
         },
 
+        // The app's default type for urls that don't specify one:
+        // bus.type_of = (url) => 'text/plain'
+        type_of: null,
+
         // Internal state, exposed for inspection and testing.
         network
     }
+    return self
 }
 
 

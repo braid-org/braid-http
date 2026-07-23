@@ -140,11 +140,11 @@ module.exports = function create_test_runner (options = {}) {
     // Prints a finished test's whole report: its verdict line, tagged
     // with its section, then everything it logged
     function print_report (report) {
-        var mark = report.mark === '✓' ? green('✓')
-                 : report.mark === '✗' ? red('✗') : report.mark
-        emit('')
+        var color = report.mark === '✓' ? green
+                  : report.mark === '✗' ? red : (s => s)
         var tag = report.section ? ' ' + dim(`[${report.section}]`) : ''
-        emit(`${mark} ${report.mark === '✗' ? red(report.test_name) : yellow(report.test_name)}${tag}`)
+        emit('')
+        emit(`${color(report.mark)} ${color(report.test_name)}${tag}`)
         for (var d of report.details) emit('    ' + d)
         for (var l of report.lines)   emit('      ' + l)
         report.printed = true
