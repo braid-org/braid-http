@@ -122,7 +122,7 @@ if (is_nodejs) {
     braid_fetch.enable_multiplex = false
 } else {
     // Web Browser
-    normal_fetch = window.fetch
+    normal_fetch = window.fetch.bind(window)
     AbortController = window.AbortController
     Headers = window.Headers
     // window.fetch = braid_fetch
@@ -855,7 +855,8 @@ function parse_update (state) {
 // subscription multiresponse body.  The headers are already parsed, here, so
 // we fake the parse state halfway through.
 async function parse_update_in_solo_response (res) {
-    var headers = Object.fromEntries(res.headers.entries())
+    var headers = {}
+    res.headers.forEach((value, name) => headers[name] = value)
 
     // Create a parser state from the already-parsed headers...
     var state = {
