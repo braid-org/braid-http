@@ -1,3 +1,8 @@
+function assert (condition, ...args) {
+    if (!condition)
+        throw new Error(args.map(x => typeof x === 'string' ? x : JSON.stringify(x))
+                            .join(' ') || 'Assertion failed')
+}
 
 // **********************************
 // Braidifying the node 'http' module
@@ -159,11 +164,11 @@ async function braid_fetch (url, params = {}) {
 
     // Sanity check inputs
     if (params.version)
-        console.assert(Array.isArray(params.version),
-                       'fetch(): `version` must be an array')
+        assert(Array.isArray(params.version),
+               'fetch(): `version` must be an array')
     if (params.parents)
-        console.assert(Array.isArray(params.parents) || (typeof params.parents === 'function'),
-                       'fetch(): `parents` must be an array or function')
+        assert(Array.isArray(params.parents) || (typeof params.parents === 'function'),
+               'fetch(): `parents` must be an array or function')
 
     // // Always set the peer
     // params.headers.set('peer', peer)
@@ -194,8 +199,8 @@ async function braid_fetch (url, params = {}) {
 
     // Prepare patches
     if (params.patches) {
-        console.assert(!params.body, 'Cannot send both patches and body')
-        console.assert(typeof params.patches === 'object', 'Patches must be object or array')
+        assert(!params.body, 'Cannot send both patches and body')
+        assert(typeof params.patches === 'object', 'Patches must be object or array')
 
         // We accept a single patch as an array of one patch
         if (!Array.isArray(params.patches))
@@ -208,6 +213,10 @@ async function braid_fetch (url, params = {}) {
 
             if (typeof patch.content === 'string')
                 patch.content = new TextEncoder().encode(patch.content)
+
+            assert(Number.isInteger(num_bytes(patch.content)),
+                   'braid_fetch: patch.content must be string, '
+                   + 'TypedArray, ArrayBuffer, or Blob')
 
             params.body = patch.content
         }
@@ -225,7 +234,11 @@ async function braid_fetch (url, params = {}) {
                 if (typeof patch.content === 'string')
                     patch.content = te.encode(patch.content)
 
-                var length = `Content-Length: ${get_binary_num_bytes(patch.content)}`
+                assert(Number.isInteger(num_bytes(patch.content)),
+                       'braid_fetch: patch.content must be string, '
+                       + 'TypedArray, ArrayBuffer, or Blob')
+
+                var length = `Content-Length: ${num_bytes(patch.content)}`
                 var range  = `Content-Range: ${patch.unit} ${patch.range}`
                 bufs.push(te.encode(`${length}\r\n${range}\r\n\r\n`))
                 bufs.push(patch.content)
@@ -1174,10 +1187,12 @@ function extra_headers (headers) {
     return result
 }
 
-function get_binary_num_bytes (binary) {
-    return  binary instanceof ArrayBuffer ? binary.byteLength :
-            binary instanceof Uint8Array  ? binary.length :
-            binary instanceof Blob        ? binary.size : undefined
+function num_bytes (content) {
+    // Bytes come counted in:
+    //   - .byteLength: for TypedArray, DataView, and ArrayBuffer
+    //   - .size:       for Blob and File
+    if (typeof content?.byteLength === 'number') return content.byteLength
+    if (typeof content?.size === 'number') return content.size
 }
 
 function deep_copy(x) {
@@ -2159,9 +2174,9 @@ function http_bus (cb, options = {}) {
         var hosts = Object.values(network.hosts)
         // Invariant: a host is green exactly when it has an online subscription.
         for (var h of hosts)
-            console.assert((h.online === true) === (h.online_subs.size > 0),
-                'host.online out of sync with online_subs',
-                {online: h.online, online_subs: h.online_subs.size})
+            assert((h.online === true) === (h.online_subs.size > 0),
+                   'host.online out of sync with online_subs',
+                   {online: h.online, online_subs: h.online_subs.size})
 
         network.online =
             // Online is true if any host is true
@@ -2860,8 +2875,8 @@ function http_bus (cb, options = {}) {
 
             var host = host_of(url)
             var resource = host && host.urls[url]
-            console.assert(!(resource && resource.subscription),
-                           'Already subscribed to ' + url)
+            assert(!(resource && resource.subscription),
+                   'Already subscribed to ' + url)
             schedule_request({url, method: 'GET', params})
         },
         forget (url) {
