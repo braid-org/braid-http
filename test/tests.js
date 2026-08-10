@@ -2191,6 +2191,44 @@ run_test(
     }
 )
 
+run_test(
+    "Test streaming a multiplexed response bigger than its highWaterMark",
+    async () => {
+        // Piping into a multiplexed response only works if that response
+        // emits drain: pipe() writes until write() returns false, and then
+        // waits for drain before writing any more. A multiplexed response
+        // writes into a fake socket, and assignSocket() doesn't wire up
+        // drain the way a real http server does -- so without help, the
+        // first write past the 16kb highWaterMark waits forever, and any
+        // response big enough to hit backpressure hangs. Anything that
+        // streams a large body trips this, while res.end(whole_body) sneaks
+        // past it as a single write.
+        var size = 512 * 1024
+        var endpoint = await add_main_handler((req, res, size) => {
+            res.setHeader('Content-Type', 'application/octet-stream')
+            res.setHeader('Content-Length', size)
+
+            // Hand it over in chunks, so we hit backpressure repeatedly
+            var chunk = Buffer.alloc(64 * 1024, 0x61), sent = 0
+            require('stream').Readable.from((function* () {
+                while (sent < size) {
+                    var n = Math.min(chunk.length, size - sent)
+                    sent += n
+                    yield chunk.subarray(0, n)
+                }
+            })()).pipe(res)
+        }, size)
+
+        var r = await fetch(endpoint, {multiplex: true})
+        assert(r.multiplexed_through, 'expected request to be multiplexed')
+
+        var body = new Uint8Array(await r.arrayBuffer())
+        assert(body.length === size,
+               `expected ${size} bytes, got ${body.length}`)
+        assert(body.every(b => b === 0x61), 'body came back with wrong content')
+    }
+)
+
 add_section_header("Express Middleware")
 
 run_test(

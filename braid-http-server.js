@@ -691,6 +691,7 @@ function braidify_request_internal (req, res, done) {
         var res2 = new (require('http').ServerResponse)({})
         res2.useChunkedEncodingByDefault = false
         res2.assignSocket(mw)
+        mw.on('drain', () => res2.emit('drain'))
 
         // res2 is the "effective" response for this multiplexed sub-request.
         // braidify.handler / braidify.server use this to deliver the right
