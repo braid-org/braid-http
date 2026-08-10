@@ -68,11 +68,11 @@ function braidify_http (http) {
                     on_update = f
 
                     // Go through the incoming bytes to parse them...
-                    var state = {input: []}
+                    var state = {input: new Uint8Array(0)}
                     var chain = Promise.resolve()
                     res.orig_on('data', (chunk) => {
                         chain = chain.then(async () => {
-                            for (let b of chunk) state.input.push(b)
+                            state.input = append_to_input(state.input, chunk)
 
                             // Parse and find some updates!
                             state = await parse_multiresponse(state, on_update)
@@ -696,7 +696,7 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_bytes) {
     // Set up a reader
     var reader = stream_body.getReader(),
         // Initialize parser state
-        state = {input: []}
+        state = {input: new Uint8Array(0)}
 
     // Every error here — a read failure, a closed connection, a parse error, or
     // a throw from on_update — bubbles up to our caller's .catch().
@@ -722,8 +722,7 @@ async function handle_fetch_multiresponse (stream_body, on_update, on_bytes) {
             on_bytes(value)
 
         // Add the new chunk to the parser input stream
-        for (let v of value)
-            state.input.push(v)
+        state.input = append_to_input(state.input, value)
 
         // Run the parser on the new state.
         state = await parse_multiresponse(state, on_update)
@@ -763,6 +762,43 @@ async function parse_multiresponse (state, on_update) {
 // ******************************
 // Braid-HTTP Parser
 // ******************************
+
+var text_decoder = new TextDecoder('utf-8')
+
+// Append a chunk of freshly-received bytes to the parser's input.
+//
+// We keep spare capacity at the end of the buffer and write into it, growing
+// by doubling when we run out, so that appending is amortized O(1).
+function append_to_input (input, chunk) {
+    var end = input.byteOffset + input.length
+
+    // Is there already room for this chunk?
+    if (input.buffer.byteLength - end >= chunk.length) {
+        new Uint8Array(input.buffer).set(chunk, end)
+        return new Uint8Array(input.buffer, input.byteOffset, input.length + chunk.length)
+    }
+
+    // If not, make a bigger buffer, with room to grow
+    var grown = new Uint8Array(Math.max((input.length + chunk.length) * 2, 65536))
+    grown.set(input, 0)
+    grown.set(chunk, input.length)
+    return grown.subarray(0, input.length + chunk.length)
+}
+
+// Consume n bytes from the front of the parser's input, and returns the new
+// input.
+function consume_input (input, amount) {
+    // The fast way is to return a subarray view into the same input:
+    var rest = input.subarray(amount)
+
+    // But that doesn't actually delete the consumed input.  So, if we have
+    // consumed so much that we now have more dead input than living input,
+    // let's compact, by returning a slice(), which drops the dead stuff.
+    if (rest.byteOffset > 65536 && rest.byteOffset > rest.length)
+        return rest.slice()
+
+    return rest
+}
 
 
 // Format an update object for presentation, from the parsed update state.
@@ -927,10 +963,7 @@ function parse_headers (input) {
     }
 
     // Extract the header string
-    var headers_source = input.slice(start, end)
-    headers_source = Array.isArray(headers_source)
-        ? headers_source.map(x => String.fromCharCode(x)).join('')
-        : new TextDecoder().decode(headers_source)
+    var headers_source = text_decoder.decode(input.subarray(start, end))
 
     // Convert status line into a ":status" header, so we can parse it as a header.
     // Accepts both the "HTTP 200 OK" and "200 OK" forms.
@@ -973,7 +1006,7 @@ function parse_headers (input) {
     //                  + ' is missing Content-Type: application/http-patches.  Has Content-Type: ' + JSON.stringify(headers['content-type']))
 
     // Update the input
-    input = input.slice(end)
+    input = consume_input(input, end)
 
     // And return the parsed result
     return { result: 'success', headers, input }
@@ -1043,21 +1076,21 @@ function parse_body (state) {
                         + JSON.stringify(state.headers['content-range'])
                 })
             state.patches = [{
-                unit: match.unit,
-                range: match.range,
-                content: new Uint8Array(state.input.slice(0, content_length)),
+                unit:    match.unit,
+                range:   match.range,
+                content: state.input.slice(0, content_length),
 
-                // Question: Perhaps we should include headers here, like we do for
-                // the Patches: N headers below?
+                // Question: Perhaps we should include headers here, like we
+                // do for the Patches: N headers below?
 
                 // headers: state.headers
             }]
         }
 
         // Otherwise, this is a snapshot body
-        else state.body = new Uint8Array(state.input.slice(0, content_length))
+        else state.body = state.input.slice(0, content_length)
 
-        state.input = state.input.slice(content_length)
+        state.input = consume_input(state.input, content_length)
         return state
     }
 
@@ -1099,8 +1132,7 @@ function parse_body (state) {
 
             // Parse Range Patch format
             {
-                var to_text = (bytes) =>
-                    new TextDecoder('utf-8').decode(new Uint8Array(bytes))
+                var to_text = (bytes) => text_decoder.decode(bytes)
 
                 if (!('content-length' in last_patch.headers))
                     throw Err({
@@ -1141,14 +1173,14 @@ function parse_body (state) {
                             })
                     })
 
-                last_patch.unit = match.unit
-                last_patch.range = match.range
-                last_patch.content = new Uint8Array(state.input.slice(0, content_length))
+                last_patch.unit          = match.unit
+                last_patch.range         = match.range
+                last_patch.content       = state.input.slice(0, content_length)
                 last_patch.extra_headers = extra_headers(last_patch.headers)
                 delete last_patch.headers  // We only keep the extra headers ^^
 
                 // Consume the parsed input
-                state.input = state.input.slice(content_length)
+                state.input = consume_input(state.input, content_length)
             }
         }
 
