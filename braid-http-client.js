@@ -125,6 +125,42 @@ if (is_nodejs) {
     // Nodejs
     normal_fetch = typeof fetch !== 'undefined' && fetch
     braid_fetch.enable_multiplex = false
+
+    // Explicitly import a newer version of undici (version 8) instead of
+    // node's built-in fetch (version 7), to get around this bug preventing
+    // HTTP/2 multiplexing: https://github.com/nodejs/undici/issues/4143
+    //
+    // With subscriptions, we *really* want H2 multiplexing to work, because
+    // we might hold open 100s of subscriptions to a single host, and it's
+    // much better for them all to share a single TCP+TLS socket.
+    try {
+        var undici = require('undici')
+
+        // We need to explicitly make a SSL context object, and give it to
+        // undici to reuse, otherwise tls.connect() will create a new one per
+        // connection, which is like ~17kB each, but the JS part of that
+        // memory is only 400 bytes, which means the GC thinks it's trivial
+        // and ignores it... which leads to a nasty memory leak.
+        var undici_secure_context = require('tls').createSecureContext()
+
+        var undici_agent = new undici.Agent({
+            allowH2: true,
+            // We want to allow lots of concurrent subscriptions:
+            maxConcurrentStreams: 2 ** 31 - 1,
+            connect: { secureContext: undici_secure_context },
+        })
+
+        normal_fetch = (url, params = {}) => undici.fetch(url, {
+            ...params,
+            dispatcher: params.dispatcher ?? undici_agent,
+        })
+    } catch (e) {
+        console.error('braid-http: failed to load undici'
+            + ' (it requires node >= 22.19.0),'
+            + ' falling back to the built-in fetch,'
+            + ' which cannot multiplex requests over HTTP/2:'
+            + ' every concurrent request will open its own TCP connection.')
+    }
 } else {
     // Web Browser
     normal_fetch = window.fetch.bind(window)

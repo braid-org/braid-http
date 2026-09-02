@@ -283,16 +283,10 @@ function create_no_mux_server() {
 }
 
 function allow_self_signed_certs() {
-    fetch().catch(() => { })
-    var globalDispatcherSymbol = Symbol.for('undici.globalDispatcher.1')
-    var Agent = globalThis[globalDispatcherSymbol].constructor
-
-    Object.defineProperty(globalThis, globalDispatcherSymbol, {
-        value: new Agent({ connect: { rejectUnauthorized: false } }),
-        writable: true,
-        enumerable: false,
-        configurable: false
-    })
+    // tls.connect() reads this per-connection, so it reaches every client in
+    // the process: the built-in fetch, braid_fetch's undici agents, and raw
+    // https/http2 clients alike.  Node prints a one-time warning about it.
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 }
 
 // HTTP/2 fetch wrapper - needed because Node's native fetch uses HTTP/1.1
