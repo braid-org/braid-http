@@ -5157,7 +5157,8 @@ run_test(
         // ...spelling exactly the update's wire format -- nothing missing,
         // nothing extra (in particular, the outer 209 response headers are
         // not part of the stream, so they should not show up here)
-        assert(s === 'HTTP 200 OK\r\nVersion: "test"\r\nParents: "oldie"\r\nContent-Length: 16\r\n\r\n{"this":"stuff"}\r\n\r\n',
+        // (the stream opens with braidify's initial heartbeat, one \r\n)
+        assert(s === '\r\nHTTP 200 OK\r\nVersion: "test"\r\nParents: "oldie"\r\nContent-Length: 16\r\n\r\n{"this":"stuff"}\r\n\r\n',
                'got unexpected bytes')
 
         a.abort()
@@ -5218,9 +5219,10 @@ run_test(
             res.sendUpdate(update)
         }, update)
 
-        // this is exactly how that update looks on the wire, so we can tell
-        // where the update ends and the heartbeats begin
-        var update_wire = `HTTP 200 OK\r\nVersion: "test"\r\nParents: "oldie"\r\nContent-Length: ${update.body.length}\r\n\r\n${update.body}\r\n\r\n`
+        // this is exactly how the stream starts on the wire, the initial
+        // heartbeat and then the update, so we can tell where the update
+        // ends and the timed heartbeats begin
+        var update_wire = `\r\nHTTP 200 OK\r\nVersion: "test"\r\nParents: "oldie"\r\nContent-Length: ${update.body.length}\r\n\r\n${update.body}\r\n\r\n`
 
         // subscribe asking for a heartbeat every 0.4 seconds, recording the
         // raw bytes as they arrive, and signalling once we have the update
@@ -9028,7 +9030,8 @@ run_test(
         // headers, with no Patches: N header or application/http-patches
         // wrapper around the patch
         var raw = await r.text()
-        assert(raw === 'HTTP 200 OK\r\n' +
+        assert(raw === '\r\n' +                // the initial heartbeat
+                       'HTTP 200 OK\r\n' +
                        'Version: "v1"\r\n' +
                        'Content-Length: 5\r\n' +
                        'Content-Range: text [0:0]\r\n' +
@@ -9083,6 +9086,9 @@ run_test(
         // the whole stream is that one update: a status line plus update
         // headers, then the patch as its own header+content block, with
         // blank lines between the three
+        // the stream opens with the initial heartbeat
+        assert(raw.startsWith('\r\n'), 'expected the initial heartbeat')
+        raw = raw.slice('\r\n'.length)
         var [update_headers, patch_headers, patch_content] = raw.split('\r\n\r\n')
         assert(update_headers.startsWith('HTTP 200 OK\r\n'), 'expected the update status line')
         assert(update_headers.includes(`Version: ${JSON.stringify(v)}`), 'expected the update version header')
@@ -9141,6 +9147,9 @@ run_test(
         // a patches: array must be announced in the update's headers -- the
         // block before the first blank line -- with Patches: 2 and an
         // http-patches content-type counting both patches
+        // the stream opens with the initial heartbeat
+        assert(raw.startsWith('\r\n'), 'expected the initial heartbeat')
+        raw = raw.slice('\r\n'.length)
         var headers = raw.split('\r\n\r\n')[0]
         assert(headers.startsWith('HTTP 200 OK'), 'expected the update to start with a status line')
         assert(headers.includes('Version: "v3"'), 'expected the version header')

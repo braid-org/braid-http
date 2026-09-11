@@ -913,6 +913,9 @@ function add_braid_helpers (req, res, res2, peer) {
             }
 
             res2.flushHeaders()
+            res2.write("\r\n")
+            // We write a first newline so that Firefox (and some others) know
+            // that the body has actually started.
         }
 
     // Mirror the helpers onto res so callers holding the original res
