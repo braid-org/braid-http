@@ -876,9 +876,11 @@ function add_braid_helpers (req, res, res2, peer) {
             res2.setHeader('X-Accel-Buffering', 'no')
 
             var connected = true
+            var heartbeat_timer
             function disconnected (x) {
                 if (!connected) return
                 connected = false
+                clearInterval(heartbeat_timer)
                 // console.log(`Connection closed on ${req.url} from`, x, 'event')
 
                 // Now call the callback
@@ -900,20 +902,17 @@ function add_braid_helpers (req, res, res2, peer) {
                 let heartbeats = parseFloat(req.headers['heartbeats'])
                 if (isFinite(heartbeats)) {
                     res2.setHeader('heartbeats', req.headers['heartbeats'])
-                    let closed
-                    res2.on('close', () => closed = true)
-                    loop()
-                    function loop() {
-                        // We only send heartbeats:
-                        //  - After the headers have been sent
-                        //  - Before the stream has closed
-                        if (res2.headersSent && !res2.writableEnded && !closed)
-                            res2.write("\r\n")
 
-                        setTimeout(loop, 1000 * heartbeats)
-                    }
+                    heartbeat_timer = setInterval(() => {
+                        // Ensure res2 is still around, to handle race
+                        // conditions on disconnect.
+                        if (res2.writableEnded || res2.destroyed) return
+                        res2.write("\r\n")
+                    }, 1000 * heartbeats)
                 }
             }
+
+            res2.flushHeaders()
         }
 
     // Mirror the helpers onto res so callers holding the original res

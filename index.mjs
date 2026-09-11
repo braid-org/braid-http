@@ -18,10 +18,24 @@ var fetch = braid_client.fetch,
     http_client = braid_client.http       // Deprecated: use fetch instead
 
 export {
-    fetch, braidify, http_bus, free_cors, reliable_update_channel,
-    http_server, http_client
+    fetch,
+    braidify,
+    http_bus,
+    free_cors,
+    reliable_update_channel,
+
+    // Deprecated:
+    http_server,   // Deprecated: Renamed to braidify
+    http_client    // Deprecated: Use fetch instead
 }
 export default {
-    fetch, braidify, http_bus, free_cors, reliable_update_channel,
-    http_server, http_client
+    fetch,
+    braidify,
+    http_bus,
+    free_cors,
+    reliable_update_channel,
+
+    // Deprecated:
+    http_server,   // Deprecated: Renamed to braidify
+    http_client    // Deprecated: Use fetch instead
 }

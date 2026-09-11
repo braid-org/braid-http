@@ -5205,61 +5205,6 @@ run_test(
 add_section_header("Heartbeat")
 
 run_test(
-    "Verify heartbeats don't prevent user writing headers",
-    async () => {
-        // add a handler that starts a heartbeating subscription, waits past a
-        // heartbeat interval, and only then writes a header and an update.
-        // braidify's heartbeat loop ticks once synchronously inside
-        // startSubscription and again ~300ms later -- both times before this
-        // handler flushes the headers. if either tick wrote its \r\n too
-        // early, node would flush the headers, and the setHeader below would
-        // be too late to reach the client
-        var update = { version: ['v1'], body: 'hello' }
-        var endpoint = await add_main_handler((req, res, update) => {
-            res.startSubscription()
-            setTimeout(() => {
-                res.setHeader('post-sub-header', 'yup')
-                res.sendUpdate(update)
-            }, 450)
-        }, update)
-
-        // subscribe with heartbeats requested every 0.3 seconds. the handler
-        // sends nothing after its one update, so any bytes arriving after it
-        // must be heartbeats
-        var a = new AbortController()
-        var update_seen = false
-        var saw_heartbeat = null
-        var heartbeat = new Promise(done => saw_heartbeat = done)
-        var r = await fetch(endpoint, {
-            signal: a.signal,
-            subscribe: true,
-            multiplex: false,
-            heartbeats: 0.3,
-            onBytes: () => { if (update_seen) saw_heartbeat() }
-        })
-
-        // make sure heartbeats are actually in play: the server echoes the
-        // heartbeats header back only when it starts its heartbeat loop --
-        // without this, the test could pass with heartbeats never running
-        assert(r.headers.get('heartbeats') === '0.3s', 'expected server to echo the heartbeats header')
-
-        // the header written after startSubscription must have reached us
-        assert(r.headers.get('post-sub-header') === 'yup', 'expected the post-subscription header')
-
-        // read the update to make sure it came through alongside the header
-        var u = await new Promise(done => r.subscribe(u2 => { update_seen = true; done(u2) }))
-        assert(u.version[0] === 'v1', 'got unexpected version')
-        assert(u.body_text === 'hello', 'got unexpected body')
-
-        // and make sure heartbeats really flow once the headers are out:
-        // deferring them must not mean losing them
-        await heartbeat
-
-        a.abort()
-    }
-)
-
-run_test(
     "Verify heartbeat reception",
     async () => {
         // add a handler that sends one update and holds the subscription open

@@ -1,6 +1,6 @@
-// This is the root file for require('braid-http').
+// This defines the module for require('braid-http').
 //
-// It combines the client and server files into one file.
+// It combines the client and server files into one module.
 
 var client = require('./braid-http-client'),
     server = require('./braid-http-server')
@@ -12,7 +12,7 @@ module.exports = {
     free_cors: server.free_cors,
     reliable_update_channel: client.reliable_update_channel,
 
-    // Deprecated names, kept working for backwards-compatibility:
-    http_server: server.braidify,  // Deprecated: renamed to braidify
-    http_client: client.http       // Deprecated: use fetch instead
+    // Deprecated:
+    http_server: server.braidify,  // Deprecated: Renamed to braidify
+    http_client: client.http       // Deprecated: Use fetch instead
 }
